@@ -1,0 +1,388 @@
+package generator
+
+import (
+	"bytes"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"text/template"
+
+	"github.com/origadmin/abgen/internal/ast"
+	"github.com/origadmin/abgen/internal/types"
+)
+
+// TemplateData 模板数据结构
+type TemplateData struct {
+	Src      string // 源字段引用: src.FieldName
+	SrcName  string // 源字段名: FieldName
+	SrcType  string // 源字段类型
+	Dst      string // 目标字段引用: dst.FieldName
+	DstName  string // 目标字段名: FieldName
+	DstType  string // 目标字段类型
+	TypeName string // 目标类型名称(不带包名)
+}
+
+// ConversionRule 定义类型转换规则
+type ConversionRule struct {
+	// 使用标准Go模板的转换模板
+	tmpl *template.Template
+
+	// 简单转换的格式字符串
+	Pattern string
+}
+
+// FieldGenerator 字段生成器
+type FieldGenerator struct {
+	resolver ast.TypeResolver
+
+	// 类型映射注册表 - srcType:dstType -> ConversionRule
+	conversionRules map[string]ConversionRule
+
+	// 模板目录
+	templateDir string
+}
+
+// RegisterTypeConversion 使用模板注册类型转换规则
+func (fg *FieldGenerator) RegisterTypeConversion(srcType, dstType, templateStr string) error {
+	key := srcType + ":" + dstType
+
+	// 解析模板
+	tmpl, err := template.New(key).Parse(templateStr)
+	if err != nil {
+		return fmt.Errorf("解析模板失败: %w", err)
+	}
+
+	fg.conversionRules[key] = ConversionRule{
+		tmpl: tmpl,
+	}
+	return nil
+}
+
+// RegisterTypePattern 使用格式模式注册类型转换规则
+func (fg *FieldGenerator) RegisterTypePattern(srcType, dstType, pattern string) {
+	key := srcType + ":" + dstType
+	fg.conversionRules[key] = ConversionRule{
+		Pattern: pattern,
+	}
+}
+
+// 内置处理器集合
+var builtinHandlers = map[string]func(srcField, dstField types.StructField) (string, error){
+	// 指针处理逻辑
+	"pointer:pointer": func(srcField, dstField types.StructField) (string, error) {
+		srcElem := strings.TrimPrefix(srcField.Type, "*")
+		dstElem := strings.TrimPrefix(dstField.Type, "*")
+		return fmt.Sprintf(`
+if src.%s != nil {
+	dst.%s = Convert%sTo%s(src.%s)
+}`, srcField.Name, dstField.Name, srcElem, dstElem, srcField.Name), nil
+	},
+
+	// 相同类型切片处理
+	"slice:slice:same": func(srcField, dstField types.StructField) (string, error) {
+		dstElem := strings.TrimPrefix(dstField.Type, "[]")
+		return fmt.Sprintf(`
+if src.%s != nil {
+	dst.%s = make([]%s, len(src.%s))
+	copy(dst.%s, src.%s)
+}`, srcField.Name, dstField.Name, dstElem, srcField.Name, dstField.Name, srcField.Name), nil
+	},
+
+	// 不同类型切片处理
+	"slice:slice:diff": func(srcField, dstField types.StructField) (string, error) {
+		srcElem := strings.TrimPrefix(srcField.Type, "[]")
+		dstElem := strings.TrimPrefix(dstField.Type, "[]")
+		return fmt.Sprintf(`
+if src.%s != nil {
+	dst.%s = make([]%s, 0, len(src.%s))
+	for _, item := range src.%s {
+		dst.%s = append(dst.%s, Convert%sTo%s(&item))
+	}
+}`, srcField.Name, dstField.Name, dstElem, srcField.Name, srcField.Name, dstField.Name, dstField.Name, srcElem, dstElem), nil
+	},
+}
+
+// generateConversion 生成字段转换代码
+func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructField) (string, error) {
+	srcType := srcField.Type
+	dstType := dstField.Type
+
+	// 1. 检查直接类型映射
+	key := srcType + ":" + dstType
+	if rule, exists := fg.conversionRules[key]; exists {
+		if rule.tmpl != nil {
+			// 准备模板数据
+			data := TemplateData{
+				Src:      "src." + srcField.Name,
+				SrcName:  srcField.Name,
+				SrcType:  srcField.Type,
+				Dst:      "dst." + dstField.Name,
+				DstName:  dstField.Name,
+				DstType:  dstField.Type,
+				TypeName: strings.TrimPrefix(dstField.Type, "*"),
+			}
+
+			// 执行模板
+			var buf bytes.Buffer
+			if err := rule.tmpl.Execute(&buf, data); err != nil {
+				return "", fmt.Errorf("执行模板失败: %w", err)
+			}
+			return buf.String(), nil
+
+		} else if rule.Pattern != "" {
+			// 使用模式字符串生成代码
+			return fmt.Sprintf(rule.Pattern,
+				"dst."+dstField.Name,
+				"src."+srcField.Name), nil
+		}
+	}
+
+	// 2. 检查内置类型处理器
+
+	// 检查指针类型
+	if strings.HasPrefix(srcType, "*") && strings.HasPrefix(dstType, "*") {
+		if handler, ok := builtinHandlers["pointer:pointer"]; ok {
+			return handler(srcField, dstField)
+		}
+	}
+
+	// 检查切片类型
+	if strings.HasPrefix(srcType, "[]") && strings.HasPrefix(dstType, "[]") {
+		srcElem := strings.TrimPrefix(srcType, "[]")
+		dstElem := strings.TrimPrefix(dstType, "[]")
+
+		if srcElem == dstElem {
+			if handler, ok := builtinHandlers["slice:slice:same"]; ok {
+				return handler(srcField, dstField)
+			}
+		} else {
+			if handler, ok := builtinHandlers["slice:slice:diff"]; ok {
+				return handler(srcField, dstField)
+			}
+		}
+	}
+
+	// 检查特定类型组合
+	if handler, ok := builtinHandlers[key]; ok {
+		return handler(srcField, dstField)
+	}
+
+	// 3. 基本类型处理
+	if types.IsPrimitiveType(srcType) && types.IsPrimitiveType(dstType) {
+		if srcType == dstType {
+			return fmt.Sprintf("dst.%s = src.%s", dstField.Name, srcField.Name), nil
+		} else if types.IsNumberType(srcType) && types.IsNumberType(dstType) {
+			return fmt.Sprintf("dst.%s = %s(src.%s)", dstField.Name, dstType, srcField.Name), nil
+		}
+	}
+
+	// 4. 类型相同直接赋值
+	if srcType == dstType {
+		return fmt.Sprintf("dst.%s = src.%s", dstField.Name, srcField.Name), nil
+	}
+
+	// 5. 默认情况
+	slog.Info("警告: 未处理的类型转换", "srcType", srcType, "dstType", dstType)
+	return fmt.Sprintf("// 警告: 未处理的类型转换\n // dst.%s = src.%s (%s -> %s)",
+		dstField.Name, srcField.Name, srcType, dstType), nil
+}
+
+// UpdateTypeMap 更新类型映射表
+func (fg *FieldGenerator) UpdateTypeMap() {
+	// 注册基础类型映射 - 使用模式而非函数
+	fg.RegisterTypePattern("time.Time", "*timestamppb.Timestamp",
+		"%s = timestamppb.New(%s)")
+
+	fg.RegisterTypePattern("*timestamppb.Timestamp", "time.Time",
+		"%s = %s.AsTime()")
+
+	// 数字类型处理
+	fg.RegisterTypePattern("uint64", "int64",
+		"%s = int64(%s)")
+
+	fg.RegisterTypePattern("uint32", "int32",
+		"%s = int32(%s)")
+
+	// UUID处理
+	fg.RegisterTypePattern("uuid.UUID", "string",
+		"%s = %s.String()")
+
+	// 特殊类型处理 - 使用Go模板
+	err := fg.RegisterTypeConversion("map[string]interface{}", "*structpb.Struct", `
+{{if .Src}}
+var err error
+{{.Dst}}, err = structpb.NewStruct({{.Src}})
+if err != nil {
+	slog.Printf("转换字段 {{.SrcName}} 失败: %v", err)
+}
+{{end}}`)
+	if err != nil {
+		slog.Info("注册模板失败", "错误", err)
+	}
+
+	// 使用条件逻辑的模板示例
+	err = fg.RegisterTypeConversion("[]string", "[]int", `
+{{if .Src}}
+{{.Dst}} = make([]int, 0, len({{.Src}}))
+for _, v := range {{.Src}} {
+	if num, err := strconv.Atoi(v); err == nil {
+		{{.Dst}} = append({{.Dst}}, num)
+	}
+}
+{{end}}`)
+	if err != nil {
+		slog.Info("注册模板失败", "错误", err)
+	}
+}
+
+func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *types.ConversionConfig) []types.FieldConversion {
+	var fields []types.FieldConversion
+
+	// 获取源类型和目标类型信息
+	slog.Info("解析源类型", "类型", sourceType)
+	srcInfo, err := fg.resolver.Resolve(sourceType)
+	if err != nil {
+		slog.Error("解析源类型失败", "错误", err)
+		return fields
+	}
+
+	slog.Info("解析目标类型", "类型", targetType)
+	dstInfo, err := fg.resolver.Resolve(targetType)
+	if err != nil {
+		slog.Error("解析目标类型失败", "错误", err)
+		return fields
+	}
+
+	slog.Info("源类型", "类型", srcInfo)
+	slog.Info("目标类型", "类型", dstInfo)
+
+	// 创建目标字段映射
+	dstFieldMap := make(map[string]types.StructField)
+	for _, f := range dstInfo.Fields {
+		dstFieldMap[strings.ToLower(f.Name)] = f
+	}
+
+	// 生成字段转换
+	for _, srcField := range srcInfo.Fields {
+		if cfg.IgnoreFields[srcField.Name] {
+			fields = append(fields, types.FieldConversion{
+				Name:         srcField.Name,
+				Ignore:       true,
+				IgnoreReason: "configured to ignore",
+			})
+			continue
+		}
+
+		// 查找匹配的目标字段
+		dstField, exists := dstFieldMap[strings.ToLower(srcField.Name)]
+		if !exists {
+			continue
+		}
+
+		// 生成转换代码
+		conversion, err := fg.generateConversion(srcField, dstField)
+		if err != nil {
+			slog.Error("生成转换代码失败", "错误", err)
+			continue
+		}
+		fieldConv := types.FieldConversion{
+			Name:       srcField.Name,
+			Ignore:     false,
+			Conversion: conversion,
+		}
+		slog.Info("转换字段", "源字段", srcField.Name, "目标字段", dstField.Name, "转换代码", conversion)
+		fields = append(fields, fieldConv)
+	}
+
+	return fields
+}
+
+func NewFieldGenerator() *FieldGenerator {
+	fg := &FieldGenerator{
+		resolver:        ast.NewResolver(nil),
+		conversionRules: make(map[string]ConversionRule),
+	}
+
+	// 注册常用转换模板
+	fg.RegisterTypeConversion("map[string]interface{}", "*structpb.Struct", `
+if ${SRC} != nil {
+	var err error
+	${DST}, err = structpb.NewStruct(${SRC})
+	if err != nil {
+		slog.Printf("转换失败: %v", err)
+	}
+}`)
+
+	return fg
+}
+
+// SetTemplateDir 设置模板目录
+func (fg *FieldGenerator) SetTemplateDir(dir string) {
+	fg.templateDir = dir
+}
+
+// LoadTemplatesFromDir 从目录加载模板文件
+func (fg *FieldGenerator) LoadTemplatesFromDir() error {
+	if fg.templateDir == "" {
+		return nil // 没有设置目录，跳过加载
+	}
+
+	files, err := os.ReadDir(fg.templateDir)
+	if err != nil {
+		return fmt.Errorf("读取模板目录失败: %w", err)
+	}
+
+	// 创建主模板
+	masterTmpl := template.New("master")
+
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".tpl") {
+			continue
+		}
+
+		// 读取模板内容
+		content, err := os.ReadFile(filepath.Join(fg.templateDir, file.Name()))
+		if err != nil {
+			slog.Info("读取模板文件失败", "文件", file.Name(), "错误", err)
+			continue
+		}
+
+		// 解析模板
+		_, err = masterTmpl.Parse(string(content))
+		if err != nil {
+			slog.Info("模板内容", "内容", string(content))
+			continue
+		}
+	}
+
+	// 查找并注册所有定义的转换模板
+	for _, tmpl := range masterTmpl.Templates() {
+		name := tmpl.Name()
+		if !strings.Contains(name, ":") || name == "master" {
+			continue // 跳过非转换模板
+		}
+
+		parts := strings.Split(name, ":")
+		if len(parts) != 2 {
+			continue
+		}
+
+		srcType := parts[0]
+		dstType := parts[1]
+
+		// 注册模板
+		fg.conversionRules[srcType+":"+dstType] = ConversionRule{
+			tmpl: tmpl,
+		}
+		slog.Info("注册模板", "类型", srcType, "目标类型", dstType)
+	}
+
+	return nil
+}
+
+// SetResolver 设置类型解析器
+func (fg *FieldGenerator) SetResolver(resolver ast.TypeResolver) {
+	fg.resolver = resolver
+}
