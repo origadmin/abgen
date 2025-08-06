@@ -54,4 +54,3 @@ if err != nil {
 {{.Dst}} = {{.Src}}.AsMap()
 {{end}}
 {{end}}
-

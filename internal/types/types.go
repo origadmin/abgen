@@ -6,12 +6,12 @@ const (
 	Description = "Alias Binding Generator is a tool for generating code for conversion between two types"
 	WebSite     = "https://github.com/origadmin/abgen"
 	UI          = `
-   _____ ___.                          
-  /  _  \\_ |__    ____   ____   ____  
- /  /_\  \| __ \  / ___\_/ __ \ /    \ 
+   _____ ___.
+  /  _  \\_ |__    ____   ____   ____
+ /  /_\  \| __ \  / ___\_/ __ \ /    \
 /    |    \ \_\ \/ /_/  >  ___/|   |  \
 \____|__  /___  /\___  / \___  >___|  /
-        \/    \//_____/      \/     \/ 
+        \/    \//_____/      \/     \/
 `
 )
 

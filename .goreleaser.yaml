@@ -104,5 +104,5 @@ release:
     name: abgen
   header: |
     # Changelog
-    
+
     ## [{{ .Tag }}](https://github.com/origadmin/abgen/compare/{{ .PreviousTag }}...{{ .Tag }}) ({{ .Date }})

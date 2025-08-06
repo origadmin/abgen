@@ -77,11 +77,11 @@ func {{.FuncName}}(src *{{.SourceType}}) *{{.TargetType}} {
 	if src == nil {
 		return dst
 	}
-	
-	{{range .Fields -}} 
+
+	{{range .Fields -}}
 	{{if .Ignore}}// ignore: {{.Name}} {{.IgnoreReason}}
 	{{else}}{{.Conversion}}
-	{{end -}} 
+	{{end -}}
 	{{end}}
 	return dst
 }
