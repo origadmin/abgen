@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	goversion "github.com/caarlos0/go-version"
@@ -50,10 +51,24 @@ func main() {
 	if *templateDir != "" {
 		generator.SetTemplateDir(*templateDir)
 	}
-	generator.Output = args[0]
 
+	// Determine the output directory based on the input argument
+	inputPath := args[0]
+	fileInfo, err := os.Stat(inputPath)
+	if err != nil {
+		slog.Error("获取输入路径信息失败", "错误", err)
+		return
+	}
+
+	if fileInfo.IsDir() {
+		generator.Output = inputPath
+	} else {
+		generator.Output = filepath.Dir(inputPath)
+	}
+	// The ParseSource also needs the correct input path, which is args[0]
 	if err := generator.ParseSource(args[0], *templateDir); err != nil {
 		slog.Error("解析错误", "错误", err)
+		return
 	}
 
 	if err := generator.Generate(); err != nil {

@@ -110,10 +110,10 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 				continue
 			}
 
-			// Process type-specific comments (attached to the GenDecl)
-			if genDecl.Doc != nil {
+			// Process comments attached to the TypeSpec
+			if typeSpec.Doc != nil {
 				var typeCfg *types.ConversionConfig
-				for _, comment := range genDecl.Doc.List {
+				for _, comment := range typeSpec.Doc.List {
 					if strings.HasPrefix(comment.Text, "//go:abgen:") {
 						if typeCfg == nil {
 							typeCfg = &types.ConversionConfig{
@@ -267,7 +267,31 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 		return info
 	}
 
-	// 2. Handle qualified types (e.g., "ent.User")
+	// 2. Handle local aliases within the current package
+	if w.currentPkg != nil {
+		for _, file := range w.currentPkg.Syntax {
+			for _, decl := range file.Decls {
+				if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
+					for _, spec := range genDecl.Specs {
+						if typeSpec, ok := spec.(*goast.TypeSpec); ok && typeSpec.Name.Name == targetType {
+							// Found a local alias. Now resolve what it's an alias for.
+							if aliasIdent, aliasOk := typeSpec.Type.(*goast.Ident); aliasOk {
+								// This is an alias to a type in the same package (e.g., `type MyType = AnotherType`)
+								// Recursively resolve the aliased type.
+								return w.resolveTargetType(aliasIdent.Name)
+							} else if aliasSelector, aliasOk := typeSpec.Type.(*goast.SelectorExpr); aliasOk {
+								// This is an alias to an imported type (e.g., `type MyType = pkg.AnotherType`)
+								aliasedTypeName := w.exprToString(aliasSelector) // This will be like "ent.User"
+								return w.resolveTargetType(aliasedTypeName)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 3. Handle qualified types (e.g., "ent.User")
 	parts := strings.Split(targetType, ".")
 	if len(parts) > 1 {
 		pkgAlias := parts[0]
