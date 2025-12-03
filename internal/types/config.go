@@ -7,6 +7,12 @@ type ConversionConfig struct {
 	TargetType   string
 	Direction    string // both/to/from
 	IgnoreFields map[string]bool
+	SrcPackage   string
+	DstPackage   string
+	SourcePrefix string
+	SourceSuffix string
+	TargetPrefix string
+	TargetSuffix string
 }
 
 // ConversionNode 类型转换节点
@@ -18,3 +24,16 @@ type ConversionNode struct {
 
 // ConversionGraph 类型转换关系图
 type ConversionGraph map[string]*ConversionNode
+
+// PackageConversionConfig holds the configuration for converting all matching types between two packages.
+type PackageConversionConfig struct {
+	SourcePackage string
+	TargetPackage string
+	Direction     string
+	IgnoreTypes   map[string]bool
+	FieldMap      map[string]string
+	SourcePrefix  string
+	SourceSuffix  string
+	TargetPrefix  string
+	TargetSuffix  string
+}

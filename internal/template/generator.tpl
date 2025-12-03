@@ -2,11 +2,11 @@
 
 package {{.Package}}
 
+import (
 {{range $key, $val := .Imports}}
-	import (
-		{{$key}} "{{$val}}"
-	)
+	{{$key}} "{{$val}}"
 {{end}}
+)
 
 {{range .Converters}}
 	// {{.FuncName}} 自动生成的转换方法

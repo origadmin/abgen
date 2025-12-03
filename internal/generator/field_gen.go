@@ -33,25 +33,27 @@ type ConversionRule struct {
 	Pattern string
 }
 
-// FieldGenerator 字段生成器
+// FieldGenerator is responsible for generating field conversion logic between two struct types.
+// It manages type conversion rules and resolves type information to produce the appropriate code.
 type FieldGenerator struct {
 	resolver ast.TypeResolver
 
-	// 类型映射注册表 - srcType:dstType -> ConversionRule
+	// conversionRules stores the registered type conversion rules.
+	// The key is a string in the format "srcType:dstType".
 	conversionRules map[string]ConversionRule
 
-	// 模板目录
+	// templateDir is the directory where custom conversion template files are located.
 	templateDir string
 }
 
-// RegisterTypeConversion 使用模板注册类型转换规则
+// RegisterTypeConversion registers a type conversion rule using a Go template string.
 func (fg *FieldGenerator) RegisterTypeConversion(srcType, dstType, templateStr string) error {
 	key := srcType + ":" + dstType
 
 	// 解析模板
 	tmpl, err := template.New(key).Parse(templateStr)
 	if err != nil {
-		return fmt.Errorf("解析模板失败: %w", err)
+		return fmt.Errorf("failed to parse template: %w", err)
 	}
 
 	fg.conversionRules[key] = ConversionRule{
@@ -60,7 +62,7 @@ func (fg *FieldGenerator) RegisterTypeConversion(srcType, dstType, templateStr s
 	return nil
 }
 
-// RegisterTypePattern 使用格式模式注册类型转换规则
+// RegisterTypePattern registers a type conversion rule using a simple format pattern.
 func (fg *FieldGenerator) RegisterTypePattern(srcType, dstType, pattern string) {
 	key := srcType + ":" + dstType
 	fg.conversionRules[key] = ConversionRule{
@@ -127,7 +129,7 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 			// 执行模板
 			var buf bytes.Buffer
 			if err := rule.tmpl.Execute(&buf, data); err != nil {
-				return "", fmt.Errorf("执行模板失败: %w", err)
+				return "", fmt.Errorf("failed to execute template: %w", err)
 			}
 			return buf.String(), nil
 
@@ -184,8 +186,8 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 	}
 
 	// 5. 默认情况
-	slog.Info("警告: 未处理的类型转换", "srcType", srcType, "dstType", dstType)
-	return fmt.Sprintf("// 警告: 未处理的类型转换\n // dst.%s = src.%s (%s -> %s)",
+	slog.Warn("unhandled type conversion", "srcType", srcType, "dstType", dstType)
+	return fmt.Sprintf("// WARNING: unhandled type conversion\n // dst.%s = src.%s (%s -> %s)",
 		dstField.Name, srcField.Name, srcType, dstType), nil
 }
 
@@ -215,11 +217,11 @@ func (fg *FieldGenerator) UpdateTypeMap() {
 var err error
 {{.Dst}}, err = structpb.NewStruct({{.Src}})
 if err != nil {
-	slog.Printf("转换字段 {{.SrcName}} 失败: %v", err)
+	slog.Error("failed to convert field", "field", "{{.SrcName}}", "error", err)
 }
 {{end}}`)
 	if err != nil {
-		slog.Info("注册模板失败", "错误", err)
+		slog.Error("failed to register template", "error", err)
 	}
 
 	// 使用条件逻辑的模板示例
@@ -233,30 +235,32 @@ for _, v := range {{.Src}} {
 }
 {{end}}`)
 	if err != nil {
-		slog.Info("注册模板失败", "错误", err)
+		slog.Error("failed to register template", "error", err)
 	}
 }
 
+// GenerateFields generates a list of field conversion snippets for a given source and target type.
+// It uses the registered rules and built-in logic to determine the conversion code for each matching field.
 func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *types.ConversionConfig) []types.FieldConversion {
 	var fields []types.FieldConversion
 
 	// 获取源类型和目标类型信息
-	slog.Info("解析源类型", "类型", sourceType)
+	slog.Info("resolving source type", "type", sourceType)
 	srcInfo, err := fg.resolver.Resolve(sourceType)
 	if err != nil {
-		slog.Error("解析源类型失败", "错误", err)
+		slog.Error("failed to resolve source type", "type", sourceType, "error", err)
 		return fields
 	}
 
-	slog.Info("解析目标类型", "类型", targetType)
+	slog.Info("resolving target type", "type", targetType)
 	dstInfo, err := fg.resolver.Resolve(targetType)
 	if err != nil {
-		slog.Error("解析目标类型失败", "错误", err)
+		slog.Error("failed to resolve target type", "type", targetType, "error", err)
 		return fields
 	}
 
-	slog.Info("源类型", "类型", srcInfo)
-	slog.Info("目标类型", "类型", dstInfo)
+	cfg.SrcPackage = srcInfo.ImportPath
+	cfg.DstPackage = dstInfo.ImportPath
 
 	// 创建目标字段映射
 	dstFieldMap := make(map[string]types.StructField)
@@ -284,7 +288,7 @@ func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *typ
 		// 生成转换代码
 		conversion, err := fg.generateConversion(srcField, dstField)
 		if err != nil {
-			slog.Error("生成转换代码失败", "错误", err)
+			slog.Error("failed to generate conversion code", "field", srcField.Name, "error", err)
 			continue
 		}
 		fieldConv := types.FieldConversion{
@@ -292,38 +296,28 @@ func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *typ
 			Ignore:     false,
 			Conversion: conversion,
 		}
-		slog.Info("转换字段", "源字段", srcField.Name, "目标字段", dstField.Name, "转换代码", conversion)
 		fields = append(fields, fieldConv)
 	}
 
 	return fields
 }
 
+// NewFieldGenerator creates and initializes a new FieldGenerator instance.
 func NewFieldGenerator() *FieldGenerator {
 	fg := &FieldGenerator{
-		resolver:        ast.NewResolver(nil),
 		conversionRules: make(map[string]ConversionRule),
 	}
-
-	// 注册常用转换模板
-	fg.RegisterTypeConversion("map[string]interface{}", "*structpb.Struct", `
-if ${SRC} != nil {
-	var err error
-	${DST}, err = structpb.NewStruct(${SRC})
-	if err != nil {
-		slog.Printf("转换失败: %v", err)
-	}
-}`)
-
+	fg.UpdateTypeMap()
 	return fg
 }
 
-// SetTemplateDir 设置模板目录
+// SetTemplateDir sets the directory from which to load custom conversion templates.
 func (fg *FieldGenerator) SetTemplateDir(dir string) {
 	fg.templateDir = dir
 }
 
-// LoadTemplatesFromDir 从目录加载模板文件
+// LoadTemplatesFromDir loads and parses all template files (*.tpl) from the configured template directory.
+// It registers each discovered template as a type conversion rule.
 func (fg *FieldGenerator) LoadTemplatesFromDir() error {
 	if fg.templateDir == "" {
 		return nil // 没有设置目录，跳过加载
@@ -331,7 +325,7 @@ func (fg *FieldGenerator) LoadTemplatesFromDir() error {
 
 	files, err := os.ReadDir(fg.templateDir)
 	if err != nil {
-		return fmt.Errorf("读取模板目录失败: %w", err)
+		return fmt.Errorf("failed to read template directory: %w", err)
 	}
 
 	// 创建主模板
@@ -345,14 +339,14 @@ func (fg *FieldGenerator) LoadTemplatesFromDir() error {
 		// 读取模板内容
 		content, err := os.ReadFile(filepath.Join(fg.templateDir, file.Name()))
 		if err != nil {
-			slog.Info("读取模板文件失败", "文件", file.Name(), "错误", err)
+			slog.Error("failed to read template file", "file", file.Name(), "error", err)
 			continue
 		}
 
 		// 解析模板
 		_, err = masterTmpl.Parse(string(content))
 		if err != nil {
-			slog.Info("模板内容", "内容", string(content))
+			slog.Error("failed to parse template content", "file", file.Name(), "error", err)
 			continue
 		}
 	}
@@ -376,13 +370,14 @@ func (fg *FieldGenerator) LoadTemplatesFromDir() error {
 		fg.conversionRules[srcType+":"+dstType] = ConversionRule{
 			tmpl: tmpl,
 		}
-		slog.Info("注册模板", "类型", srcType, "目标类型", dstType)
+		slog.Info("registered template from file", "source_type", srcType, "target_type", dstType)
 	}
 
 	return nil
 }
 
-// SetResolver 设置类型解析器
+// SetResolver sets the type resolver for the generator.
+// The resolver is used to inspect and get information about Go source types.
 func (fg *FieldGenerator) SetResolver(resolver ast.TypeResolver) {
 	fg.resolver = resolver
 }

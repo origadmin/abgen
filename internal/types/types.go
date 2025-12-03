@@ -44,9 +44,11 @@ type FieldConversion struct {
 // TypeInfo 类型信息
 type TypeInfo struct {
 	Name       string        // 类型名称
+	PkgName    string        // 包名称 (例如 "po", "system")
 	ImportPath string        // 导入路径
 	Fields     []StructField // 结构体字段
 	AliasFor   string        // 类型别名目标
+	IsAlias    bool          // 是否是类型别名
 }
 
 // IsPrimitiveType 判断是否为原始类型

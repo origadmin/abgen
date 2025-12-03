@@ -42,6 +42,7 @@ func main() {
 		v := buildVersion(version, commit, date, builtBy, treeState)
 		fmt.Println(v.String())
 		fmt.Println("Usage: abgen <directory>")
+		return
 	}
 
 	// 在创建生成器后设置模板目录
