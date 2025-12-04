@@ -306,9 +306,30 @@ func (g *ConverterGenerator) Generate() error {
 			srcAlias := g.createTypeAlias(sourceInfo.Name, sourceInfo.PkgName, cfg.SourcePrefix, cfg.SourceSuffix)
 			targetAlias := g.createTypeAlias(targetInfo.Name, targetInfo.PkgName, cfg.TargetPrefix, cfg.TargetSuffix)
 
-			// **FIX**: 收集类型别名
-			data.TypeAliases[srcAlias] = sourceInfo
-			data.TypeAliases[targetAlias] = targetInfo
+			// **FIX**: 收集类型别名, 仅当类型不属于当前包时
+			// 添加调试日志
+			slog.Debug("收集别名",
+				"srcAlias", srcAlias,
+				"sourceInfo.Name", sourceInfo.Name,
+				"sourceInfo.ImportPath", sourceInfo.ImportPath,
+				"generatorPkgPath", generatorPkgPath,
+				"targetAlias", targetAlias,
+				"targetInfo.Name", targetInfo.Name,
+				"targetInfo.ImportPath", targetInfo.ImportPath)
+
+			// 只有当别名指向的类型不在当前生成包内，且别名本身不是当前包的类型名时才添加
+			if sourceInfo.ImportPath != generatorPkgPath && sourceInfo.Name != srcAlias {
+				slog.Debug("添加源类型别名", "alias", srcAlias, "name", sourceInfo.Name, "importPath", sourceInfo.ImportPath)
+				data.TypeAliases[srcAlias] = sourceInfo
+			} else {
+				slog.Debug("跳过源类型别名 (当前包或别名与类型名相同)", "alias", srcAlias, "name", sourceInfo.Name, "importPath", sourceInfo.ImportPath)
+			}
+			if targetInfo.ImportPath != generatorPkgPath && targetInfo.Name != targetAlias {
+				slog.Debug("添加目标类型别名", "alias", targetAlias, "name", targetInfo.Name, "importPath", targetInfo.ImportPath)
+				data.TypeAliases[targetAlias] = targetInfo
+			} else {
+				slog.Debug("跳过目标类型别名 (当前包或别名与类型名相同)", "alias", targetAlias, "name", targetInfo.Name, "importPath", targetInfo.ImportPath)
+			}
 
 			converter := map[string]interface{}{
 				"FuncName":    funcName,

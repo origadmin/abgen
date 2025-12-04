@@ -7,22 +7,10 @@ import (
 	{{$key}} "{{$val}}"
 {{end}}
 )
+{{- if .TypeAliases }}
 
-{{- define "type_aliases" -}}
-{{- if .TypeAliases -}}
-type (
-{{- range $alias, $info := .TypeAliases}}
-    {{- if and $info.ImportAlias (ne $info.ImportAlias ".")}}
-	{{$alias}} = {{$info.ImportAlias}}.{{$info.Name}}
-    {{- else}}
-    {{$alias}} = {{$info.Name}}
-    {{- end}}
-{{- end}}
-)
-{{- end -}}
-{{- end -}}
-
-{{template "type_aliases" .}}
+{{- template "type_aliases" . }}
+{{- end }}
 
 {{range .Converters}}
 	// {{.FuncName}} converts {{.SourceAlias}} to {{.TargetAlias}}
@@ -39,4 +27,16 @@ type (
 	{{end}}
 	return dst
 	}
+{{end}}
+
+{{define "type_aliases"}}
+type (
+{{- range $alias, $info := .TypeAliases}}
+    {{- if and $info.ImportAlias (ne $info.ImportAlias ".")}}
+	{{$alias}} = {{$info.ImportAlias}}.{{$info.Name}}
+    {{- else}}
+    {{$alias}} = {{$info.Name}}
+    {{- end}}
+{{- end}}
+)
 {{end}}
