@@ -76,8 +76,12 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 	srcType := srcField.Type
 	dstType := dstField.Type
 
+	// **FIX**: Strip pointers before looking up the rule
+	baseSrcType := strings.TrimPrefix(srcType, "*")
+	baseDstType := strings.TrimPrefix(dstType, "*")
+	key := baseSrcType + ":" + baseDstType
+
 	// 1. 检查直接类型映射
-	key := srcType + ":" + dstType
 	if rule, exists := fg.conversionRules[key]; exists {
 		if rule.tmpl != nil {
 			// 准备模板数据
@@ -128,8 +132,14 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 		// 使用目标类型的别名来创建切片
 		dstElemAlias := createTypeAlias(dstElemInfo.Name, dstElemInfo.PkgName, "", "", cfg.GeneratorPkgPath)
 		dstSliceType := fmt.Sprintf("[]*%s", dstElemAlias)
-		if !strings.HasPrefix(dstElem, "*") {
+		if !strings.HasPrefix(dstElem, "*") { // 如果目标元素类型不是指针，则切片类型也不是指针切片
 			dstSliceType = fmt.Sprintf("[]%s", dstElemAlias)
+		}
+
+		// 判断源元素是否为指针，以决定循环中传递 item 还是 &item
+		srcItemRef := "item"
+		if !strings.HasPrefix(srcElem, "*") {
+			srcItemRef = "&item"
 		}
 
 		// 生成 for 循环转换代码
@@ -137,9 +147,9 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 if src.%s != nil {
 	dst.%s = make(%s, len(src.%s))
 	for i, item := range src.%s {
-		dst.%s[i] = %s(item)
+		dst.%s[i] = %s(%s)
 	}
-}`, srcField.Name, dstField.Name, dstSliceType, srcField.Name, srcField.Name, dstField.Name, funcName), nil
+}`, srcField.Name, dstField.Name, dstSliceType, srcField.Name, srcField.Name, dstField.Name, funcName, srcItemRef), nil
 	}
 
 	// 3. 检查指针 to 结构体
@@ -266,11 +276,11 @@ func createTypeAlias(typeName, pkgName, prefix, suffix, generatorPkgPath string)
 
 // UpdateTypeMap 更新类型映射表
 func (fg *FieldGenerator) UpdateTypeMap() {
-	// 注册基础类型映射 - 使用模式而非函数
-	fg.RegisterTypePattern("time.Time", "*timestamppb.Timestamp",
+	// **FIX**: Register base types, not pointer types.
+	fg.RegisterTypePattern("time.Time", "google.golang.org/protobuf/types/known/timestamppb.Timestamp",
 		"%s = timestamppb.New(%s)")
 
-	fg.RegisterTypePattern("*timestamppb.Timestamp", "time.Time",
+	fg.RegisterTypePattern("google.golang.org/protobuf/types/known/timestamppb.Timestamp", "time.Time",
 		"%s = %s.AsTime()")
 
 	// 数字类型处理
@@ -281,11 +291,11 @@ func (fg *FieldGenerator) UpdateTypeMap() {
 		"%s = int32(%s)")
 
 	// UUID处理
-	fg.RegisterTypePattern("uuid.UUID", "string",
+	fg.RegisterTypePattern("github.com/google/uuid.UUID", "string",
 		"%s = %s.String()")
 
 	// 特殊类型处理 - 使用Go模板
-	err := fg.RegisterTypeConversion("map[string]interface{}", "*structpb.Struct", `
+	err := fg.RegisterTypeConversion("map[string]interface{}", "google.golang.org/protobuf/types/known/structpb.Struct", `
 {{if .Src}}
 var err error
 {{.Dst}}, err = structpb.NewStruct({{.Src}})
