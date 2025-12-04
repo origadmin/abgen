@@ -7,9 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 	"golang.org/x/tools/go/packages"
 
 	"github.com/origadmin/abgen/internal/ast"
@@ -33,7 +32,7 @@ type ConverterGenerator struct {
 // ParseSource 解析目录下的所有Go文件
 func (g *ConverterGenerator) ParseSource(dir string, convTemp string) error {
 	slog.Info("ParseSource 开始", "目录", dir, "模板", convTemp)
-	
+
 	if convTemp != "" {
 		err := g.tmplConv.LoadExternalTemplates(convTemp)
 		if err != nil {
@@ -85,7 +84,7 @@ func (g *ConverterGenerator) ParseSource(dir string, convTemp string) error {
 		resolver.Pkgs = pkgs
 		slog.Info("更新resolver包信息", "包数量", len(pkgs))
 	}
-	
+
 	return g.buildGraph(pkgs)
 }
 
@@ -100,7 +99,15 @@ func (g *ConverterGenerator) buildGraph(pkgs []*packages.Package) error {
 		}
 	}
 
-	// Handle package-level conversions
+	// Step 1: Update resolver's walker and add initial packages *before* processing package-level directives
+	if resolver, ok := g.resolver.(*ast.TypeResolverImpl); ok {
+		resolver.UpdateFromWalker(walker)
+		resolver.AddPackages(pkgs...) // Add all initially loaded packages to the resolver's known list
+	} else {
+		return fmt.Errorf("g.resolver 不是 ast.TypeResolverImpl 类型，无法更新walker或添加包")
+	}
+
+	// 处理包级转换
 	for _, pkgCfg := range walker.PackageConfigs {
 		slog.Info("处理包级转换配置", "source", pkgCfg.SourcePackage, "target", pkgCfg.TargetPackage)
 
@@ -113,30 +120,69 @@ func (g *ConverterGenerator) buildGraph(pkgs []*packages.Package) error {
 			return fmt.Errorf("无法加载目标包 %s: %w", pkgCfg.TargetPackage, err)
 		}
 
-		// Collect all type names from destination package for quick lookup
-		dstTypes := make(map[string]bool)
-		for _, file := range dstPkg.Syntax {
+		// Step 2: Ensure resolver and walker know about these dynamically loaded packages
+		if resolver, ok := g.resolver.(*ast.TypeResolverImpl); ok {
+			resolver.AddPackages(srcPkg, dstPkg)
+		} else {
+			slog.Warn("g.resolver 不是 ast.TypeResolverImpl 类型，无法添加包")
+		}
+		// THIS IS THE FIX: Update the walker with the newly loaded packages.
+		walker.AddKnownPackages(srcPkg, dstPkg)
+
+		// Debugging: List all TypeSpecs found in srcPkg
+		slog.Debug("buildGraph: 正在检查源包TypeSpec", "PkgPath", srcPkg.PkgPath, "GoFiles", srcPkg.GoFiles, "SyntaxCount", len(srcPkg.Syntax))
+		for _, file := range srcPkg.Syntax {
+			slog.Debug("buildGraph: 检查源包文件", "filename", srcPkg.Fset.File(file.Pos()).Name())
 			goast.Inspect(file, func(n goast.Node) bool {
 				if ts, ok := n.(*goast.TypeSpec); ok {
-					dstTypes[ts.Name.Name] = true
+					slog.Debug("buildGraph: 在源包中找到TypeSpec", "TypeName", ts.Name.Name)
 				}
 				return true
 			})
 		}
 
-		// Iterate source package types and find matches
-		for _, file := range srcPkg.Syntax {
+		// Debugging: List all TypeSpecs found in dstPkg
+		slog.Debug("buildGraph: 正在检查目标包TypeSpec", "PkgPath", dstPkg.PkgPath, "GoFiles", dstPkg.GoFiles, "SyntaxCount", len(dstPkg.Syntax))
+		for _, file := range dstPkg.Syntax {
+			slog.Debug("buildGraph: 检查目标包文件", "filename", dstPkg.Fset.File(file.Pos()).Name())
 			goast.Inspect(file, func(n goast.Node) bool {
 				if ts, ok := n.(*goast.TypeSpec); ok {
-					if _, exists := dstTypes[ts.Name.Name]; exists && !pkgCfg.IgnoreTypes[ts.Name.Name] {
-						slog.Info("发现匹配的包类型", "type", ts.Name.Name)
-						convCfg := &types.ConversionConfig{
-							SourceType:   fmt.Sprintf("%s.%s", srcPkg.Name, ts.Name.Name),
-							TargetType:   fmt.Sprintf("%s.%s", dstPkg.Name, ts.Name.Name),
-							Direction:    pkgCfg.Direction,
-							IgnoreFields: make(map[string]bool), // TODO: support package-level ignore fields
+					slog.Debug("buildGraph: 在目标包中找到TypeSpec", "TypeName", ts.Name.Name)
+				}
+				return true
+			})
+		}
+
+		// Now, the actual matching loop
+		for _, file := range srcPkg.Syntax {
+			slog.Debug("buildGraph: 检查源包文件 (匹配循环)", "filename", srcPkg.Fset.File(file.Pos()).Name())
+			goast.Inspect(file, func(n goast.Node) bool {
+				if ts, ok := n.(*goast.TypeSpec); ok {
+					// 检查是否为结构体或结构体别名
+					if !walker.IsStructOrStructAlias(ts) {
+						slog.Debug("buildGraph: 跳过非结构体类型", "typeName", ts.Name.Name)
+						return true
+					}
+
+					srcTypeName := fmt.Sprintf("%s.%s", srcPkg.PkgPath, ts.Name.Name)
+					targetTypeName := fmt.Sprintf("%s.%s", dstPkg.PkgPath, ts.Name.Name)
+					slog.Debug("buildGraph: 正在尝试匹配类型", "ts.Name.Name", ts.Name.Name, "srcTypeName", srcTypeName, "targetTypeName", targetTypeName)
+					slog.Debug("buildGraph: 检查忽略类型", "pkgCfg.IgnoreTypes", pkgCfg.IgnoreTypes, "typeName", ts.Name.Name, "isIgnored", pkgCfg.IgnoreTypes[ts.Name.Name])
+
+					if _, err := g.resolver.Resolve(targetTypeName); err == nil { // Check if the type exists in the target package using Resolve
+						slog.Debug("buildGraph: g.resolver.Resolve 成功", "targetTypeName", targetTypeName)
+						if !pkgCfg.IgnoreTypes[ts.Name.Name] {
+							slog.Info("发现匹配的包类型", "type", ts.Name.Name, "sourcePkg", srcPkg.PkgPath, "targetPkg", dstPkg.PkgPath)
+							convCfg := &types.ConversionConfig{
+								SourceType:   srcTypeName,
+								TargetType:   targetTypeName,
+								Direction:    pkgCfg.Direction,
+								IgnoreFields: make(map[string]bool), // TODO: support package-level ignore fields
+							}
+							walker.AddConversion(convCfg)
 						}
-						walker.AddConversion(convCfg)
+					} else {
+						slog.Debug("buildGraph: g.resolver.Resolve 失败", "targetTypeName", targetTypeName, "error", err)
 					}
 				}
 				return true
@@ -146,12 +192,24 @@ func (g *ConverterGenerator) buildGraph(pkgs []*packages.Package) error {
 
 	// 输出类型绑定信息以便调试
 	fmt.Println("\n======== 类型绑定信息 ========")
+	if len(g.graph) == 0 {
+		slog.Info("类型转换图为空，未发现任何转换配置。 ולא נמצאו הגדרות המרה כלשהן.")
+	}
 	for source, node := range g.graph {
-		slog.Info("遍历类型", "源", source)
-		for funcName, cfg := range node.Configs {
-			slog.Info("遍历函数", "函数名", funcName)
-			slog.Info("遍历转换", "源", cfg.SourceType, "目标", cfg.TargetType)
+		slog.Info("图节点", "源类型", source)
+		if len(node.Configs) == 0 {
+			slog.Info("  - 节点中没有转换配置")
 		}
+		for funcKey, cfg := range node.Configs {
+			slog.Info("  - 转换配置",
+				"键", funcKey,
+				"源类型", cfg.SourceType,
+				"目标类型", cfg.TargetType,
+				"方向", cfg.Direction,
+				"忽略字段数", len(cfg.IgnoreFields))
+		}
+		slog.Info("  - ToConversions", "目标类型", node.ToConversions)
+		slog.Info("  - FromConversions", "源类型", node.FromConversions)
 	}
 
 	// 将walker收集的导入信息传递给resolver
@@ -177,7 +235,9 @@ func (g *ConverterGenerator) buildGraph(pkgs []*packages.Package) error {
 
 func (g *ConverterGenerator) loadPackage(path string) (*packages.Package, error) {
 	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedSyntax,
+		Mode: packages.NeedSyntax | packages.NeedName | packages.NeedFiles |
+			packages.NeedCompiledGoFiles | packages.NeedImports |
+			packages.NeedTypes | packages.NeedTypesInfo,
 	}
 	pkgs, err := packages.Load(cfg, path)
 	if err != nil {
@@ -213,6 +273,7 @@ func (g *ConverterGenerator) Generate() error {
 
 	// 生成转换器数据
 	fmt.Println("\n======== 生成转换配置 ========")
+	generatedFuncs := make(map[string]bool) // 用于去重
 	for _, node := range g.graph {
 		for _, cfg := range node.Configs {
 			funcName, err := g.buildFuncName(cfg)
@@ -221,14 +282,48 @@ func (g *ConverterGenerator) Generate() error {
 				continue
 			}
 
+			// 检查是否已经生成过相同的函数
+			if generatedFuncs[funcName] {
+				slog.Debug("跳过重复的函数", "函数名", funcName)
+				continue
+			}
+			generatedFuncs[funcName] = true
+
 			slog.Info("处理函数", "函数名", funcName, "源", cfg.SourceType, "目标", cfg.TargetType)
+
+			// 解析源和目标类型信息
+			sourceInfo, err := g.resolver.Resolve(cfg.SourceType)
+			if err != nil {
+				slog.Error("无法解析源类型", "type", cfg.SourceType, "error", err)
+				continue
+			}
+			targetInfo, err := g.resolver.Resolve(cfg.TargetType)
+			if err != nil {
+				slog.Error("无法解析目标类型", "type", cfg.TargetType, "error", err)
+				continue
+			}
+
 			fields := g.fieldGen.GenerateFields(cfg.SourceType, cfg.TargetType, cfg)
 
+			// 创建类型别名
+			slog.Debug("创建类型别名",
+				"源类型", cfg.SourceType,
+				"源类型名", sourceInfo.Name,
+				"源包名", sourceInfo.PkgName,
+				"目标类型", cfg.TargetType,
+				"目标类型名", targetInfo.Name,
+				"目标包名", targetInfo.PkgName)
+			srcAlias := g.createTypeAlias(sourceInfo.Name, sourceInfo.PkgName, cfg.SourcePrefix, cfg.SourceSuffix)
+			targetAlias := g.createTypeAlias(targetInfo.Name, targetInfo.PkgName, cfg.TargetPrefix, cfg.TargetSuffix)
+			slog.Debug("生成的别名", "源别名", srcAlias, "目标别名", targetAlias)
+
 			converter := map[string]interface{}{
-				"FuncName":   funcName,
-				"SourceType": cfg.SourceType,
-				"TargetType": cfg.TargetType,
-				"Fields":     fields,
+				"FuncName":    funcName,
+				"SourceType":  cfg.SourceType,
+				"TargetType":  cfg.TargetType,
+				"SourceAlias": srcAlias,
+				"TargetAlias": targetAlias,
+				"Fields":      fields,
 			}
 			data.Converters = append(data.Converters, converter)
 		}
@@ -260,25 +355,65 @@ func (g *ConverterGenerator) buildFuncName(cfg *types.ConversionConfig) (string,
 		return "", fmt.Errorf("无法解析目标类型 %s: %w", cfg.TargetType, err)
 	}
 
-	caser := cases.Title(language.Und, cases.NoLower)
+	// 创建类型别名映射
+	srcAlias := g.createTypeAlias(sourceInfo.Name, sourceInfo.PkgName, cfg.SourcePrefix, cfg.SourceSuffix)
+	targetAlias := g.createTypeAlias(targetInfo.Name, targetInfo.PkgName, cfg.TargetPrefix, cfg.TargetSuffix)
 
-	// Build source name part
-	srcNamePart := sourceInfo.Name
-	if cfg.SourcePrefix != "" || cfg.SourceSuffix != "" {
-		srcNamePart = cfg.SourcePrefix + srcNamePart + cfg.SourceSuffix
-	} else if sourceInfo.PkgName != "" { // Default to package name as prefix if no custom affix
-		srcNamePart = caser.String(sourceInfo.PkgName) + srcNamePart
+	return fmt.Sprintf("Convert%sTo%s", srcAlias, targetAlias), nil
+}
+
+// createTypeAlias 为类型创建简短的别名
+func (g *ConverterGenerator) createTypeAlias(typeName, pkgName, prefix, suffix string) string {
+	// 添加调试信息
+	slog.Debug("createTypeAlias 输入",
+		"原始typeName", typeName,
+		"pkgName", pkgName,
+		"prefix", prefix,
+		"suffix", suffix)
+
+	// 首先从完整路径中提取类型名（如果包含路径）
+	originalTypeName := typeName
+	if strings.Contains(typeName, "/") {
+		parts := strings.Split(typeName, "/")
+		typeName = parts[len(parts)-1]
 	}
 
-	// Build target name part
-	targetNamePart := targetInfo.Name
-	if cfg.TargetPrefix != "" || cfg.TargetSuffix != "" {
-		targetNamePart = cfg.TargetPrefix + targetNamePart + cfg.TargetSuffix
-	} else if targetInfo.PkgName != "" { // Default to package name as prefix if no custom affix
-		targetNamePart = caser.String(targetInfo.PkgName) + targetNamePart
+	// 如果有自定义前缀或后缀，优先使用
+	if prefix != "" || suffix != "" {
+		result := prefix + typeName + suffix
+		slog.Debug("createTypeAlias 输出 (前缀/后缀)", "result", result)
+		return result
 	}
 
-	return fmt.Sprintf("Convert%sTo%s", srcNamePart, targetNamePart), nil
+	// 根据包名创建默认别名
+	var result string
+	switch pkgName {
+	case "ent":
+		result = typeName + "Ent"
+	case "types":
+		result = typeName + "PB" // protobuf类型的别名
+	case "dto":
+		result = typeName + "DTO"
+	default:
+		// 如果包名为空，尝试从原始路径推断
+		if pkgName == "" {
+			// 如果原始类型名包含 "types"，假设它是 types 包
+			if strings.Contains(originalTypeName, "/types/") || strings.HasSuffix(originalTypeName, "types") {
+				result = typeName + "PB"
+			} else if strings.Contains(originalTypeName, "/ent/") || strings.HasSuffix(originalTypeName, "ent") {
+				// 如果原始类型名包含 "ent"，假设它是 ent 包  
+				result = typeName + "Ent"
+			} else {
+				result = typeName
+			}
+		} else {
+			// 使用包名的首字母大写作为前缀
+			result = typeName + strings.Title(pkgName[:1]) + strings.ToLower(pkgName[1:])
+		}
+	}
+
+	slog.Debug("createTypeAlias 输出", "result", result)
+	return result
 }
 
 // NewGenerator 创建新的生成器实例

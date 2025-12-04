@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/origadmin/abgen/internal/types"
 )
 
 // parseCommentParams 解析注释参数
@@ -27,9 +26,12 @@ func parseCommentParams(comment string) map[string]string {
 	return params
 }
 
-func addToConversion(graph *types.ConversionNode, source, target string) {
-	graph.ToConversions = appendIfNotExists(graph.ToConversions, target)
-}
-func addFromConversion(graph *types.ConversionNode, target, source string) {
-	graph.FromConversions = appendIfNotExists(graph.FromConversions, source)
+// AppendIfNotExists 辅助函数，避免重复添加
+func AppendIfNotExists(slice []string, item string) []string {
+	for _, v := range slice {
+		if v == item {
+			return slice
+		}
+	}
+	return append(slice, item)
 }

@@ -34,10 +34,10 @@ This is the most powerful feature. It allows you to generate converters for all 
     // The following directives instruct abgen to generate converters for all matching types
     // between the data model package and the API package.
 
-    //go:abgen:convert-package:source="github.com/your/project/internal/data/po"
-    //go:abgen:convert-package:target="github.com/your/project/api/v1/system"
-    //go:abgen:convert-package:direction=to
-    //go:abgen:convert-package:ignore=InternalType,TimestampMixin
+    //go:abgen:convert:package:source="github.com/your/project/internal/data/po"
+    //go:abgen:convert:package:target="github.com/your/project/api/v1/system"
+    //go:abgen:convert:package:direction=to
+    //go:abgen:convert:package:ignore="InternalType,TimestampMixin"
 
     package service
 
@@ -53,19 +53,32 @@ This is the most powerful feature. It allows you to generate converters for all 
 
 ### Example 2: Type-Level Conversion
 
-For one-off conversions or to override package-level behavior, you can add a directive directly to a struct.
+For one-off conversions or to override package-level behavior, you can add a directive directly to a struct or type alias.
+These directives must use the `//go:abgen:` prefix and be placed immediately above the type declaration.
 
 1.  **Add Directive**:
     ```go
     package dto
 
+    // Example for a simple struct:
     //go:abgen:convert:target="UserPB"
-    //go:abgen:convert:ignore="Password"
-    type User struct {
-        ID       int
-        Username string
-        Password string
-    }
+    //go:abgen:convert:ignore="Password" // Ignore specific fields
+    type User struct { /* ... fields ... */ }
+
+    // Example for a type alias within a type () block:
+    type (
+        // The 'User' alias, used for conversion to 'UserPB'.
+        // Directives must be placed immediately above the alias declaration.
+        //go:abgen:convert:target="UserPB"
+        //go:abgen:convert:direction="both"
+        //go:abgen:convert:ignore="password,salt"
+        User = ent.User
+
+        // The 'UserPB' alias, used for conversion back to 'User'.
+        //go:abgen:convert:target="User"
+        //go:abgen:convert:direction="both"
+        UserPB = typespb.User
+    )
     ```
 
 2.  **Run `abgen`**:
@@ -80,10 +93,10 @@ For one-off conversions or to override package-level behavior, you can add a dir
 
 ### Package-Level Directives
 
-*   `//go:abgen:convert-package:source="<import-path>"`: (Required) Sets the full import path for the source package.
-*   `//go:abgen:convert-package:target="<import-path>"`: (Required) Sets the full import path for the target package.
-*   `//go:abgen:convert-package:direction="<to|from|both>"`: (Optional) Sets the conversion direction. Defaults to `both`.
-*   `//go:abgen:convert-package:ignore="<TypeName1,TypeName2>"`: (Optional) A comma-separated list of types to ignore during generation.
+*   `//go:abgen:convert:package:source="<import-path>"`: (Required) Sets the full import path for the source package.
+*   `//go:abgen:convert:package:target="<import-path>"`: (Required) Sets the full import path for the target package.
+*   `//go:abgen:convert:package:direction="<to|from|both>"`: (Optional) Sets the conversion direction. Defaults to `both`.
+*   `//go:abgen:convert:package:ignore="<TypeName1,TypeName2>"`: (Optional) A comma-separated list of types to ignore during generation.
 
 ### Type-Level Directives
 

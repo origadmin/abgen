@@ -26,6 +26,7 @@ var (
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
+		Level:     slog.LevelDebug, // Set log level to Debug
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			if a.Key == "source" {
 				tmp := strings.Split(strings.Trim(a.Value.String(), "{}"), "/")

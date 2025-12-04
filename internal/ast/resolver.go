@@ -2,6 +2,7 @@ package ast
 
 import (
 	"fmt"
+	"log/slog"
 
 	"golang.org/x/tools/go/packages"
 
@@ -14,6 +15,7 @@ type TypeResolver interface {
 	UpdateFromWalker(walker *PackageWalker) error
 	GetImports() map[string]string
 	GetKnownTypes() map[string]types.TypeInfo
+	AddPackages(pkgs ...*packages.Package) // New method to add more packages dynamically
 }
 
 // TypeResolverImpl implements the TypeResolver interface.
@@ -22,6 +24,21 @@ type TypeResolverImpl struct {
 	walker    *PackageWalker
 	typeCache map[string]types.TypeInfo
 	imports   map[string]string
+}
+
+// AddPackages adds more *packages.Package instances to the resolver's known packages.
+func (r *TypeResolverImpl) AddPackages(newPkgs ...*packages.Package) {
+	existingPkgs := make(map[string]bool)
+	for _, p := range r.Pkgs {
+		existingPkgs[p.PkgPath] = true
+	}
+
+	for _, newPkg := range newPkgs {
+		if !existingPkgs[newPkg.PkgPath] {
+			r.Pkgs = append(r.Pkgs, newPkg)
+			existingPkgs[newPkg.PkgPath] = true
+		}
+	}
 }
 
 // NewResolver creates a new TypeResolver.
@@ -38,12 +55,18 @@ func (r *TypeResolverImpl) Resolve(typeName string) (types.TypeInfo, error) {
 	if r.walker == nil {
 		return types.TypeInfo{}, fmt.Errorf("resolver has not been updated with a walker")
 	}
-	return r.walker.Resolve(typeName)
+	info, err := r.walker.Resolve(typeName)
+	if err == nil {
+		slog.Debug("Resolve: 成功解析类型", "输入", typeName, "输出名", info.Name, "包名", info.PkgName)
+	}
+	return info, err
 }
 
 // UpdateFromWalker updates the resolver with information from a PackageWalker.
 func (r *TypeResolverImpl) UpdateFromWalker(walker *PackageWalker) error {
 	r.walker = walker
+	// Pass the resolver's accumulated packages to the walker
+	r.walker.AddKnownPackages(r.Pkgs...)
 	return nil
 }
 

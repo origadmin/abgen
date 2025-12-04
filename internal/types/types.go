@@ -46,6 +46,7 @@ type TypeInfo struct {
 	Name       string        // 类型名称
 	PkgName    string        // 包名称 (例如 "po", "system")
 	ImportPath string        // 导入路径
+	ImportAlias string       // 在当前代码中的导入别名 (例如 "typespb", "ent")
 	Fields     []StructField // 结构体字段
 	AliasFor   string        // 类型别名目标
 	IsAlias    bool          // 是否是类型别名

@@ -9,18 +9,18 @@ import (
 )
 
 {{range .Converters}}
-	// {{.FuncName}} 自动生成的转换方法
-	func {{.FuncName}}(src *{{.SourceType}}) *{{.TargetType}} {
-	dst := &{{.TargetType}}{}
+	// {{.FuncName}} converts {{.SourceAlias}} to {{.TargetAlias}}
+	func {{.FuncName}}(src *{{.SourceAlias}}) *{{.TargetAlias}} {
+	dst := &{{.TargetAlias}}{}
 	if src == nil {
-	return dst
+		return dst
 	}
 
-  {{range .Fields -}}
-      {{if .Ignore}}// ignore: {{.Name}} {{.IgnoreReason}}
-      {{else}}{{.Conversion}}
-      {{end -}}
-  {{end}}
+	{{range .Fields -}}
+	{{if .Ignore}}// ignore: {{.Name}} {{.IgnoreReason}}
+	{{else}}{{.Conversion}}
+	{{end -}}
+	{{end}}
 	return dst
 	}
 {{end}}
