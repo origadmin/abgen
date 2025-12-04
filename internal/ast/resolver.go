@@ -16,6 +16,7 @@ type TypeResolver interface {
 	GetImports() map[string]string
 	GetKnownTypes() map[string]types.TypeInfo
 	AddPackages(pkgs ...*packages.Package) // New method to add more packages dynamically
+	GetLocalTypeAliases() map[string]string // New: Get local type aliases
 }
 
 // TypeResolverImpl implements the TypeResolver interface.
@@ -84,4 +85,12 @@ func (r *TypeResolverImpl) GetKnownTypes() map[string]types.TypeInfo {
 		return make(map[string]types.TypeInfo)
 	}
 	return r.walker.GetTypeCache()
+}
+
+// GetLocalTypeAliases returns the local type aliases collected by the walker.
+func (r *TypeResolverImpl) GetLocalTypeAliases() map[string]string {
+	if r.walker == nil {
+		return make(map[string]string)
+	}
+	return r.walker.GetLocalTypeAliases()
 }

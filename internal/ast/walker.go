@@ -17,14 +17,15 @@ import (
 
 // PackageWalker 包遍历器
 type PackageWalker struct {
-	imports        map[string]string
-	graph          types.ConversionGraph
-	currentPkg     *packages.Package
-	typeCache      map[string]types.TypeInfo
-	loadedPkgs     map[string]*packages.Package // 缓存已加载的包
-	packageMode    packages.LoadMode
-	PackageConfigs []*types.PackageConversionConfig
-	allKnownPkgs   []*packages.Package // New field to hold all packages known to the resolver
+	imports          map[string]string
+	graph            types.ConversionGraph
+	currentPkg       *packages.Package
+	typeCache        map[string]types.TypeInfo
+	loadedPkgs       map[string]*packages.Package // 缓存已加载的包
+	packageMode      packages.LoadMode
+	PackageConfigs   []*types.PackageConversionConfig
+	allKnownPkgs     []*packages.Package // New field to hold all packages known to the resolver
+	localTypeAliases map[string]string   // New: to track local type aliases
 }
 
 // AddKnownPackages adds more *packages.Package instances to the walker's known packages.
@@ -83,15 +84,20 @@ func (w *PackageWalker) GetImports() map[string]string {
 	return w.imports
 }
 
+func (w *PackageWalker) GetLocalTypeAliases() map[string]string {
+	return w.localTypeAliases
+}
+
 // NewPackageWalker 创建新的遍历器
 func NewPackageWalker(graph types.ConversionGraph) *PackageWalker {
 	return &PackageWalker{
-		graph:          graph,
-		imports:        make(map[string]string),
-		typeCache:      make(map[string]types.TypeInfo),
-		loadedPkgs:     make(map[string]*packages.Package),
-		packageMode:    packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
-		PackageConfigs: make([]*types.PackageConversionConfig, 0),
+		graph:            graph,
+		imports:          make(map[string]string),
+		typeCache:        make(map[string]types.TypeInfo),
+		loadedPkgs:       make(map[string]*packages.Package),
+		packageMode:      packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
+		PackageConfigs:   make([]*types.PackageConversionConfig, 0),
+		localTypeAliases: make(map[string]string),
 	}
 }
 
@@ -160,6 +166,11 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 				continue
 			}
 
+			// **FIX**: Record local type aliases
+			if _, isStruct := typeSpec.Type.(*goast.StructType); !isStruct {
+				w.localTypeAliases[typeSpec.Name.Name] = w.exprToString(typeSpec.Type, w.currentPkg)
+			}
+
 			// Process comments attached to the TypeSpec
 			if typeSpec.Doc != nil {
 				var typeCfg *types.ConversionConfig
@@ -169,6 +180,7 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 							typeCfg = &types.ConversionConfig{
 								SourceType:   typeSpec.Name.Name,
 								IgnoreFields: make(map[string]bool),
+								FieldFuncs:   make(map[string]string), // Initialize the map
 							}
 						}
 						w.parseAndApplyDirective(comment.Text, typeCfg, nil)
@@ -262,7 +274,10 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 		if typeCfg == nil || len(keys) < 2 {
 			return
 		}
-		if len(keys) == 2 { // e.g., convert:target="UserPB"
+		if subject == "field" && len(keys) == 3 { // **FIX**: New field directive format: field:FieldName="CustomFunc"
+			fieldName := keys[2]
+			typeCfg.FieldFuncs[fieldName] = value
+		} else if len(keys) == 2 { // e.g., convert:target="UserPB"
 			switch subject {
 			case "target":
 				typeCfg.TargetType = value

@@ -161,6 +161,7 @@ func (g *ConverterGenerator) buildGraph(pkgs []*packages.Package) error {
 								TargetType:   targetTypeName,
 								Direction:    pkgCfg.Direction,
 								IgnoreFields: make(map[string]bool), // TODO: support package-level ignore fields
+								FieldFuncs:   make(map[string]string),
 							}
 							walker.AddConversion(convCfg)
 						}
@@ -259,6 +260,12 @@ func (g *ConverterGenerator) Generate() error {
 		TypeAliases: make(map[string]types.TypeInfo),
 	}
 
+	// 获取本地已定义的别名
+	localTypeAliases := make(map[string]string)
+	if resolver, ok := g.resolver.(*ast.TypeResolverImpl); ok {
+		localTypeAliases = resolver.GetLocalTypeAliases()
+	}
+
 	// 生成转换器数据
 	fmt.Println("\n======== 生成转换配置 ========")
 	generatedFuncs := make(map[string]bool) // 用于去重
@@ -306,7 +313,7 @@ func (g *ConverterGenerator) Generate() error {
 			srcAlias := g.createTypeAlias(sourceInfo.Name, sourceInfo.PkgName, cfg.SourcePrefix, cfg.SourceSuffix)
 			targetAlias := g.createTypeAlias(targetInfo.Name, targetInfo.PkgName, cfg.TargetPrefix, cfg.TargetSuffix)
 
-			// **FIX**: 收集类型别名, 仅当类型不属于当前包时
+			// **FIX**: 收集类型别名, 仅当类型不属于当前包时，且不是本地已定义的别名
 			// 添加调试日志
 			slog.Debug("收集别名",
 				"srcAlias", srcAlias,
@@ -315,20 +322,29 @@ func (g *ConverterGenerator) Generate() error {
 				"generatorPkgPath", generatorPkgPath,
 				"targetAlias", targetAlias,
 				"targetInfo.Name", targetInfo.Name,
-				"targetInfo.ImportPath", targetInfo.ImportPath)
+				"targetInfo.ImportPath", targetInfo.ImportPath,
+				"localTypeAliases", localTypeAliases)
 
-			// 只有当别名指向的类型不在当前生成包内，且别名本身不是当前包的类型名时才添加
-			if sourceInfo.ImportPath != generatorPkgPath && sourceInfo.Name != srcAlias {
-				slog.Debug("添加源类型别名", "alias", srcAlias, "name", sourceInfo.Name, "importPath", sourceInfo.ImportPath)
-				data.TypeAliases[srcAlias] = sourceInfo
+			if sourceInfo.ImportPath != generatorPkgPath {
+				if _, exists := localTypeAliases[srcAlias]; !exists {
+					slog.Debug("添加源类型别名", "alias", srcAlias, "name", sourceInfo.Name, "importPath", sourceInfo.ImportPath)
+					data.TypeAliases[srcAlias] = sourceInfo
+				} else {
+					slog.Debug("跳过源类型别名 (本地已定义)", "alias", srcAlias, "name", sourceInfo.Name, "importPath", sourceInfo.ImportPath)
+				}
 			} else {
-				slog.Debug("跳过源类型别名 (当前包或别名与类型名相同)", "alias", srcAlias, "name", sourceInfo.Name, "importPath", sourceInfo.ImportPath)
+				slog.Debug("跳过源类型别名 (当前包)", "alias", srcAlias, "name", sourceInfo.Name, "importPath", sourceInfo.ImportPath)
 			}
-			if targetInfo.ImportPath != generatorPkgPath && targetInfo.Name != targetAlias {
-				slog.Debug("添加目标类型别名", "alias", targetAlias, "name", targetInfo.Name, "importPath", targetInfo.ImportPath)
-				data.TypeAliases[targetAlias] = targetInfo
+
+			if targetInfo.ImportPath != generatorPkgPath {
+				if _, exists := localTypeAliases[targetAlias]; !exists {
+					slog.Debug("添加目标类型别名", "alias", targetAlias, "name", targetInfo.Name, "importPath", targetInfo.ImportPath)
+					data.TypeAliases[targetAlias] = targetInfo
+				} else {
+					slog.Debug("跳过目标类型别名 (本地已定义)", "alias", targetAlias, "name", targetInfo.Name, "importPath", targetInfo.ImportPath)
+				}
 			} else {
-				slog.Debug("跳过目标类型别名 (当前包或别名与类型名相同)", "alias", targetAlias, "name", targetInfo.Name, "importPath", targetInfo.ImportPath)
+				slog.Debug("跳过目标类型别名 (当前包)", "alias", targetAlias, "name", targetInfo.Name, "importPath", targetInfo.ImportPath)
 			}
 
 			converter := map[string]interface{}{

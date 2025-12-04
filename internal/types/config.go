@@ -3,16 +3,17 @@ package types
 
 // ConversionConfig 转换配置
 type ConversionConfig struct {
-	SourceType   string
-	TargetType   string
-	Direction    string // both/to/from
-	IgnoreFields map[string]bool
-	SrcPackage   string
-	DstPackage   string
-	SourcePrefix string
-	SourceSuffix string
-	TargetPrefix string
-	TargetSuffix string
+	SourceType       string
+	TargetType       string
+	Direction        string // both/to/from
+	IgnoreFields     map[string]bool
+	FieldFuncs       map[string]string // New: map field name to custom conversion function
+	SrcPackage       string
+	DstPackage       string
+	SourcePrefix     string
+	SourceSuffix     string
+	TargetPrefix     string
+	TargetSuffix     string
 	GeneratorPkgPath string // The package path where the generation is happening
 }
 
