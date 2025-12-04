@@ -1,4 +1,3 @@
-
 {{define "time.Time:*timestamppb.Timestamp"}}
 {{.Dst}} = timestamppb.New({{.Src}})
 {{end}}

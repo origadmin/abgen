@@ -8,6 +8,22 @@ import (
 {{end}}
 )
 
+{{- define "type_aliases" -}}
+{{- if .TypeAliases -}}
+type (
+{{- range $alias, $info := .TypeAliases}}
+    {{- if and $info.ImportAlias (ne $info.ImportAlias ".")}}
+	{{$alias}} = {{$info.ImportAlias}}.{{$info.Name}}
+    {{- else}}
+    {{$alias}} = {{$info.Name}}
+    {{- end}}
+{{- end}}
+)
+{{- end -}}
+{{- end -}}
+
+{{template "type_aliases" .}}
+
 {{range .Converters}}
 	// {{.FuncName}} converts {{.SourceAlias}} to {{.TargetAlias}}
 	func {{.FuncName}}(src *{{.SourceAlias}}) *{{.TargetAlias}} {

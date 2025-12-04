@@ -347,8 +347,8 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 	// 3. Handle qualified types (e.g., "ent.User" or "some/path/to/pkg.MyType")
 	parts := strings.Split(targetType, ".")
 	if len(parts) > 1 {
-		pkgIdentifier := parts[0] // Could be alias (e.g., "ent") or full PkgPath (e.g., "origadmin/...")
-		typeName := parts[1]      // e.g., "User"
+		pkgIdentifier := strings.Join(parts[:len(parts)-1], ".") // Handle full path like "a/b/c.Type"
+		typeName := parts[len(parts)-1]
 		slog.Debug("resolveTargetType: 处理限定类型", "pkgIdentifier", pkgIdentifier, "typeName", typeName)
 
 		var foundPkg *packages.Package
@@ -382,11 +382,8 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 
 		if foundPkg != nil {
 			slog.Debug("resolveTargetType: 在找到的包中查找类型", "foundPkg.PkgPath", foundPkg.PkgPath, "typeName", typeName)
-			slog.Debug("resolveTargetType: foundPkg GoFiles", "GoFiles", foundPkg.GoFiles)
-			slog.Debug("resolveTargetType: foundPkg Syntax count", "SyntaxCount", len(foundPkg.Syntax))
 			// 5. Find the type spec in the found package
 			for _, file := range foundPkg.Syntax {
-				slog.Debug("resolveTargetType: 检查文件", "filename", foundPkg.Fset.File(file.Pos()).Name())
 				for _, decl := range file.Decls {
 					if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
 						for _, spec := range genDecl.Specs {
@@ -434,33 +431,33 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 		}
 	}
 
-	// If the type is not found as a struct, it might be a primitive type or a non-struct type.
-	// We still return a TypeInfo with the name.
-	slog.Debug("resolveTargetType: 未找到类型，返回基本类型信息", "targetType", targetType)
+	// **FIX**: If we reach here, the type was not found. Return an empty TypeInfo.
+	slog.Debug("resolveTargetType: 未找到类型，返回空的TypeInfo", "targetType", targetType)
+	delete(w.typeCache, targetType) // Remove the placeholder
+	return types.TypeInfo{}
+}
 
-	// 从完整路径中提取类型名（如果包含路径）
-	typeName := targetType
-	pkgName := ""
-	if strings.Contains(targetType, "/") {
-		parts := strings.Split(targetType, "/")
-		typeName = parts[len(parts)-1]
-
-		// 尝试从路径中推断包名 - 简化版本
-		pathParts := strings.Split(targetType, "/")
-		for i, part := range pathParts {
-			if part == "services" && i+1 < len(pathParts) {
-				pkgName = pathParts[i+1]
-				break
+// findAliasForPath finds the alias used for a given import path in the current context.
+func (w *PackageWalker) findAliasForPath(importPath string) string {
+	for alias, path := range w.imports {
+		if path == importPath {
+			// If the alias is the same as the last part of the path, it's an implicit alias.
+			// In generated code, we might not need to specify it if it doesn't conflict.
+			// However, for explicit aliases (like `typespb`), we must use them.
+			pathParts := strings.Split(path, "/")
+			if alias != "." && alias != "_" && alias != pathParts[len(pathParts)-1] {
+				return alias
 			}
 		}
-		if pkgName == "" && len(pathParts) > 0 {
-			// 如果上面没找到，取最后一个目录名
-			pkgName = pathParts[len(pathParts)-2]
-		}
 	}
-
-	slog.Debug("resolveTargetType: 提取的类型信息", "原始", targetType, "类型名", typeName, "包名", pkgName)
-	return types.TypeInfo{Name: typeName, PkgName: pkgName, ImportPath: ""}
+	// If no explicit alias is found, return the package's own name,
+	// which is the default behavior of Go imports.
+	if pkg, ok := w.loadedPkgs[importPath]; ok {
+		return pkg.Name
+	}
+	// Fallback if package not loaded (should be rare)
+	parts := strings.Split(importPath, "/")
+	return parts[len(parts)-1]
 }
 
 // parseStructFields 解析结构体字段
@@ -468,8 +465,9 @@ func (w *PackageWalker) parseStructFields(typeSpec *goast.TypeSpec, pkgName, pkg
 	slog.Debug("parseStructFields: 解析结构体字段", "类型名", typeSpec.Name.Name, "包名", pkgName, "包路径", pkgPath)
 	info := types.TypeInfo{
 		Name:       typeSpec.Name.Name,
-		PkgName:    pkgName, // Set PkgName here
+		PkgName:    pkgName,
 		ImportPath: pkgPath,
+		ImportAlias: w.findAliasForPath(pkgPath), // **FIX**: Find and set the import alias
 		Fields:     []types.StructField{},
 	}
 
