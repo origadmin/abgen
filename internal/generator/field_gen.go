@@ -152,21 +152,33 @@ if src.%s != nil {
 }`, srcField.Name, dstField.Name, dstSliceType, srcField.Name, srcField.Name, dstField.Name, funcName, srcItemRef), nil
 	}
 
-	// 3. 检查指针 to 结构体
-	if strings.HasPrefix(srcType, "*") && strings.HasPrefix(dstType, "*") {
-		srcElem := strings.TrimPrefix(srcType, "*")
-		dstElem := strings.TrimPrefix(dstType, "*")
+	// 3. Handle struct-to-struct conversions (pointer or value)
+	isSrcStruct := !strings.HasPrefix(srcType, "[]") && !types.IsPrimitiveType(baseSrcType)
+	isDstStruct := !strings.HasPrefix(dstType, "[]") && !types.IsPrimitiveType(baseDstType)
 
-		// 为元素类型构建转换函数名
-		funcName, err := fg.buildElementConversionFuncName(srcElem, dstElem, cfg)
-		if err != nil {
-			slog.Warn("无法为指针元素构建转换函数", "srcElem", srcElem, "dstElem", dstElem, "error", err)
-			return fg.unhandledConversion(srcField, dstField)
-		} else {
-			return fmt.Sprintf(`
+	if isSrcStruct && isDstStruct {
+		funcName, err := fg.buildElementConversionFuncName(baseSrcType, baseDstType, cfg)
+		if err == nil {
+			// Conversion function found, now generate the call.
+			srcArg := "src." + srcField.Name
+
+			// The generated conversion functions always expect a pointer.
+			// If the source field is a value type, take its address.
+			if !strings.HasPrefix(srcType, "*") {
+				srcArg = "&" + srcArg
+			}
+
+			// Only add a nil check if the source field is a pointer.
+			if strings.HasPrefix(srcType, "*") {
+				return fmt.Sprintf(`
 if src.%s != nil {
-	dst.%s = %s(src.%s)
-}`, srcField.Name, dstField.Name, funcName, srcField.Name), nil
+	dst.%s = %s(%s)
+}`, srcField.Name, dstField.Name, funcName, srcArg), nil
+			} else {
+				// If it's a value type, we can't check for nil.
+				// The conversion function will receive a pointer to it.
+				return fmt.Sprintf("dst.%s = %s(%s)", dstField.Name, funcName, srcArg), nil
+			}
 		}
 	}
 
