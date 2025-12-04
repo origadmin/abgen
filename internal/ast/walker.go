@@ -117,7 +117,10 @@ func (w *PackageWalker) WalkPackage(pkg *packages.Package) error {
 	slog.Info("开始遍历包", "包", pkg.PkgPath)
 	w.currentPkg = pkg
 
-	w.collectPackageImports(pkg)
+	// Iterate through each file in the package to collect imports
+	for _, file := range pkg.Syntax {
+		w.collectImports(file) // Call the existing collectImports for each file
+	}
 
 	for _, file := range pkg.Syntax {
 		filename := pkg.Fset.File(file.Pos()).Name()
@@ -166,7 +169,7 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 				continue
 			}
 
-			// **FIX**: Record local type aliases
+			// Record local type aliases
 			if _, isStruct := typeSpec.Type.(*goast.StructType); !isStruct {
 				w.localTypeAliases[typeSpec.Name.Name] = w.exprToString(typeSpec.Type, w.currentPkg)
 			}
@@ -178,9 +181,8 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 					if strings.HasPrefix(comment.Text, "//go:abgen:") {
 						if typeCfg == nil {
 							typeCfg = &types.ConversionConfig{
-								SourceType:   typeSpec.Name.Name,
+								SourceType:   w.currentPkg.PkgPath + "." + typeSpec.Name.Name, // Use fully qualified name
 								IgnoreFields: make(map[string]bool),
-								FieldFuncs:   make(map[string]string), // Initialize the map
 							}
 						}
 						w.parseAndApplyDirective(comment.Text, typeCfg, nil)
@@ -197,37 +199,37 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 }
 
 // parseAndApplyDirective parses a single `//go:abgen:` line and applies it to the relevant config object.
+// Directives can be in two forms:
+// 1. `//go:abgen:key:subkey="value"`: keyStr is "key:subkey", value is "value".
+// 2. `//go:abgen:key:subkey`: keyStr is "key:subkey", value is empty.
 func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.ConversionConfig, pkgConfigs map[string]*types.PackageConversionConfig) {
 	slog.Debug("parseAndApplyDirective", "line", line)
 	directive := strings.TrimPrefix(line, "//go:abgen:")
 
-	parts := strings.SplitN(directive, "=", 2)
-	slog.Debug("parseAndApplyDirective", "directive_raw", directive, "parts", parts, "len_parts", len(parts))
-	if len(parts) != 2 {
-		slog.Debug("parseAndApplyDirective: failed to split directive by =", "directive", directive)
-		return
+	keyStr := directive
+	value := ""
+
+	if parts := strings.SplitN(directive, "=", 2); len(parts) == 2 {
+		keyStr = parts[0]
+		value = strings.Trim(parts[1], `"`)
 	}
-	keyStr := parts[0]
-	value := strings.Trim(parts[1], `"`)
 
 	keys := strings.Split(keyStr, ":")
-	slog.Debug("parseAndApplyDirective", "keyStr_raw", keyStr, "keys", keys, "len_keys", len(keys))
 	if len(keys) < 2 {
-		slog.Debug("parseAndApplyDirective: failed to split keyStr by :", "keyStr", keyStr)
+		slog.Warn("Invalid directive format: missing verb or subject.", "directive", line)
 		return
 	}
 
 	verb := keys[0]
 	subject := keys[1]
-
 	slog.Debug("Parsed Directive", "verb", verb, "subject", subject, "keys", keys, "value", value)
 
 	switch {
-	case verb == "convert" && subject == "package": // handles directives like //go:abgen:convert:package:source="..."
+	case verb == "convert" && subject == "package":
+		// ... (This logic remains the same as it was correct)
 		if pkgConfigs == nil {
 			return
 		}
-		// Aggregate configs by a constant key since there's usually one package-pair per file.
 		const pkgConfigKey = "pkg"
 		if pkgConfigs[pkgConfigKey] == nil {
 			pkgConfigs[pkgConfigKey] = &types.PackageConversionConfig{
@@ -237,8 +239,7 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 		}
 		cfg := pkgConfigs[pkgConfigKey]
 
-		// The subject is "package", so actual properties are in keys[2] or keys[3]
-		if len(keys) == 3 { // e.g., convert:package:source="path"
+		if len(keys) == 3 {
 			property := keys[2]
 			switch property {
 			case "source":
@@ -252,9 +253,8 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 					cfg.IgnoreTypes[strings.TrimSpace(t)] = true
 				}
 			}
-		} else if len(keys) == 4 { // e.g., convert:package:source:suffix="PB"
-			entity := keys[2]   // "source" or "target"
-			property := keys[3] // "prefix" or "suffix"
+		} else if len(keys) == 4 {
+			entity, property := keys[2], keys[3]
 			switch entity {
 			case "source":
 				if property == "prefix" {
@@ -270,14 +270,74 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 				}
 			}
 		}
-	case verb == "convert": // handles directives like //go:abgen:convert:target="..."
-		if typeCfg == nil || len(keys) < 2 {
+
+	case verb == "convert":
+		if typeCfg == nil {
 			return
 		}
-		if subject == "field" && len(keys) == 3 { // **FIX**: New field directive format: field:FieldName="CustomFunc"
-			fieldName := keys[2]
-			typeCfg.FieldFuncs[fieldName] = value
-		} else if len(keys) == 2 { // e.g., convert:target="UserPB"
+
+		// The ONLY valid subject is 'field' when len(keys) > 2 is not met.
+		// All other directives must have len(keys) == 2.
+		if subject == "field" {
+			// CORRECT FORMAT: //go:abgen:convert:field="FieldName1:CustomFunc1,FieldName2:CustomFunc2"
+			// The rule is 'convert:field', and all user-defined values are AFTER the '='.
+			if len(keys) != 2 {
+				slog.Warn("Invalid 'convert:field' directive. The field name must be specified in the value part.", "directive", line)
+				return
+			}
+			mappings := strings.Split(value, ",")
+			if typeCfg.TypeConversionRules == nil {
+				typeCfg.TypeConversionRules = make([]types.TypeConversionRule, 0)
+			}
+			for _, mapping := range mappings {
+				parts := strings.SplitN(strings.TrimSpace(mapping), ":", 3)
+				if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+					slog.Warn("Invalid mapping in 'convert:field' directive. Expected 'SourceType:TargetType:ConvertFunc'.", "mapping", mapping)
+					continue
+				}
+
+				sourceType := parts[0]
+				targetType := parts[1]
+				convertFunc := parts[2]
+
+				// Resolve types to their fully qualified names
+				// If sourceType is the same as typeCfg.SourceType (the type the directive is on), use its full path
+				var resolvedSourceType string
+				if typeCfg.SourceType != "" && (sourceType == strings.TrimPrefix(typeCfg.SourceType, w.currentPkg.PkgPath+".") || sourceType == typeCfg.SourceType) {
+					resolvedSourceType = typeCfg.SourceType
+				} else {
+					// Attempt to resolve as a general type
+					srcInfo := w.resolveTargetType(sourceType)
+					if srcInfo.ImportPath != "" && srcInfo.Name != "" {
+						resolvedSourceType = srcInfo.ImportPath + "." + srcInfo.Name
+					} else {
+						resolvedSourceType = sourceType // Fallback for primitive types or unresolved
+					}
+				}
+
+				var resolvedTargetType string
+				if typeCfg.TargetType != "" && (targetType == strings.TrimPrefix(typeCfg.TargetType, w.currentPkg.PkgPath+".") || targetType == typeCfg.TargetType) {
+					resolvedTargetType = typeCfg.TargetType
+				} else {
+					// Attempt to resolve as a general type
+					dstInfo := w.resolveTargetType(targetType)
+					if dstInfo.ImportPath != "" && dstInfo.Name != "" {
+						resolvedTargetType = dstInfo.ImportPath + "." + dstInfo.Name
+					} else {
+						resolvedTargetType = targetType // Fallback for primitive types or unresolved
+					}
+				}
+
+				rule := types.TypeConversionRule{
+					SourceTypeName: resolvedSourceType,
+					TargetTypeName: resolvedTargetType,
+					ConvertFunc:    convertFunc,
+				}
+				typeCfg.TypeConversionRules = append(typeCfg.TypeConversionRules, rule)
+				slog.Debug("Applied Directive: Custom Field Conversion Rule", "source", rule.SourceTypeName, "target", rule.TargetTypeName, "func", rule.ConvertFunc)
+			}
+		} else if len(keys) == 2 {
+			// Handles: convert:target, convert:direction, convert:ignore
 			switch subject {
 			case "target":
 				typeCfg.TargetType = value
@@ -288,7 +348,8 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 					typeCfg.IgnoreFields[strings.TrimSpace(f)] = true
 				}
 			}
-		} else if len(keys) == 3 { // e.g., convert:source:suffix="PO"
+		} else if len(keys) == 3 {
+			// Handles: convert:source:suffix, convert:target:prefix etc.
 			property := keys[2]
 			switch subject {
 			case "source":
@@ -305,34 +366,6 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 				}
 			}
 		}
-	}
-}
-
-func (w *PackageWalker) collectPackageImports(pkg *packages.Package) {
-	for _, file := range pkg.Syntax {
-		w.collectImports(file)
-	}
-}
-
-// cacheTypeAlias 缓存类型别名
-func (w *PackageWalker) cacheTypeAlias(name, target string) {
-	// 立即将别名添加到缓存，防止循环引用
-	w.typeCache[name] = types.TypeInfo{
-		Name:       name,
-		AliasFor:   target,
-		ImportPath: w.currentPkg.PkgPath,
-		PkgName:    w.currentPkg.Name, // Set PkgName for aliases
-		IsAlias:    true,
-		Fields:     []types.StructField{}, // 默认为空
-	}
-
-	// 尝试解析目标类型以获取字段信息
-	if targetInfo := w.resolveTargetType(target); targetInfo.Name != "" {
-		// 更新缓存中的字段信息
-		info := w.typeCache[name]
-		info.Fields = targetInfo.Fields // 继承目标类型的字段
-		w.typeCache[name] = info
-		slog.Info("成功解析类型别名的目标类型", "别名", name, "目标", target, "字段数", len(info.Fields))
 	}
 }
 
@@ -462,7 +495,7 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 		}
 	}
 
-	// **FIX**: If we reach here, the type was not found. Return an empty TypeInfo.
+	// If we reach here, the type was not found. Return an empty TypeInfo.
 	slog.Debug("resolveTargetType: 未找到类型，返回空的TypeInfo", "targetType", targetType)
 	delete(w.typeCache, targetType) // Remove the placeholder
 	return types.TypeInfo{}
@@ -495,11 +528,11 @@ func (w *PackageWalker) findAliasForPath(importPath string) string {
 func (w *PackageWalker) parseStructFields(typeSpec *goast.TypeSpec, pkg *packages.Package) types.TypeInfo {
 	slog.Debug("parseStructFields: 解析结构体字段", "类型名", typeSpec.Name.Name, "包名", pkg.Name, "包路径", pkg.PkgPath)
 	info := types.TypeInfo{
-		Name:       typeSpec.Name.Name,
-		PkgName:    pkg.Name,
-		ImportPath: pkg.PkgPath,
-		ImportAlias: w.findAliasForPath(pkg.PkgPath), // **FIX**: Find and set the import alias
-		Fields:     []types.StructField{},
+		Name:        typeSpec.Name.Name,
+		PkgName:     pkg.Name,
+		ImportPath:  pkg.PkgPath,
+		ImportAlias: w.findAliasForPath(pkg.PkgPath), // Find and set the import alias
+		Fields:      []types.StructField{},
 	}
 
 	// 检查是否为结构体类型
@@ -638,10 +671,45 @@ func (w *PackageWalker) AddConversion(cfg *types.ConversionConfig) {
 		w.ensureNodeExists(cfg.TargetType)
 		targetNode := w.graph[cfg.TargetType]
 		targetNode.FromConversions = AppendIfNotExists(targetNode.FromConversions, cfg.SourceType)
+
+		// Also, register a conversion config from Target to Source.
+		// Create a new config for the reverse direction in the graph.
+		reverseCfg := *cfg // Create a copy
+		reverseCfg.SourceType = cfg.TargetType
+		reverseCfg.TargetType = cfg.SourceType
+		reverseCfg.Direction = "to" // The reversed config is now a "to" conversion from its new source.
+
+		reverseConfigKey := reverseCfg.SourceType + "2" + reverseCfg.TargetType
+		if targetNode.Configs == nil {
+			targetNode.Configs = make(map[string]*types.ConversionConfig)
+		}
+		targetNode.Configs[reverseConfigKey] = &reverseCfg
+
 	default: // "both"
+		// Handle SourceType -> TargetType
 		graphNode.ToConversions = AppendIfNotExists(graphNode.ToConversions, cfg.TargetType)
+
+		// Handle TargetType -> SourceType (the reverse conversion)
 		w.ensureNodeExists(cfg.TargetType)
 		targetNode := w.graph[cfg.TargetType]
 		targetNode.FromConversions = AppendIfNotExists(targetNode.FromConversions, cfg.SourceType)
+
+		// Explicitly create and store a ConversionConfig for the reverse direction
+		reverseCfg := *cfg // Create a copy of the original config
+		reverseCfg.SourceType = cfg.TargetType
+		reverseCfg.TargetType = cfg.SourceType
+		reverseCfg.Direction = "to" // The reversed config is now a "to" conversion from its new source.
+
+		reverseConfigKey := reverseCfg.SourceType + "2" + reverseCfg.TargetType
+		if targetNode.Configs == nil {
+			targetNode.Configs = make(map[string]*types.ConversionConfig)
+		}
+		targetNode.Configs[reverseConfigKey] = &reverseCfg
+	}
+	// For "to" and "both" directions, the original config (SourceType -> TargetType) is handled implicitly by graphNode.Configs[configKey] = cfg
+	// For "from" direction, we explicitly created and added a reversed config.
+	// We need to make sure that the original config (SourceType -> TargetType) is NOT stored if the direction is "from".
+	if cfg.Direction == "from" {
+		delete(graphNode.Configs, configKey)
 	}
 }

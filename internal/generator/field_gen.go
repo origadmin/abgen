@@ -10,8 +10,8 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/origadmin/abgen/internal/ast"
-	"github.com/origadmin/abgen/internal/types"
+	"github.com/origadmin/abgen/internal/ast"   // Corrected import path
+	"github.com/origadmin/abgen/internal/types" // Corrected import path
 )
 
 // TemplateData 模板数据结构
@@ -45,6 +45,9 @@ type FieldGenerator struct {
 
 	// templateDir is the directory where custom conversion template files are located.
 	templateDir string
+
+	// customTypeConversionRules stores user-defined type conversion rules from directives.
+	customTypeConversionRules []types.TypeConversionRule
 }
 
 // RegisterTypeConversion registers a type conversion rule using a Go template string.
@@ -76,7 +79,7 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 	srcType := srcField.Type
 	dstType := dstField.Type
 
-	// **FIX**: Strip pointers before looking up the rule
+	// Strip pointers before looking up the rule
 	baseSrcType := strings.TrimPrefix(srcType, "*")
 	baseDstType := strings.TrimPrefix(dstType, "*")
 	key := baseSrcType + ":" + baseDstType
@@ -221,14 +224,14 @@ func (fg *FieldGenerator) buildElementConversionFuncName(srcElem, dstElem string
 		return "", fmt.Errorf("无法解析目标元素类型 %s: %w", fullDstType, err)
 	}
 
-	// **FIX**: Use the unified createTypeAlias function
+	// Use the unified createTypeAlias function
 	srcAlias := createTypeAlias(srcInfo.Name, srcInfo.PkgName, "", "", cfg.GeneratorPkgPath)
 	dstAlias := createTypeAlias(dstInfo.Name, dstInfo.PkgName, "", "", cfg.GeneratorPkgPath)
 
 	return fmt.Sprintf("Convert%sTo%s", srcAlias, dstAlias), nil
 }
 
-// **FIX**: Unified createTypeAlias function, copied from core/generator.go
+// Unified createTypeAlias function, copied from core/generator.go
 func createTypeAlias(typeName, pkgName, prefix, suffix, generatorPkgPath string) string {
 	slog.Debug("createTypeAlias 输入", "原始typeName", typeName, "pkgName", pkgName, "prefix", prefix, "suffix", suffix)
 
@@ -285,10 +288,9 @@ func createTypeAlias(typeName, pkgName, prefix, suffix, generatorPkgPath string)
 	return result
 }
 
-
 // UpdateTypeMap 更新类型映射表
 func (fg *FieldGenerator) UpdateTypeMap() {
-	// **FIX**: Register base types, not pointer types.
+	// Register base types, not pointer types.
 	fg.RegisterTypePattern("time.Time", "google.golang.org/protobuf/types/known/timestamppb.Timestamp",
 		"%s = timestamppb.New(%s)")
 
@@ -338,6 +340,16 @@ for _, v := range {{.Src}} {
 // It uses the registered rules and built-in logic to determine the conversion code for each matching field.
 func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *types.ConversionConfig) []types.FieldConversion {
 	var fields []types.FieldConversion
+
+	// Register custom type conversion rules from directives
+	for _, rule := range fg.customTypeConversionRules {
+		// The pattern for custom functions will be "dst.Field = ConvertFunc(src.Field)"
+		// The existing pattern usage in generateConversion is: fmt.Sprintf(rule.Pattern, "dst."+dstField.Name, "src."+srcField.Name)
+		// So, the pattern should be "%s = ConvertFunc(%s)"
+		pattern := fmt.Sprintf("%%s = %s(%%s)", rule.ConvertFunc)
+		fg.RegisterTypePattern(rule.SourceTypeName, rule.TargetTypeName, pattern)
+		slog.Debug("Registered custom type conversion rule", "srcType", rule.SourceTypeName, "dstType", rule.TargetTypeName, "func", rule.ConvertFunc)
+	}
 
 	// 获取源类型和目标类型信息
 	slog.Info("resolving source type", "type", sourceType)
@@ -401,9 +413,10 @@ func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *typ
 }
 
 // NewFieldGenerator creates and initializes a new FieldGenerator instance.
-func NewFieldGenerator() *FieldGenerator {
+func NewFieldGenerator(customRules []types.TypeConversionRule) *FieldGenerator {
 	fg := &FieldGenerator{
-		conversionRules: make(map[string]ConversionRule),
+		conversionRules:           make(map[string]ConversionRule),
+		customTypeConversionRules: customRules,
 	}
 	fg.UpdateTypeMap()
 	return fg

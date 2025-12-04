@@ -161,7 +161,6 @@ func (g *ConverterGenerator) buildGraph(pkgs []*packages.Package) error {
 								TargetType:   targetTypeName,
 								Direction:    pkgCfg.Direction,
 								IgnoreFields: make(map[string]bool), // TODO: support package-level ignore fields
-								FieldFuncs:   make(map[string]string),
 							}
 							walker.AddConversion(convCfg)
 						}
@@ -250,13 +249,13 @@ func (g *ConverterGenerator) Generate() error {
 	}
 
 	data := struct {
-		Package    string
-		Imports    map[string]string
-		Converters []map[string]interface{}
+		Package     string
+		Imports     map[string]string
+		Converters  []map[string]interface{}
 		TypeAliases map[string]types.TypeInfo // **FIX**: 添加类型别名
 	}{
-		Package:    packageName,
-		Imports:    g.resolver.GetImports(),
+		Package:     packageName,
+		Imports:     g.resolver.GetImports(),
 		TypeAliases: make(map[string]types.TypeInfo),
 	}
 
@@ -458,7 +457,7 @@ func NewGenerator() *ConverterGenerator {
 		resolver: ast.NewResolver(nil), // 初始化时没有包信息
 		tmplMgr:  template.NewManager(),
 		tmplConv: template.NewConverter(),
-		fieldGen: generator.NewFieldGenerator(),
+		fieldGen: generator.NewFieldGenerator(nil),
 	}
 }
 

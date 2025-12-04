@@ -1,13 +1,24 @@
 // Package types implements the functions, types, and interfaces for the module.
 package types
 
+// TypeConversionRule defines a rule for converting between two specific types.
+type TypeConversionRule struct {
+	SourceTypeName string // The name of the source type (e.g., "Gender", "time.Time").
+	TargetTypeName string // The name of the target type (e.g., "string", "timestamp.Timestamp").
+	ConvertFunc    string // The name of the custom conversion function to use.
+	// Direction   string // Optional: "to", "from", or "both" if different functions are used for each direction.
+	// For now, we assume a single rule implies a specific direction or is part of a pair.
+}
+
 // ConversionConfig 转换配置
 type ConversionConfig struct {
 	SourceType       string
 	TargetType       string
 	Direction        string // both/to/from
 	IgnoreFields     map[string]bool
-	FieldFuncs       map[string]string // New: map field name to custom conversion function
+	// FieldFuncs       map[string]string // Old: Replaced by FieldConversionRules
+	// FieldConversionRules []FieldConversionRule // Old: Replaced by TypeConversionRules
+	TypeConversionRules []TypeConversionRule // New: Stores detailed type conversion rules.
 	SrcPackage       string
 	DstPackage       string
 	SourcePrefix     string
