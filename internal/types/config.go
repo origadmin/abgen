@@ -13,6 +13,7 @@ type ConversionConfig struct {
 	SourceSuffix string
 	TargetPrefix string
 	TargetSuffix string
+	GeneratorPkgPath string // The package path where the generation is happening
 }
 
 // ConversionNode 类型转换节点

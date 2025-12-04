@@ -239,10 +239,13 @@ func (g *ConverterGenerator) loadPackage(path string) (*packages.Package, error)
 func (g *ConverterGenerator) Generate() error {
 	fmt.Println("\n======== 开始生成转换代码 ========")
 
-	// 获取包名
+	// 获取包名和包路径
 	packageName := "dto" // 默认包名
+	var generatorPkgPath string
 	if resolver, ok := g.resolver.(*ast.TypeResolverImpl); ok && len(resolver.Pkgs) > 0 {
 		packageName = resolver.Pkgs[0].Name
+		generatorPkgPath = resolver.Pkgs[0].PkgPath
+		g.PkgPath = generatorPkgPath // Store it in the generator
 	}
 
 	data := struct {
@@ -261,6 +264,9 @@ func (g *ConverterGenerator) Generate() error {
 	generatedFuncs := make(map[string]bool) // 用于去重
 	for _, node := range g.graph {
 		for _, cfg := range node.Configs {
+			// **FIX**: Set the generator package path in the config
+			cfg.GeneratorPkgPath = generatorPkgPath
+
 			// 解析源和目标类型信息
 			sourceInfo, err := g.resolver.Resolve(cfg.SourceType)
 			if err != nil {

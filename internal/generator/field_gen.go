@@ -3,6 +3,7 @@ package generator
 import (
 	"bytes"
 	"fmt"
+	goast "go/ast"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -70,44 +71,8 @@ func (fg *FieldGenerator) RegisterTypePattern(srcType, dstType, pattern string) 
 	}
 }
 
-// 内置处理器集合
-var builtinHandlers = map[string]func(srcField, dstField types.StructField) (string, error){
-	// 指针处理逻辑
-	"pointer:pointer": func(srcField, dstField types.StructField) (string, error) {
-		srcElem := strings.TrimPrefix(srcField.Type, "*")
-		dstElem := strings.TrimPrefix(dstField.Type, "*")
-		return fmt.Sprintf(`
-if src.%s != nil {
-	dst.%s = Convert%sTo%s(src.%s)
-}`, srcField.Name, dstField.Name, srcElem, dstElem, srcField.Name), nil
-	},
-
-	// 相同类型切片处理
-	"slice:slice:same": func(srcField, dstField types.StructField) (string, error) {
-		dstElem := strings.TrimPrefix(dstField.Type, "[]")
-		return fmt.Sprintf(`
-if src.%s != nil {
-	dst.%s = make([]%s, len(src.%s))
-	copy(dst.%s, src.%s)
-}`, srcField.Name, dstField.Name, dstElem, srcField.Name, dstField.Name, srcField.Name), nil
-	},
-
-	// 不同类型切片处理
-	"slice:slice:diff": func(srcField, dstField types.StructField) (string, error) {
-		srcElem := strings.TrimPrefix(srcField.Type, "[]")
-		dstElem := strings.TrimPrefix(dstField.Type, "[]")
-		return fmt.Sprintf(`
-if src.%s != nil {
-	dst.%s = make([]%s, 0, len(src.%s))
-	for _, item := range src.%s {
-		dst.%s = append(dst.%s, Convert%sTo%s(&item))
-	}
-}`, srcField.Name, dstField.Name, dstElem, srcField.Name, srcField.Name, dstField.Name, dstField.Name, srcElem, dstElem), nil
-	},
-}
-
 // generateConversion 生成字段转换代码
-func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructField) (string, error) {
+func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructField, cfg *types.ConversionConfig) (string, error) {
 	srcType := srcField.Type
 	dstType := dstField.Type
 
@@ -141,37 +106,61 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 		}
 	}
 
-	// 2. 检查内置类型处理器
-
-	// 检查指针类型
-	if strings.HasPrefix(srcType, "*") && strings.HasPrefix(dstType, "*") {
-		if handler, ok := builtinHandlers["pointer:pointer"]; ok {
-			return handler(srcField, dstField)
-		}
-	}
-
-	// 检查切片类型
+	// 2. 检查切片类型
 	if strings.HasPrefix(srcType, "[]") && strings.HasPrefix(dstType, "[]") {
 		srcElem := strings.TrimPrefix(srcType, "[]")
 		dstElem := strings.TrimPrefix(dstType, "[]")
 
-		if srcElem == dstElem {
-			if handler, ok := builtinHandlers["slice:slice:same"]; ok {
-				return handler(srcField, dstField)
-			}
+		// 解析元素类型以获取其别名
+		dstElemInfo, err := fg.resolver.Resolve(dstElem)
+		if err != nil {
+			slog.Warn("无法解析目标切片元素类型", "type", dstElem, "error", err)
+			return fg.unhandledConversion(srcField, dstField)
+		}
+
+		// 为元素类型构建转换函数名
+		funcName, err := fg.buildElementConversionFuncName(srcElem, dstElem, cfg)
+		if err != nil {
+			slog.Warn("无法为切片元素构建转换函数", "srcElem", srcElem, "dstElem", dstElem, "error", err)
+			return fg.unhandledConversion(srcField, dstField)
+		}
+
+		// 使用目标类型的别名来创建切片
+		dstElemAlias := createTypeAlias(dstElemInfo.Name, dstElemInfo.PkgName, "", "", cfg.GeneratorPkgPath)
+		dstSliceType := fmt.Sprintf("[]*%s", dstElemAlias)
+		if !strings.HasPrefix(dstElem, "*") {
+			dstSliceType = fmt.Sprintf("[]%s", dstElemAlias)
+		}
+
+		// 生成 for 循环转换代码
+		return fmt.Sprintf(`
+if src.%s != nil {
+	dst.%s = make(%s, len(src.%s))
+	for i, item := range src.%s {
+		dst.%s[i] = %s(item)
+	}
+}`, srcField.Name, dstField.Name, dstSliceType, srcField.Name, srcField.Name, dstField.Name, funcName), nil
+	}
+
+	// 3. 检查指针 to 结构体
+	if strings.HasPrefix(srcType, "*") && strings.HasPrefix(dstType, "*") {
+		srcElem := strings.TrimPrefix(srcType, "*")
+		dstElem := strings.TrimPrefix(dstType, "*")
+
+		// 为元素类型构建转换函数名
+		funcName, err := fg.buildElementConversionFuncName(srcElem, dstElem, cfg)
+		if err != nil {
+			slog.Warn("无法为指针元素构建转换函数", "srcElem", srcElem, "dstElem", dstElem, "error", err)
+			return fg.unhandledConversion(srcField, dstField)
 		} else {
-			if handler, ok := builtinHandlers["slice:slice:diff"]; ok {
-				return handler(srcField, dstField)
-			}
+			return fmt.Sprintf(`
+if src.%s != nil {
+	dst.%s = %s(src.%s)
+}`, srcField.Name, dstField.Name, funcName, srcField.Name), nil
 		}
 	}
 
-	// 检查特定类型组合
-	if handler, ok := builtinHandlers[key]; ok {
-		return handler(srcField, dstField)
-	}
-
-	// 3. 基本类型处理
+	// 4. 基本类型处理
 	if types.IsPrimitiveType(srcType) && types.IsPrimitiveType(dstType) {
 		if srcType == dstType {
 			return fmt.Sprintf("dst.%s = src.%s", dstField.Name, srcField.Name), nil
@@ -180,16 +169,100 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 		}
 	}
 
-	// 4. 类型相同直接赋值
+	// 5. 类型相同直接赋值
 	if srcType == dstType {
 		return fmt.Sprintf("dst.%s = src.%s", dstField.Name, srcField.Name), nil
 	}
 
-	// 5. 默认情况
-	slog.Warn("unhandled type conversion", "srcType", srcType, "dstType", dstType)
-	return fmt.Sprintf("// WARNING: unhandled type conversion\n // dst.%s = src.%s (%s -> %s)",
-		dstField.Name, srcField.Name, srcType, dstType), nil
+	// 6. 默认情况
+	return fg.unhandledConversion(srcField, dstField)
 }
+
+func (fg *FieldGenerator) unhandledConversion(srcField, dstField types.StructField) (string, error) {
+	slog.Warn("unhandled type conversion", "srcType", srcField.Type, "dstType", dstField.Type)
+	return fmt.Sprintf("// WARNING: unhandled type conversion\n // dst.%s = src.%s (%s -> %s)",
+		dstField.Name, srcField.Name, srcField.Type, dstField.Type), nil
+}
+
+// buildElementConversionFuncName builds the full conversion function name for nested elements (pointers/slices).
+func (fg *FieldGenerator) buildElementConversionFuncName(srcElem, dstElem string, cfg *types.ConversionConfig) (string, error) {
+	// 完整类型路径
+	fullSrcType := strings.TrimPrefix(srcElem, "*")
+	fullDstType := strings.TrimPrefix(dstElem, "*")
+
+	srcInfo, err := fg.resolver.Resolve(fullSrcType)
+	if err != nil {
+		return "", fmt.Errorf("无法解析源元素类型 %s: %w", fullSrcType, err)
+	}
+	dstInfo, err := fg.resolver.Resolve(fullDstType)
+	if err != nil {
+		return "", fmt.Errorf("无法解析目标元素类型 %s: %w", fullDstType, err)
+	}
+
+	// **FIX**: Use the unified createTypeAlias function
+	srcAlias := createTypeAlias(srcInfo.Name, srcInfo.PkgName, "", "", cfg.GeneratorPkgPath)
+	dstAlias := createTypeAlias(dstInfo.Name, dstInfo.PkgName, "", "", cfg.GeneratorPkgPath)
+
+	return fmt.Sprintf("Convert%sTo%s", srcAlias, dstAlias), nil
+}
+
+// **FIX**: Unified createTypeAlias function, copied from core/generator.go
+func createTypeAlias(typeName, pkgName, prefix, suffix, generatorPkgPath string) string {
+	slog.Debug("createTypeAlias 输入", "原始typeName", typeName, "pkgName", pkgName, "prefix", prefix, "suffix", suffix)
+
+	// 首先从完整路径中提取类型名
+	if strings.Contains(typeName, "/") {
+		parts := strings.Split(typeName, "/")
+		typeName = parts[len(parts)-1]
+	}
+
+	// 如果类型名中仍包含包选择器（例如 "types.User"），则将其拆分
+	if dotIndex := strings.LastIndex(typeName, "."); dotIndex != -1 {
+		// 如果 pkgName 为空，则从类型名中提取它
+		if pkgName == "" {
+			pkgName = typeName[:dotIndex]
+		}
+		// 更新 typeName 为不带包选择器的纯类型名
+		typeName = typeName[dotIndex+1:]
+	}
+
+	// 如果有自定义前缀或后缀，优先使用
+	if prefix != "" || suffix != "" {
+		result := prefix + typeName + suffix
+		slog.Debug("createTypeAlias 输出 (前缀/后缀)", "result", result)
+		return result
+	}
+
+	// 根据包名创建默认别名
+	var result string
+	switch pkgName {
+	case "ent":
+		result = typeName + "Ent"
+	case "types":
+		// 这是一个基于约定的简单检查
+		if strings.HasSuffix(generatorPkgPath, "dto") { // 假设在 dto 包中，'types' 通常指向 protobuf
+			result = typeName + "PB"
+		} else {
+			result = typeName + "Types"
+		}
+	case "typespb": // 直接处理 'typespb' 别名
+		result = typeName + "PB"
+	case "dto":
+		result = typeName + "DTO"
+	default:
+		if pkgName != "" {
+			// 使用包名的首字母大写作为后缀
+			result = typeName + strings.Title(pkgName)
+		} else {
+			// 如果没有包名，则直接使用类型名
+			result = typeName
+		}
+	}
+
+	slog.Debug("createTypeAlias 输出", "result", result)
+	return result
+}
+
 
 // UpdateTypeMap 更新类型映射表
 func (fg *FieldGenerator) UpdateTypeMap() {
@@ -270,6 +343,9 @@ func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *typ
 
 	// 生成字段转换
 	for _, srcField := range srcInfo.Fields {
+		if !goast.IsExported(srcField.Name) {
+			continue
+		}
 		if cfg.IgnoreFields[srcField.Name] {
 			fields = append(fields, types.FieldConversion{
 				Name:         srcField.Name,
@@ -286,7 +362,7 @@ func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *typ
 		}
 
 		// 生成转换代码
-		conversion, err := fg.generateConversion(srcField, dstField)
+		conversion, err := fg.generateConversion(srcField, dstField, cfg)
 		if err != nil {
 			slog.Error("failed to generate conversion code", "field", srcField.Name, "error", err)
 			continue

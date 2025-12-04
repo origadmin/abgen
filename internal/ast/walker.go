@@ -5,6 +5,7 @@ import (
 	"fmt"
 	goast "go/ast"
 	"go/token"
+	gotypes "go/types"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -41,22 +42,37 @@ func (w *PackageWalker) AddKnownPackages(pkgs ...*packages.Package) {
 	}
 }
 
-// 修改 exprToString 方法，确保与 resolver 的逻辑一致
-func (w *PackageWalker) exprToString(expr goast.Expr) string {
-	switch e := expr.(type) {
-	case *goast.Ident:
-		return e.Name
-	case *goast.SelectorExpr:
-		return w.exprToString(e.X) + "." + e.Sel.Name
-	case *goast.StarExpr:
-		return "*" + w.exprToString(e.X)
-	case *goast.ArrayType:
-		return "[]" + w.exprToString(e.Elt)
-	case *goast.MapType:
-		return "map[" + w.exprToString(e.Key) + "]" + w.exprToString(e.Value)
-	default:
-		return fmt.Sprintf("<未知表达式类型: %T>", expr)
+// exprToString resolves an expression to its fully qualified type name.
+func (w *PackageWalker) exprToString(expr goast.Expr, pkg *packages.Package) string {
+	if pkg == nil || pkg.TypesInfo == nil {
+		return fmt.Sprintf("<missing_type_info_for_%T>", expr)
 	}
+
+	tv, ok := pkg.TypesInfo.Types[expr]
+	if !ok || tv.Type == nil {
+		if ident, isIdent := expr.(*goast.Ident); isIdent {
+			return ident.Name
+		}
+		return fmt.Sprintf("<unresolved_type_%T>", expr)
+	}
+
+	// The qualifier function ensures that we use the full import path for package names.
+	qualifier := func(p *gotypes.Package) string {
+		// For packages in the standard library, we can just use their path.
+		if p.Path() != "" && !strings.Contains(p.Path(), ".") {
+			return p.Path()
+		}
+		// For other packages, search our known packages list.
+		for _, knownPkg := range w.allKnownPkgs {
+			if knownPkg.Types.Path() == p.Path() {
+				return knownPkg.PkgPath
+			}
+		}
+		// Fallback to the package's path if not found.
+		return p.Path()
+	}
+
+	return gotypes.TypeString(tv.Type, qualifier)
 }
 
 func (w *PackageWalker) GetTypeCache() map[string]types.TypeInfo {
@@ -74,7 +90,7 @@ func NewPackageWalker(graph types.ConversionGraph) *PackageWalker {
 		imports:        make(map[string]string),
 		typeCache:      make(map[string]types.TypeInfo),
 		loadedPkgs:     make(map[string]*packages.Package),
-		packageMode:    packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+		packageMode:    packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
 		PackageConfigs: make([]*types.PackageConversionConfig, 0),
 	}
 }
@@ -333,7 +349,7 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 								slog.Debug("resolveTargetType: 别名指向同一包内的类型", "alias", targetType, "target", aliasIdent.Name)
 								return w.resolveTargetType(aliasIdent.Name)
 							} else if aliasSelector, aliasOk := typeSpec.Type.(*goast.SelectorExpr); aliasOk {
-								aliasedTypeName := w.exprToString(aliasSelector)
+								aliasedTypeName := w.exprToString(aliasSelector, pkg)
 								slog.Debug("resolveTargetType: 别名指向导入类型", "alias", targetType, "target", aliasedTypeName)
 								return w.resolveTargetType(aliasedTypeName)
 							}
@@ -390,7 +406,7 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 							if typeSpec, ok := spec.(*goast.TypeSpec); ok && typeSpec.Name.Name == typeName {
 								slog.Debug("resolveTargetType: 成功找到 TypeSpec", "typeName", typeName)
 								// 6. Parse and return its struct info
-								info := w.parseStructFields(typeSpec, foundPkg.Name, foundPkg.PkgPath)
+								info := w.parseStructFields(typeSpec, foundPkg)
 								w.typeCache[targetType] = info // Cache the result with full qualifier
 								slog.Debug("resolveTargetType: 返回 TypeInfo", "typeName", info.Name, "pkgName", info.PkgName)
 								return info
@@ -416,7 +432,7 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 								for _, spec := range genDecl.Specs {
 									if typeSpec, ok := spec.(*goast.TypeSpec); ok && typeSpec.Name.Name == typeName {
 										slog.Debug("resolveTargetType: 在动态加载的包中找到类型", "typeName", typeName)
-										info := w.parseStructFields(typeSpec, foundPkg.Name, foundPkg.PkgPath)
+										info := w.parseStructFields(typeSpec, foundPkg)
 										w.typeCache[targetType] = info
 										return info
 									}
@@ -461,13 +477,13 @@ func (w *PackageWalker) findAliasForPath(importPath string) string {
 }
 
 // parseStructFields 解析结构体字段
-func (w *PackageWalker) parseStructFields(typeSpec *goast.TypeSpec, pkgName, pkgPath string) types.TypeInfo {
-	slog.Debug("parseStructFields: 解析结构体字段", "类型名", typeSpec.Name.Name, "包名", pkgName, "包路径", pkgPath)
+func (w *PackageWalker) parseStructFields(typeSpec *goast.TypeSpec, pkg *packages.Package) types.TypeInfo {
+	slog.Debug("parseStructFields: 解析结构体字段", "类型名", typeSpec.Name.Name, "包名", pkg.Name, "包路径", pkg.PkgPath)
 	info := types.TypeInfo{
 		Name:       typeSpec.Name.Name,
-		PkgName:    pkgName,
-		ImportPath: pkgPath,
-		ImportAlias: w.findAliasForPath(pkgPath), // **FIX**: Find and set the import alias
+		PkgName:    pkg.Name,
+		ImportPath: pkg.PkgPath,
+		ImportAlias: w.findAliasForPath(pkg.PkgPath), // **FIX**: Find and set the import alias
 		Fields:     []types.StructField{},
 	}
 
@@ -481,7 +497,7 @@ func (w *PackageWalker) parseStructFields(typeSpec *goast.TypeSpec, pkgName, pkg
 					embeddedInfo := w.resolveTargetType(ident.Name)
 					info.Fields = append(info.Fields, embeddedInfo.Fields...)
 				} else if selExpr, ok := field.Type.(*goast.SelectorExpr); ok {
-					embeddedTypeName := w.exprToString(selExpr)
+					embeddedTypeName := w.exprToString(selExpr, pkg)
 					slog.Debug("处理跨包内嵌字段", "类型", embeddedTypeName)
 					embeddedInfo := w.resolveTargetType(embeddedTypeName)
 					info.Fields = append(info.Fields, embeddedInfo.Fields...)
@@ -493,7 +509,7 @@ func (w *PackageWalker) parseStructFields(typeSpec *goast.TypeSpec, pkgName, pkg
 			if goast.IsExported(fieldName) {
 				info.Fields = append(info.Fields, types.StructField{
 					Name:     fieldName,
-					Type:     w.exprToString(field.Type),
+					Type:     w.exprToString(field.Type, pkg),
 					Exported: true,
 				})
 			}
@@ -525,7 +541,7 @@ func (w *PackageWalker) isStructOrStructAlias(typeSpec *goast.TypeSpec) bool {
 
 	// 检查是否为跨包的结构体别名
 	if selector, ok := typeSpec.Type.(*goast.SelectorExpr); ok {
-		typeName := w.exprToString(selector)
+		typeName := w.exprToString(selector, w.currentPkg)
 		targetInfo := w.resolveTargetType(typeName)
 		return len(targetInfo.Fields) > 0
 	}
