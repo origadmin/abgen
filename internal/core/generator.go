@@ -222,6 +222,7 @@ func (g *ConverterGenerator) Generate() error {
 	var funcs []*template.Function
 	var typeAliases []string
 	generatedFuncs := make(map[string]bool)
+	seenCustomRuleFuncs := make(map[string]bool) // Map to store unique custom rule function names
 
 	importMgr.GetType("log/slog", "")
 
@@ -253,25 +254,22 @@ func (g *ConverterGenerator) Generate() error {
 				"dstLocalType", dstLocalType,
 			)
 
-			if (cfg.Source.Suffix != "" || cfg.Source.Prefix != "") && !importMgr.IsAliasRegistered(srcAlias) {
+			if !importMgr.IsAliasRegistered(srcAlias) { // Condition removed
 				localAliases := g.resolver.GetLocalTypeAliases()
-				// srcLocalType is already in the format "pkg.Type" or "Type" (if local pkg).
-				// We need to compare it against the resolved underlying type from localAliases.
 				skip := false
 				if existingLocalAliasUnderlying, exists := localAliases[srcAlias]; exists {
-					// The localAlias stored in walker is "fully.qualified/path.TypeName" or "TypeName" if local to the package.
-					// srcLocalType is "alias.TypeName" or "TypeName" if local.
-					// We need to resolve srcLocalType's underlying FQN.
-					srcLocalTypeInfo, err := g.resolver.Resolve(cfg.Source.Type)
+					// Resolve srcLocalType (e.g., "ent.User") to its FQN for accurate comparison.
+					// srcLocalType is like "pkgAlias.TypeName" or "TypeName".
+					srcLocalTypeInfo, err := g.resolver.Resolve(srcLocalType)
 					if err == nil {
-						resolvedSrcFQN := srcLocalTypeInfo.ImportPath
-						if resolvedSrcFQN != "" {
-							resolvedSrcFQN += "."
+						resolvedSrcLocalTypeFQN := srcLocalTypeInfo.ImportPath
+						if resolvedSrcLocalTypeFQN != "" && resolvedSrcLocalTypeFQN != "builtin" {
+							resolvedSrcLocalTypeFQN += "."
 						}
-						resolvedSrcFQN += srcLocalTypeInfo.Name
+						resolvedSrcLocalTypeFQN += srcLocalTypeInfo.Name
 
-						if existingLocalAliasUnderlying == resolvedSrcFQN || (srcLocalTypeInfo.ImportPath == g.PkgPath && existingLocalAliasUnderlying == srcLocalTypeInfo.Name) {
-							slog.Debug("Generate: skipping redundant source alias generation", "alias", srcAlias, "type", srcLocalType)
+						if existingLocalAliasUnderlying == resolvedSrcLocalTypeFQN {
+							slog.Debug("Generate: skipping redundant source alias generation (FQN match)", "alias", srcAlias, "generatedType", srcLocalType, "existingLocalType", existingLocalAliasUnderlying)
 							skip = true
 						}
 					}
@@ -281,31 +279,37 @@ func (g *ConverterGenerator) Generate() error {
 					importMgr.RegisterAlias(srcAlias)
 				}
 			}
-			if (cfg.Target.Suffix != "" || cfg.Target.Prefix != "") && !importMgr.IsAliasRegistered(targetAlias) {
-				localAliases := g.resolver.GetLocalTypeAliases()
-				skip := false
-				if existingLocalAliasUnderlying, exists := localAliases[targetAlias]; exists {
-					dstLocalTypeInfo, err := g.resolver.Resolve(cfg.Target.Type)
-					if err == nil {
-						resolvedDstFQN := dstLocalTypeInfo.ImportPath
-						if resolvedDstFQN != "" {
-							resolvedDstFQN += "."
-						}
-						resolvedDstFQN += dstLocalTypeInfo.Name
-
-						if existingLocalAliasUnderlying == resolvedDstFQN || (dstLocalTypeInfo.ImportPath == g.PkgPath && existingLocalAliasUnderlying == dstLocalTypeInfo.Name) {
-							slog.Debug("Generate: skipping redundant target alias generation", "alias", targetAlias, "type", dstLocalType)
-							skip = true
-						}
-					}
-				}
-				if !skip {
-					typeAliases = append(typeAliases, fmt.Sprintf("type %s = %s", targetAlias, dstLocalType))
-					importMgr.RegisterAlias(targetAlias)
+			            if !importMgr.IsAliasRegistered(targetAlias) { // Condition removed
+			                localAliases := g.resolver.GetLocalTypeAliases()
+			                skip := false
+			                if existingLocalAliasUnderlying, exists := localAliases[targetAlias]; exists {
+			                    dstLocalTypeInfo, err := g.resolver.Resolve(cfg.Target.Type)
+			                    if err == nil {
+			                        resolvedDstFQN := dstLocalTypeInfo.ImportPath
+			                        if resolvedDstFQN != "" {
+			                            resolvedDstFQN += "."
+			                        }
+			                        resolvedDstFQN += dstLocalTypeInfo.Name
+			
+			                        if existingLocalAliasUnderlying == resolvedDstFQN || (dstLocalTypeInfo.ImportPath == g.PkgPath && existingLocalAliasUnderlying == dstLocalTypeInfo.Name) {
+			                            slog.Debug("Generate: skipping redundant target alias generation", "alias", targetAlias, "type", dstLocalType)
+			                            skip = true
+			                        }
+			                    }
+			                }
+			                if !skip {
+			                    typeAliases = append(typeAliases, fmt.Sprintf("type %s = %s", targetAlias, dstLocalType))
+			                    importMgr.RegisterAlias(targetAlias)
+			                }
+			            }
+			g.fieldGen.SetCustomTypeConversionRules(cfg.TypeConversionRules)
+			
+			// Collect custom rule function names
+			for _, rule := range cfg.TypeConversionRules {
+				if rule.ConvertFunc != "" {
+					seenCustomRuleFuncs[rule.ConvertFunc] = true
 				}
 			}
-
-			g.fieldGen.SetCustomTypeConversionRules(cfg.TypeConversionRules)
 			fields := g.fieldGen.GenerateFields(cfg.Source.Type, cfg.Target.Type, cfg)
 
 			funcs = append(funcs, &template.Function{
@@ -320,11 +324,19 @@ func (g *ConverterGenerator) Generate() error {
 	}
 	sort.Strings(typeAliases)
 
+	// Convert seenCustomRuleFuncs map to a sorted slice
+	var customRuleFuncs []string
+	for funcName := range seenCustomRuleFuncs {
+		customRuleFuncs = append(customRuleFuncs, funcName)
+	}
+	sort.Strings(customRuleFuncs)
+
 	templateData := &template.Data{
 		PackageName: packageName,
 		Imports:     importMgr.GetImports(),
 		TypeAliases: typeAliases,
 		Funcs:       funcs,
+		CustomRuleFuncs: customRuleFuncs, // Assign the collected function names
 	}
 
 	output, err := g.tmplMgr.Render("generator.tpl", templateData)

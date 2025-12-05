@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings" // Added this line
 )
 
 const (
@@ -19,6 +20,18 @@ const (
 \____|__  /___  /\___  / \___  >___|  /
         \/    \//_____/      \/     \/
 `
+)
+
+// TypeKind represents the kind of type for conversion helpers.
+type TypeKind int
+
+const (
+	TypeKindUnknown TypeKind = iota
+	TypeKindBasic
+	TypeKindSlice
+	TypeKindMap
+	TypeKindStruct
+	// Add more as needed
 )
 
 // FieldMapping Structs are used to store field mapping information
@@ -46,7 +59,6 @@ type Import struct {
 	Path  string
 }
 
-
 type FieldConversion struct {
 	Name         string
 	Ignore       bool
@@ -56,13 +68,33 @@ type FieldConversion struct {
 
 // TypeInfo 类型信息
 type TypeInfo struct {
-	Name       string        // 类型名称
-	PkgName    string        // 包名称 (例如 "po", "system")
-	ImportPath string        // 导入路径
-	ImportAlias string       // 在当前代码中的导入别名 (例如 "typespb", "ent")
-	Fields     []StructField // 结构体字段
-	AliasFor   string        // 类型别名目标
-	IsAlias    bool          // 是否是类型别名
+	Name        string                 // 类型名称 (e.g., "User", "string", "Role") - base name only
+	PkgName     string                 // 包名称 (例如 "po", "system")
+	ImportPath  string                 // 导入路径
+	ImportAlias string                 // 在当前代码中的导入别名 (例如 "typespb", "ent")
+	Fields      []StructField          // 结构体字段 (for struct types only)
+	FieldsMap   map[string]StructField // 字段映射，方便通过字段名查找 (for struct types only)
+	AliasFor    string                 // 类型别名目标
+	IsAlias     bool                   // 是否是类型别名
+
+	// New fields to represent complex types
+	Kind        TypeKind   // The fundamental kind of type (e.g., Struct, Slice, Map, Basic)
+	IsPointer   bool       // True if this type is a pointer (e.g., *User)
+	IsSlice     bool       // True if this type is a slice (e.g., []User)
+	IsMap       bool       // True if this type is a map (e.g., map[string]User)
+	ElemType    *TypeInfo  // For pointers and slices, the element type
+	KeyType     *TypeInfo  // For maps, the key type
+	ValueType   *TypeInfo  // For maps, the value type
+}
+
+// BuildFieldsMap populates the FieldsMap for quick lookup.
+func (ti *TypeInfo) BuildFieldsMap() {
+	if ti.FieldsMap == nil {
+		ti.FieldsMap = make(map[string]StructField)
+	}
+	for _, field := range ti.Fields {
+		ti.FieldsMap[strings.ToLower(field.Name)] = field
+	}
 }
 
 // IsPrimitiveType 判断是否为原始类型

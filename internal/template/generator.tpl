@@ -32,3 +32,23 @@ func {{ .Name }}(src {{ .SourcePointer }}{{ .SourceType }}) {{ .TargetPointer }}
 	return dst
 }
 {{- end }}
+
+{{- if .CustomRuleFuncs }}
+
+// --- Auto-generated Custom Rule Helper Functions (DUMMY IMPLEMENTATIONS) ---
+// These functions are placeholders for custom conversion logic defined in rules.
+// You should provide actual implementations for these in your project.
+
+{{- range .CustomRuleFuncs }}
+func {{ . }}(src interface{}) interface{} {
+	// TODO: Implement the actual conversion logic for {{ . }}
+	// Example:
+	// if src == nil {
+	// 	return nil
+	// }
+	// // Perform conversion from source type to target type
+	// return src // Placeholder: returns source as is
+	panic("Not implemented: Custom rule function {{ . }}")
+}
+{{- end }}
+{{- end }}

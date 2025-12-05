@@ -12,7 +12,6 @@ import (
 
 	"github.com/origadmin/abgen/internal/ast"
 	"github.com/origadmin/abgen/internal/types"
-
 )
 
 // TemplateData 模板数据结构
@@ -45,7 +44,7 @@ type FieldGenerator struct {
 	conversionRules map[string]ConversionRule
 
 	// templateDir is the directory where custom conversion template files are located.
-templateDir string
+	templateDir string
 
 	// customTypeConversionRules stores user-defined type conversion rules from directives.
 	customTypeConversionRules []types.TypeConversionRule
@@ -119,27 +118,6 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 	}
 	dstUnderlyingType += dstFieldTypeInfo.Name
 
-	// 0. Direct assignment if types are identical (after resolving aliases to FQN)
-	if srcUnderlyingType == dstUnderlyingType {
-		slog.Debug("generateConversion: direct assignment (identical underlying types)", "src", srcUnderlyingType, "dst", dstUnderlyingType)
-		return fmt.Sprintf("dst.%s = src.%s", dstField.Name, srcField.Name), nil
-	}
-
-	// 0.5. Direct cast if types are castable (e.g., `type Status string` to `string` or vice-versa)
-	// This applies if one is an alias of the other's underlying type, or both are aliases of the same primitive.
-	if types.IsPrimitiveType(srcFieldTypeInfo.Name) && types.IsPrimitiveType(dstFieldTypeInfo.Name) {
-		// Both are primitive, or aliases of primitive.
-		// If both are numbers, or both are string-like, a direct cast might be sufficient.
-		// More robust: check if one type is assignable to the other via Go's type system rules,
-		// but for simplicity, we check if their underlying primitive types are compatible.
-		if srcFieldTypeInfo.Kind == dstFieldTypeInfo.Kind ||
-			(srcFieldTypeInfo.Kind == types.TypeKindBasic && dstFieldTypeInfo.Kind == types.TypeKindBasic) {
-			slog.Debug("generateConversion: direct cast (compatible primitive types)", "src", srcField.Type, "dst", dstField.Type)
-			return fmt.Sprintf("dst.%s = %s(src.%s)", dstField.Name, dstField.Type, srcField.Name), nil
-		}
-	}
-
-	// 1. 检查自定义规则 (高优先级)
 	for _, rule := range cfg.TypeConversionRules {
 		slog.Debug("generateConversion: 检查类型级自定义规则",
 			"ruleSourceType", rule.SourceTypeName,
@@ -160,7 +138,7 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 		}
 
 		// Resolve the actual field types for comparison
-	srcFieldTypeInfo, err := fg.resolver.Resolve(srcField.Type)
+		srcFieldTypeInfo, err := fg.resolver.Resolve(srcField.Type)
 		if err != nil {
 			slog.Debug("generateConversion: 无法解析源字段类型", "type", srcField.Type, "error", err)
 			continue
@@ -172,7 +150,7 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 		}
 
 		// Compare fully qualified names derived from TypeInfo
-	srcMatch := (resolvedRuleSource.ImportPath == srcFieldTypeInfo.ImportPath && resolvedRuleSource.Name == srcFieldTypeInfo.Name)
+		srcMatch := (resolvedRuleSource.ImportPath == srcFieldTypeInfo.ImportPath && resolvedRuleSource.Name == srcFieldTypeInfo.Name)
 		dstMatch := (resolvedRuleTarget.ImportPath == dstFieldTypeInfo.ImportPath && resolvedRuleTarget.Name == dstFieldTypeInfo.Name)
 
 		if srcMatch && dstMatch {
@@ -191,7 +169,6 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 	if sourcePath, exists := cfg.RemapFields[dstField.Name]; exists {
 		return fg.generateRemapConversion(srcField, dstField, sourcePath, cfg)
 	}
-
 
 	// 3. 检查直接类型映射 (来自 RegisterTypeConversion/Pattern)
 	if rule, exists := fg.conversionRules[key]; exists {
@@ -410,7 +387,7 @@ func (fg *FieldGenerator) generateRemapConversion(srcField, dstField types.Struc
 	// but it's passed as a specific field in the loop in GenerateFields.
 	// The 'sourceType' parameter to GenerateFields is the overall Source struct type.
 	// We need the TypeInfo for that overall Source struct.
-	
+
 	// Assuming sourcePath starts from the root of the 'src' object passed to the conversion function
 	// So, the baseTypeInfo for resolvePathType should be the TypeInfo of cfg.Source.Type.
 	srcRootTypeInfo, err := fg.resolver.Resolve(cfg.Source.Type)
@@ -424,8 +401,8 @@ func (fg *FieldGenerator) generateRemapConversion(srcField, dstField types.Struc
 		return "", fmt.Errorf("generateRemapConversion: failed to resolve type of source path %s: %w", sourcePath, err)
 	}
 
-	slog.Debug("generateRemapConversion: resolved source path type", 
-		"sourcePath", sourcePath, 
+	slog.Debug("generateRemapConversion: resolved source path type",
+		"sourcePath", sourcePath,
 		"resolvedType", resolvedSourcePathType.Name, // Use .Name
 		"isSlice", strings.HasPrefix(resolvedSourcePathType.Name, "[]"), // Use .Name
 		"isPointer", strings.HasPrefix(resolvedSourcePathType.Name, "*"), // Use .Name
@@ -437,39 +414,39 @@ func (fg *FieldGenerator) generateRemapConversion(srcField, dstField types.Struc
 	// If the resolved source path is a slice, and the destination is not a slice, then it's a projection (e.g., RolesIDs)
 	if strings.HasPrefix(resolvedSourcePathType.Name, "[]") { // Use .Name for slice check
 		slog.Info("generateRemapConversion: detected slice in source path, checking for projection", "sourcePath", sourcePath)
-		
+
 		// If the destination field is a slice, and the last part of sourcePath refers to a struct type,
 		// it's likely a slice-to-slice conversion (e.g. Roles -> Roles)
 		// We need to compare resolvedSourcePathType.ElemType with dstField.ElemType
-		
+
 		// If the destination field is NOT a slice, and the last part of sourcePath is "ID" or "IDs", it's a slice projection for IDs
 		// This needs more granular checks
-		
+
 		// For RoleIDs:Edges.Roles.ID
 		// sourcePath = "Edges.Roles.ID"
 		// resolvedSourcePathType = TypeInfo for 'int64' (if ID is int64)
 		// But the original source is src.Edges.Roles which is a slice.
 		// This means sourcePath itself might already represent the element to project.
-		
+
 		// Need to rethink how sourcePath is defined for slice projections.
 		// If `remap="RoleIDs:Edges.Roles.ID"`
 		// It means `dst.RoleIDs` (int64) comes from `src.Edges.Roles` ( []*ent.Role).
 		// We need to iterate over `src.Edges.Roles` and extract `ID` from each.
-		
+
 		// Temporarily return a specific TODO for slice projection that needs a helper function.
 		return fmt.Sprintf("// TODO: Implement slice projection helper for %s from %s", dstField.Name, fullSourceAccess), nil
 	} else { // Source path is a single struct or primitive, not a slice
 		slog.Info("generateRemapConversion: detected simple nested field copy", "sourcePath", sourcePath)
 		// This is a simple nested struct/field copy.
 		// Need to call conversion function if types are different, or direct assign if compatible.
-		
+
 		// If types are different, need to find/generate a conversion function.
 		if resolvedSourcePathType.Name != dstField.Type { // Use .Name
 			funcName, err := fg.buildElementConversionFuncName(resolvedSourcePathType.Name, dstField.Type, cfg) // Use .Name
 			if err != nil {
 				return "", fmt.Errorf("failed to build conversion func name for remapped field: %w", err)
 			}
-			
+
 			// Determine if source needs address taken
 			srcArg := fullSourceAccess
 			if !strings.HasPrefix(resolvedSourcePathType.Name, "*") { // Use .Name for pointer check
@@ -483,6 +460,7 @@ func (fg *FieldGenerator) generateRemapConversion(srcField, dstField types.Struc
 		}
 	}
 }
+
 // GenerateFields generates a list of field conversion snippets for a given source and target type.
 // It uses the registered rules and built-in logic to determine the conversion code for each matching field.
 func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *types.ConversionConfig) []types.FieldConversion {
@@ -512,8 +490,6 @@ func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *typ
 		slog.Error("failed to resolve target type", "type", targetType, "error", err)
 		return fields
 	}
-
-
 
 	// 创建目标字段映射
 	dstFieldMap := make(map[string]types.StructField)
