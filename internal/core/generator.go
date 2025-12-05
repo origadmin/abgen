@@ -29,6 +29,13 @@ type ConverterGenerator struct {
 	importMgr   types.ImportManager // Change type to interface
 }
 
+// SetTemplateDir sets the directory for custom type conversion templates in the embedded field generator.
+func (g *ConverterGenerator) SetTemplateDir(dir string) {
+	if g.fieldGen != nil {
+		g.fieldGen.SetTemplateDir(dir)
+	}
+}
+
 // NewGenerator 创建新的生成器实例
 func NewGenerator() *ConverterGenerator {
 	g := &ConverterGenerator{
@@ -235,13 +242,67 @@ func (g *ConverterGenerator) Generate() error {
 			srcLocalType := importMgr.GetType(sourceInfo.ImportPath, sourceInfo.Name)
 			dstLocalType := importMgr.GetType(targetInfo.ImportPath, targetInfo.Name)
 
+			slog.Debug("Generate: processing conversion",
+				"sourceInfo.ImportPath", sourceInfo.ImportPath,
+				"sourceInfo.Name", sourceInfo.Name,
+				"srcAlias", srcAlias,
+				"srcLocalType", srcLocalType,
+				"targetInfo.ImportPath", targetInfo.ImportPath,
+				"targetInfo.Name", targetInfo.Name,
+				"targetAlias", targetAlias,
+				"dstLocalType", dstLocalType,
+			)
+
 			if (cfg.Source.Suffix != "" || cfg.Source.Prefix != "") && !importMgr.IsAliasRegistered(srcAlias) {
-				typeAliases = append(typeAliases, fmt.Sprintf("type %s = %s", srcAlias, srcLocalType))
-				importMgr.RegisterAlias(srcAlias)
+				localAliases := g.resolver.GetLocalTypeAliases()
+				// srcLocalType is already in the format "pkg.Type" or "Type" (if local pkg).
+				// We need to compare it against the resolved underlying type from localAliases.
+				skip := false
+				if existingLocalAliasUnderlying, exists := localAliases[srcAlias]; exists {
+					// The localAlias stored in walker is "fully.qualified/path.TypeName" or "TypeName" if local to the package.
+					// srcLocalType is "alias.TypeName" or "TypeName" if local.
+					// We need to resolve srcLocalType's underlying FQN.
+					srcLocalTypeInfo, err := g.resolver.Resolve(cfg.Source.Type)
+					if err == nil {
+						resolvedSrcFQN := srcLocalTypeInfo.ImportPath
+						if resolvedSrcFQN != "" {
+							resolvedSrcFQN += "."
+						}
+						resolvedSrcFQN += srcLocalTypeInfo.Name
+
+						if existingLocalAliasUnderlying == resolvedSrcFQN || (srcLocalTypeInfo.ImportPath == g.PkgPath && existingLocalAliasUnderlying == srcLocalTypeInfo.Name) {
+							slog.Debug("Generate: skipping redundant source alias generation", "alias", srcAlias, "type", srcLocalType)
+							skip = true
+						}
+					}
+				}
+				if !skip {
+					typeAliases = append(typeAliases, fmt.Sprintf("type %s = %s", srcAlias, srcLocalType))
+					importMgr.RegisterAlias(srcAlias)
+				}
 			}
 			if (cfg.Target.Suffix != "" || cfg.Target.Prefix != "") && !importMgr.IsAliasRegistered(targetAlias) {
-				typeAliases = append(typeAliases, fmt.Sprintf("type %s = %s", targetAlias, dstLocalType))
-				importMgr.RegisterAlias(targetAlias)
+				localAliases := g.resolver.GetLocalTypeAliases()
+				skip := false
+				if existingLocalAliasUnderlying, exists := localAliases[targetAlias]; exists {
+					dstLocalTypeInfo, err := g.resolver.Resolve(cfg.Target.Type)
+					if err == nil {
+						resolvedDstFQN := dstLocalTypeInfo.ImportPath
+						if resolvedDstFQN != "" {
+							resolvedDstFQN += "."
+						}
+						resolvedDstFQN += dstLocalTypeInfo.Name
+
+						if existingLocalAliasUnderlying == resolvedDstFQN || (dstLocalTypeInfo.ImportPath == g.PkgPath && existingLocalAliasUnderlying == dstLocalTypeInfo.Name) {
+							slog.Debug("Generate: skipping redundant target alias generation", "alias", targetAlias, "type", dstLocalType)
+							skip = true
+						}
+					}
+				}
+				if !skip {
+					typeAliases = append(typeAliases, fmt.Sprintf("type %s = %s", targetAlias, dstLocalType))
+					importMgr.RegisterAlias(targetAlias)
+				}
 			}
 
 			g.fieldGen.SetCustomTypeConversionRules(cfg.TypeConversionRules)

@@ -7,7 +7,7 @@ import (
 
 // This is a file-level directive group for package-to-package conversion.
 //go:abgen:pair:packages="github.com/origadmin/abgen/internal/testdata/ent,github.com/origadmin/abgen/internal/testdata/typespb"
-//go:abgen:convert:source:suffix="Ent"
+//go:abgen:convert:source:suffix=""
 //go:abgen:convert:target:suffix="PB"
 //go:abgen:convert:direction="both"
 //go:abgen:convert:rule="source:ent.Status,target:string,func:ConvertStatusToString"

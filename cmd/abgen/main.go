@@ -67,7 +67,7 @@ func main() {
 		generator.Output = filepath.Dir(inputPath)
 	}
 	// The ParseSource also needs the correct input path, which is args[0]
-	if err := generator.ParseSource(args[0], *templateDir); err != nil {
+	if err := generator.ParseSource(args[0]); err != nil {
 		slog.Error("解析错误", "错误", err)
 		return
 	}

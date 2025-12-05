@@ -151,8 +151,24 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 			for _, spec := range genDecl.Specs {
 				if typeSpec, ok := spec.(*goast.TypeSpec); ok {
 					if _, isStruct := typeSpec.Type.(*goast.StructType); !isStruct {
-						aliasedToType := w.exprToString(typeSpec.Type, w.currentPkg)
-						w.localTypeAliases[typeSpec.Name.Name] = aliasedToType
+						aliasedToTypeExpr := typeSpec.Type
+						aliasedToTypeStr := w.exprToString(aliasedToTypeExpr, w.currentPkg) // e.g., "ent.User"
+
+						// Resolve the aliasedToTypeStr to its TypeInfo to get the FQN
+						resolvedAliasedTypeInfo := w.resolveTargetType(aliasedToTypeStr)
+						if resolvedAliasedTypeInfo.Name != "" {
+							fqn := resolvedAliasedTypeInfo.ImportPath
+							if fqn != "" && fqn != "builtin" { // "builtin" is not a real import path for FQN
+								fqn += "."
+							}
+							fqn += resolvedAliasedTypeInfo.Name
+							w.localTypeAliases[typeSpec.Name.Name] = fqn
+							slog.Debug("processFileDecls: Collected local type alias (FQN)", "aliasName", typeSpec.Name.Name, "underlyingFQN", fqn)
+						} else {
+							slog.Debug("processFileDecls: Could not resolve underlying type for alias", "aliasName", typeSpec.Name.Name, "aliasedToTypeStr", aliasedToTypeStr)
+							// Fallback: store the string representation if FQN resolution fails
+							w.localTypeAliases[typeSpec.Name.Name] = aliasedToTypeStr
+						}
 					}
 				}
 			}
@@ -752,6 +768,10 @@ func (w *PackageWalker) ensureNodeExists(typeName string) {
 
 // AddConversion adds a new ConversionConfig to the conversion graph, handling bidirectional conversions.
 func (w *PackageWalker) AddConversion(cfg *types.ConversionConfig) {
+	if w.graph == nil {
+		return // If graph is nil, we cannot add conversions.
+	}
+
 	w.ensureNodeExists(cfg.Source.Type)
 	w.ensureNodeExists(cfg.Target.Type)
 

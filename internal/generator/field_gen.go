@@ -93,6 +93,52 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 	key := baseSrcType + ":" + baseDstType
 	slog.Debug("generateConversion: 规则查找键", "key", key)
 
+	// Resolve full TypeInfo for source and destination fields
+	srcFieldTypeInfo, err := fg.resolver.Resolve(srcField.Type)
+	if err != nil {
+		slog.Error("generateConversion: failed to resolve source field type info", "type", srcField.Type, "error", err)
+		return fg.unhandledConversion(srcField, dstField)
+	}
+	dstFieldTypeInfo, err := fg.resolver.Resolve(dstField.Type)
+	if err != nil {
+		slog.Error("generateConversion: failed to resolve destination field type info", "type", dstField.Type, "error", err)
+		return fg.unhandledConversion(srcField, dstField)
+	}
+
+	// Determine the actual underlying types for comparison
+	// If a type is an alias, get its ElemType if it's a pointer/slice/map, otherwise its base name/ImportPath
+	srcUnderlyingType := srcFieldTypeInfo.ImportPath
+	if srcUnderlyingType != "" && srcUnderlyingType != "builtin" {
+		srcUnderlyingType += "."
+	}
+	srcUnderlyingType += srcFieldTypeInfo.Name
+
+	dstUnderlyingType := dstFieldTypeInfo.ImportPath
+	if dstUnderlyingType != "" && dstUnderlyingType != "builtin" {
+		dstUnderlyingType += "."
+	}
+	dstUnderlyingType += dstFieldTypeInfo.Name
+
+	// 0. Direct assignment if types are identical (after resolving aliases to FQN)
+	if srcUnderlyingType == dstUnderlyingType {
+		slog.Debug("generateConversion: direct assignment (identical underlying types)", "src", srcUnderlyingType, "dst", dstUnderlyingType)
+		return fmt.Sprintf("dst.%s = src.%s", dstField.Name, srcField.Name), nil
+	}
+
+	// 0.5. Direct cast if types are castable (e.g., `type Status string` to `string` or vice-versa)
+	// This applies if one is an alias of the other's underlying type, or both are aliases of the same primitive.
+	if types.IsPrimitiveType(srcFieldTypeInfo.Name) && types.IsPrimitiveType(dstFieldTypeInfo.Name) {
+		// Both are primitive, or aliases of primitive.
+		// If both are numbers, or both are string-like, a direct cast might be sufficient.
+		// More robust: check if one type is assignable to the other via Go's type system rules,
+		// but for simplicity, we check if their underlying primitive types are compatible.
+		if srcFieldTypeInfo.Kind == dstFieldTypeInfo.Kind ||
+			(srcFieldTypeInfo.Kind == types.TypeKindBasic && dstFieldTypeInfo.Kind == types.TypeKindBasic) {
+			slog.Debug("generateConversion: direct cast (compatible primitive types)", "src", srcField.Type, "dst", dstField.Type)
+			return fmt.Sprintf("dst.%s = %s(src.%s)", dstField.Name, dstField.Type, srcField.Name), nil
+		}
+	}
+
 	// 1. 检查自定义规则 (高优先级)
 	for _, rule := range cfg.TypeConversionRules {
 		slog.Debug("generateConversion: 检查类型级自定义规则",
