@@ -7,10 +7,6 @@ import (
 	{{$key}} "{{$val}}"
 {{end}}
 )
-{{- if .TypeAliases }}
-
-{{- template "type_aliases" . }}
-{{- end }}
 
 {{range .Converters}}
 	// {{.FuncName}} converts {{.SourceAlias}} to {{.TargetAlias}}
@@ -27,16 +23,4 @@ import (
 	{{end}}
 	return dst
 	}
-{{end}}
-
-{{define "type_aliases"}}
-type (
-{{- range $alias, $info := .TypeAliases}}
-    {{- if and $info.ImportAlias (ne $info.ImportAlias ".")}}
-	{{$alias}} = {{$info.ImportAlias}}.{{$info.Name}}
-    {{- else}}
-    {{$alias}} = {{$info.Name}}
-    {{- end}}
-{{- end}}
-)
 {{end}}

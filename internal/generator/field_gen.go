@@ -76,6 +76,11 @@ func (fg *FieldGenerator) RegisterTypePattern(srcType, dstType, pattern string) 
 
 // generateConversion 生成字段转换代码
 func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructField, cfg *types.ConversionConfig) (string, error) {
+	slog.Debug("generateConversion: 开始处理字段",
+		"srcFieldName", srcField.Name, "srcFieldType", srcField.Type,
+		"dstFieldName", dstField.Name, "dstFieldType", dstField.Type,
+	)
+
 	srcType := srcField.Type
 	dstType := dstField.Type
 
@@ -83,9 +88,49 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 	baseSrcType := strings.TrimPrefix(srcType, "*")
 	baseDstType := strings.TrimPrefix(dstType, "*")
 	key := baseSrcType + ":" + baseDstType
+	slog.Debug("generateConversion: 规则查找键", "key", key)
 
-	// 1. 检查直接类型映射
+	// 1. 检查自定义规则 (高优先级)
+	for _, rule := range cfg.TypeConversionRules {
+		slog.Debug("generateConversion: 检查类型级自定义规则",
+			"ruleSourceType", rule.SourceTypeName,
+			"ruleTargetType", rule.TargetTypeName,
+			"srcFieldType", srcField.Type,
+			"dstFieldType", dstField.Type,
+		)
+		// Custom rules from directives might use base types or resolved full paths.
+		// Try to match both fully qualified and base names.
+		sourceFieldTypeFQ := srcField.Type // Keep it simple for now, as resolver returns FQ.
+		targetFieldTypeFQ := dstField.Type // Keep it simple for now, as resolver returns FQ.
+
+		// Ensure we resolve the types for comparison, as directive types might be short names or aliases.
+		resolvedRuleSource, err := fg.resolver.Resolve(rule.SourceTypeName)
+		if err != nil {
+			slog.Debug("generateConversion: 无法解析自定义规则源类型", "type", rule.SourceTypeName, "error", err)
+			continue
+		}
+		resolvedRuleTarget, err := fg.resolver.Resolve(rule.TargetTypeName)
+		if err != nil {
+			slog.Debug("generateConversion: 无法解析自定义规则目标类型", "type", rule.TargetTypeName, "error", err)
+			continue
+		}
+
+		if (resolvedRuleSource.ImportPath + "." + resolvedRuleSource.Name == sourceFieldTypeFQ || resolvedRuleSource.Name == strings.TrimPrefix(sourceFieldTypeFQ, "*")) &&
+			(resolvedRuleTarget.ImportPath + "." + resolvedRuleTarget.Name == targetFieldTypeFQ || resolvedRuleTarget.Name == strings.TrimPrefix(targetFieldTypeFQ, "*")) {
+
+			slog.Debug("generateConversion: 应用 Type-level Custom Rule (FQ Match)",
+				"Source", sourceFieldTypeFQ,
+				"Target", targetFieldTypeFQ,
+				"Func", rule.ConvertFunc,
+			)
+			return fmt.Sprintf("dst.%s = %s(src.%s)", dstField.Name, rule.ConvertFunc, srcField.Name), nil
+		}
+	}
+
+
+	// 2. 检查直接类型映射 (来自 RegisterTypeConversion/Pattern)
 	if rule, exists := fg.conversionRules[key]; exists {
+		slog.Debug("generateConversion: 命中 fg.conversionRules", "key", key)
 		if rule.tmpl != nil {
 			// 准备模板数据
 			data := TemplateData{
@@ -101,11 +146,13 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 			// 执行模板
 			var buf bytes.Buffer
 			if err := rule.tmpl.Execute(&buf, data); err != nil {
+				slog.Error("generateConversion: 模板执行失败", "key", key, "error", err)
 				return "", fmt.Errorf("failed to execute template: %w", err)
 			}
 			return buf.String(), nil
 
 		} else if rule.Pattern != "" {
+			slog.Debug("generateConversion: 应用 fg.conversionRules 模式", "key", key, "pattern", rule.Pattern)
 			// 使用模式字符串生成代码
 			return fmt.Sprintf(rule.Pattern,
 				"dst."+dstField.Name,
@@ -211,82 +258,36 @@ func (fg *FieldGenerator) unhandledConversion(srcField, dstField types.StructFie
 
 // buildElementConversionFuncName builds the full conversion function name for nested elements (pointers/slices).
 func (fg *FieldGenerator) buildElementConversionFuncName(srcElem, dstElem string, cfg *types.ConversionConfig) (string, error) {
+	slog.Debug("buildElementConversionFuncName: 开始处理", "srcElem", srcElem, "dstElem", dstElem)
 	// 完整类型路径
 	fullSrcType := strings.TrimPrefix(srcElem, "*")
 	fullDstType := strings.TrimPrefix(dstElem, "*")
 
 	srcInfo, err := fg.resolver.Resolve(fullSrcType)
 	if err != nil {
+		slog.Error("buildElementConversionFuncName: 无法解析源元素类型", "type", fullSrcType, "error", err)
 		return "", fmt.Errorf("无法解析源元素类型 %s: %w", fullSrcType, err)
 	}
 	dstInfo, err := fg.resolver.Resolve(fullDstType)
 	if err != nil {
+		slog.Error("buildElementConversionFuncName: 无法解析目标元素类型", "type", fullDstType, "error", err)
 		return "", fmt.Errorf("无法解析目标元素类型 %s: %w", fullDstType, err)
 	}
 
-	// Use the unified createTypeAlias function
-	srcAlias := createTypeAlias(srcInfo.Name, srcInfo.PkgName, "", "", cfg.GeneratorPkgPath)
-	dstAlias := createTypeAlias(dstInfo.Name, dstInfo.PkgName, "", "", cfg.GeneratorPkgPath)
+	// Directly apply suffixes from cfg
+	srcAlias := cfg.SourcePrefix + srcInfo.Name + cfg.SourceSuffix
+	dstAlias := cfg.TargetPrefix + dstInfo.Name + cfg.TargetSuffix
+
+
+	slog.Debug("buildElementConversionFuncName: 生成函数名",
+		"fullSrcType", fullSrcType, "srcInfo.Name", srcInfo.Name, "srcAlias", srcAlias,
+		"fullDstType", fullDstType, "dstInfo.Name", dstInfo.Name, "dstAlias", dstAlias,
+	)
 
 	return fmt.Sprintf("Convert%sTo%s", srcAlias, dstAlias), nil
 }
 
-// Unified createTypeAlias function, copied from core/generator.go
-func createTypeAlias(typeName, pkgName, prefix, suffix, generatorPkgPath string) string {
-	slog.Debug("createTypeAlias 输入", "原始typeName", typeName, "pkgName", pkgName, "prefix", prefix, "suffix", suffix)
 
-	// 首先从完整路径中提取类型名
-	if strings.Contains(typeName, "/") {
-		parts := strings.Split(typeName, "/")
-		typeName = parts[len(parts)-1]
-	}
-
-	// 如果类型名中仍包含包选择器（例如 "types.User"），则将其拆分
-	if dotIndex := strings.LastIndex(typeName, "."); dotIndex != -1 {
-		// 如果 pkgName 为空，则从类型名中提取它
-		if pkgName == "" {
-			pkgName = typeName[:dotIndex]
-		}
-		// 更新 typeName 为不带包选择器的纯类型名
-		typeName = typeName[dotIndex+1:]
-	}
-
-	// 如果有自定义前缀或后缀，优先使用
-	if prefix != "" || suffix != "" {
-		result := prefix + typeName + suffix
-		slog.Debug("createTypeAlias 输出 (前缀/后缀)", "result", result)
-		return result
-	}
-
-	// 根据包名创建默认别名
-	var result string
-	switch pkgName {
-	case "ent":
-		result = typeName + "Ent"
-	case "types":
-		// 这是一个基于约定的简单检查
-		if strings.HasSuffix(generatorPkgPath, "dto") { // 假设在 dto 包中，'types' 通常指向 protobuf
-			result = typeName + "PB"
-		} else {
-			result = typeName + "Types"
-		}
-	case "typespb": // 直接处理 'typespb' 别名
-		result = typeName + "PB"
-	case "dto":
-		result = typeName + "DTO"
-	default:
-		if pkgName != "" {
-			// 使用包名的首字母大写作为后缀
-			result = typeName + strings.Title(pkgName)
-		} else {
-			// 如果没有包名，则直接使用类型名
-			result = typeName
-		}
-	}
-
-	slog.Debug("createTypeAlias 输出", "result", result)
-	return result
-}
 
 // UpdateTypeMap 更新类型映射表
 func (fg *FieldGenerator) UpdateTypeMap() {
@@ -425,6 +426,11 @@ func NewFieldGenerator(customRules []types.TypeConversionRule) *FieldGenerator {
 // SetTemplateDir sets the directory from which to load custom conversion templates.
 func (fg *FieldGenerator) SetTemplateDir(dir string) {
 	fg.templateDir = dir
+}
+
+// SetCustomTypeConversionRules sets the custom type conversion rules from directives.
+func (fg *FieldGenerator) SetCustomTypeConversionRules(rules []types.TypeConversionRule) {
+	fg.customTypeConversionRules = rules
 }
 
 // LoadTemplatesFromDir loads and parses all template files (*.tpl) from the configured template directory.

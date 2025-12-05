@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
+
 
 	"golang.org/x/tools/go/packages"
 
@@ -161,7 +161,21 @@ func (g *ConverterGenerator) buildGraph(pkgs []*packages.Package) error {
 								TargetType:   targetTypeName,
 								Direction:    pkgCfg.Direction,
 								IgnoreFields: make(map[string]bool), // TODO: support package-level ignore fields
+								// Ensure package-level prefixes/suffixes are carried over
+								SourcePrefix: pkgCfg.SourcePrefix,
+								SourceSuffix: pkgCfg.SourceSuffix,
+								TargetPrefix: pkgCfg.TargetPrefix,
+								TargetSuffix: pkgCfg.TargetSuffix,
 							}
+							slog.Debug("buildGraph: 调用 AddConversion 前的 convCfg",
+								"SourceType", convCfg.SourceType,
+								"TargetType", convCfg.TargetType,
+								"Direction", convCfg.Direction,
+								"SourcePrefix", convCfg.SourcePrefix,
+								"SourceSuffix", convCfg.SourceSuffix,
+								"TargetPrefix", convCfg.TargetPrefix,
+								"TargetSuffix", convCfg.TargetSuffix,
+							)
 							walker.AddConversion(convCfg)
 						}
 					} else {
@@ -252,18 +266,13 @@ func (g *ConverterGenerator) Generate() error {
 		Package     string
 		Imports     map[string]string
 		Converters  []map[string]interface{}
-		TypeAliases map[string]types.TypeInfo // **FIX**: 添加类型别名
 	}{
 		Package:     packageName,
 		Imports:     g.resolver.GetImports(),
-		TypeAliases: make(map[string]types.TypeInfo),
 	}
 
-	// 获取本地已定义的别名
-	localTypeAliases := make(map[string]string)
-	if resolver, ok := g.resolver.(*ast.TypeResolverImpl); ok {
-		localTypeAliases = resolver.GetLocalTypeAliases()
-	}
+
+
 
 	// 生成转换器数据
 	fmt.Println("\n======== 生成转换配置 ========")
@@ -306,46 +315,16 @@ func (g *ConverterGenerator) Generate() error {
 
 			slog.Info("处理函数", "函数名", funcName, "源", cfg.SourceType, "目标", cfg.TargetType)
 
+			// Set custom type conversion rules for the current config
+			g.fieldGen.SetCustomTypeConversionRules(cfg.TypeConversionRules)
+
 			fields := g.fieldGen.GenerateFields(cfg.SourceType, cfg.TargetType, cfg)
 
-			// 创建类型别名
-			srcAlias := g.createTypeAlias(sourceInfo.Name, sourceInfo.PkgName, cfg.SourcePrefix, cfg.SourceSuffix)
-			targetAlias := g.createTypeAlias(targetInfo.Name, targetInfo.PkgName, cfg.TargetPrefix, cfg.TargetSuffix)
+			// Determine aliases based on configured prefixes/suffixes
+			srcAlias := cfg.SourcePrefix + sourceInfo.Name + cfg.SourceSuffix
+			targetAlias := cfg.TargetPrefix + targetInfo.Name + cfg.TargetSuffix
 
-			// **FIX**: 收集类型别名, 仅当类型不属于当前包时，且不是本地已定义的别名
-			// 添加调试日志
-			slog.Debug("收集别名",
-				"srcAlias", srcAlias,
-				"sourceInfo.Name", sourceInfo.Name,
-				"sourceInfo.ImportPath", sourceInfo.ImportPath,
-				"generatorPkgPath", generatorPkgPath,
-				"targetAlias", targetAlias,
-				"targetInfo.Name", targetInfo.Name,
-				"targetInfo.ImportPath", targetInfo.ImportPath,
-				"localTypeAliases", localTypeAliases)
-
-			if sourceInfo.ImportPath != generatorPkgPath {
-				if _, exists := localTypeAliases[srcAlias]; !exists {
-					slog.Debug("添加源类型别名", "alias", srcAlias, "name", sourceInfo.Name, "importPath", sourceInfo.ImportPath)
-					data.TypeAliases[srcAlias] = sourceInfo
-				} else {
-					slog.Debug("跳过源类型别名 (本地已定义)", "alias", srcAlias, "name", sourceInfo.Name, "importPath", sourceInfo.ImportPath)
-				}
-			} else {
-				slog.Debug("跳过源类型别名 (当前包)", "alias", srcAlias, "name", sourceInfo.Name, "importPath", sourceInfo.ImportPath)
-			}
-
-			if targetInfo.ImportPath != generatorPkgPath {
-				if _, exists := localTypeAliases[targetAlias]; !exists {
-					slog.Debug("添加目标类型别名", "alias", targetAlias, "name", targetInfo.Name, "importPath", targetInfo.ImportPath)
-					data.TypeAliases[targetAlias] = targetInfo
-				} else {
-					slog.Debug("跳过目标类型别名 (本地已定义)", "alias", targetAlias, "name", targetInfo.Name, "importPath", targetInfo.ImportPath)
-				}
-			} else {
-				slog.Debug("跳过目标类型别名 (当前包)", "alias", targetAlias, "name", targetInfo.Name, "importPath", targetInfo.ImportPath)
-			}
-
+			
 			converter := map[string]interface{}{
 				"FuncName":    funcName,
 				"SourceType":  cfg.SourceType,
@@ -386,69 +365,24 @@ func (g *ConverterGenerator) buildFuncName(cfg *types.ConversionConfig) (string,
 		return "", fmt.Errorf("无法解析目标类型 %s: %w", cfg.TargetType, err)
 	}
 
-	// 创建类型别名映射
-	srcAlias := g.createTypeAlias(sourceInfo.Name, sourceInfo.PkgName, cfg.SourcePrefix, cfg.SourceSuffix)
-	targetAlias := g.createTypeAlias(targetInfo.Name, targetInfo.PkgName, cfg.TargetPrefix, cfg.TargetSuffix)
+	srcAlias := cfg.SourcePrefix + sourceInfo.Name + cfg.SourceSuffix
+	targetAlias := cfg.TargetPrefix + targetInfo.Name + cfg.TargetSuffix
+
+	slog.Debug("buildFuncName 调试",
+		"cfg.SourceType", cfg.SourceType,
+		"sourceInfo.Name", sourceInfo.Name,
+		"cfg.SourceSuffix", cfg.SourceSuffix,
+		"srcAlias", srcAlias,
+		"cfg.TargetType", cfg.TargetType,
+		"targetInfo.Name", targetInfo.Name,
+		"cfg.TargetSuffix", cfg.TargetSuffix,
+		"targetAlias", targetAlias,
+	)
 
 	return fmt.Sprintf("Convert%sTo%s", srcAlias, targetAlias), nil
 }
 
-// createTypeAlias 为类型创建简短的别名
-func (g *ConverterGenerator) createTypeAlias(typeName, pkgName, prefix, suffix string) string {
-	slog.Debug("createTypeAlias 输入", "原始typeName", typeName, "pkgName", pkgName, "prefix", prefix, "suffix", suffix)
 
-	// 首先从完整路径中提取类型名
-	if strings.Contains(typeName, "/") {
-		parts := strings.Split(typeName, "/")
-		typeName = parts[len(parts)-1]
-	}
-
-	// 如果类型名中仍包含包选择器（例如 "types.User"），则将其拆分
-	if dotIndex := strings.LastIndex(typeName, "."); dotIndex != -1 {
-		// 如果 pkgName 为空，则从类型名中提取它
-		if pkgName == "" {
-			pkgName = typeName[:dotIndex]
-		}
-		// 更新 typeName 为不带包选择器的纯类型名
-		typeName = typeName[dotIndex+1:]
-	}
-
-	// 如果有自定义前缀或后缀，优先使用
-	if prefix != "" || suffix != "" {
-		result := prefix + typeName + suffix
-		slog.Debug("createTypeAlias 输出 (前缀/后缀)", "result", result)
-		return result
-	}
-
-	// 根据包名创建默认别名
-	var result string
-	switch pkgName {
-	case "ent":
-		result = typeName + "Ent"
-	case "types":
-		// 这是一个基于约定的简单检查
-		if strings.HasSuffix(g.PkgPath, "dto") { // 假设在 dto 包中，'types' 通常指向 protobuf
-			result = typeName + "PB"
-		} else {
-			result = typeName + "Types"
-		}
-	case "typespb": // 直接处理 'typespb' 别名
-		result = typeName + "PB"
-	case "dto":
-		result = typeName + "DTO"
-	default:
-		if pkgName != "" {
-			// 使用包名的首字母大写作为后缀
-			result = typeName + strings.Title(pkgName)
-		} else {
-			// 如果没有包名，则直接使用类型名
-			result = typeName
-		}
-	}
-
-	slog.Debug("createTypeAlias 输出", "result", result)
-	return result
-}
 
 // NewGenerator 创建新的生成器实例
 func NewGenerator() *ConverterGenerator {

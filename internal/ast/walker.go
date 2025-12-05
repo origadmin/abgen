@@ -169,9 +169,15 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 				continue
 			}
 
-			// Record local type aliases
+			// Record local type aliases and determine the effective SourceType for directives
+			var effectiveSourceType string
 			if _, isStruct := typeSpec.Type.(*goast.StructType); !isStruct {
-				w.localTypeAliases[typeSpec.Name.Name] = w.exprToString(typeSpec.Type, w.currentPkg)
+				// It's a type alias
+				aliasedToType := w.exprToString(typeSpec.Type, w.currentPkg)
+				w.localTypeAliases[typeSpec.Name.Name] = aliasedToType
+				effectiveSourceType = aliasedToType // Use the underlying type for SourceType
+			} else {
+				effectiveSourceType = w.currentPkg.PkgPath + "." + typeSpec.Name.Name // Use the fully qualified name for struct types
 			}
 
 			// Process comments attached to the TypeSpec
@@ -181,8 +187,12 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 					if strings.HasPrefix(comment.Text, "//go:abgen:") {
 						if typeCfg == nil {
 							typeCfg = &types.ConversionConfig{
-								SourceType:   w.currentPkg.PkgPath + "." + typeSpec.Name.Name, // Use fully qualified name
+								SourceType:   effectiveSourceType, // Use the determined effective source type
 								IgnoreFields: make(map[string]bool),
+								SourcePrefix: "",
+								SourceSuffix: "",
+								TargetPrefix: "",
+								TargetSuffix: "",
 							}
 						}
 						w.parseAndApplyDirective(comment.Text, typeCfg, nil)
@@ -289,6 +299,19 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 			if typeCfg.TypeConversionRules == nil {
 				typeCfg.TypeConversionRules = make([]types.TypeConversionRule, 0)
 			}
+
+			// Resolve main source and target types to get their field information
+			mainSourceTypeInfo, err := w.Resolve(typeCfg.SourceType)
+			if err != nil {
+				slog.Warn("Could not resolve main source type for field directive", "mainSourceType", typeCfg.SourceType, "error", err)
+				return
+			}
+			mainTargetTypeInfo, err := w.Resolve(typeCfg.TargetType)
+			if err != nil {
+				slog.Warn("Could not resolve main target type for field directive", "mainTargetType", typeCfg.TargetType, "error", err)
+				return
+			}
+
 			for _, mapping := range mappings {
 				parts := strings.SplitN(strings.TrimSpace(mapping), ":", 3)
 				if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
@@ -300,31 +323,53 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 				targetType := parts[1]
 				convertFunc := parts[2]
 
-				// Resolve types to their fully qualified names
-				// If sourceType is the same as typeCfg.SourceType (the type the directive is on), use its full path
 				var resolvedSourceType string
-				if typeCfg.SourceType != "" && (sourceType == strings.TrimPrefix(typeCfg.SourceType, w.currentPkg.PkgPath+".") || sourceType == typeCfg.SourceType) {
-					resolvedSourceType = typeCfg.SourceType
+				if types.IsPrimitiveType(sourceType) || strings.Contains(sourceType, "/") || strings.Contains(sourceType, ".") {
+					resolvedSourceType = sourceType // Already primitive or fully qualified
 				} else {
-					// Attempt to resolve as a general type
-					srcInfo := w.resolveTargetType(sourceType)
-					if srcInfo.ImportPath != "" && srcInfo.Name != "" {
-						resolvedSourceType = srcInfo.ImportPath + "." + srcInfo.Name
-					} else {
-						resolvedSourceType = sourceType // Fallback for primitive types or unresolved
+					// Try to find the field type in the main source struct (typeCfg.SourceType)
+					found := false
+					for _, field := range mainSourceTypeInfo.Fields {
+						// The 'sourceType' in directive refers to the FIELD'S TYPE NAME, not field name
+						// So we compare 'sourceType' (e.g., "Gender") with the base name of 'field.Type'
+						if strings.HasSuffix(field.Type, sourceType) { // Basic check for now
+							resolvedSourceType = field.Type
+							found = true
+							break
+						}
+					}
+					if !found {
+						// If not found as a field type, attempt to resolve globally
+						srcInfo := w.resolveTargetType(sourceType)
+						if srcInfo.ImportPath != "" && srcInfo.Name != "" {
+							resolvedSourceType = srcInfo.ImportPath + "." + srcInfo.Name
+						} else {
+							resolvedSourceType = sourceType // Fallback if still unresolved
+						}
 					}
 				}
 
 				var resolvedTargetType string
-				if typeCfg.TargetType != "" && (targetType == strings.TrimPrefix(typeCfg.TargetType, w.currentPkg.PkgPath+".") || targetType == typeCfg.TargetType) {
-					resolvedTargetType = typeCfg.TargetType
+				if types.IsPrimitiveType(targetType) || strings.Contains(targetType, "/") || strings.Contains(targetType, ".") {
+					resolvedTargetType = targetType // Already primitive or fully qualified
 				} else {
-					// Attempt to resolve as a general type
-					dstInfo := w.resolveTargetType(targetType)
-					if dstInfo.ImportPath != "" && dstInfo.Name != "" {
-						resolvedTargetType = dstInfo.ImportPath + "." + dstInfo.Name
-					} else {
-						resolvedTargetType = targetType // Fallback for primitive types or unresolved
+					// Try to find the field type in the main target struct (typeCfg.TargetType)
+					found := false
+					for _, field := range mainTargetTypeInfo.Fields {
+						if strings.HasSuffix(field.Type, targetType) { // Basic check for now
+							resolvedTargetType = field.Type
+							found = true
+							break
+						}
+					}
+					if !found {
+						// If not found as a field type, attempt to resolve globally
+						dstInfo := w.resolveTargetType(targetType)
+						if dstInfo.ImportPath != "" && dstInfo.Name != "" {
+							resolvedTargetType = dstInfo.ImportPath + "." + dstInfo.Name
+						} else {
+							resolvedTargetType = targetType // Fallback if still unresolved
+						}
 					}
 				}
 
@@ -375,31 +420,38 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 	slog.Debug("resolveTargetType: 开始解析目标类型", "targetType", targetType)
 	// 1. Check cache first
 	if info, exists := w.typeCache[targetType]; exists {
-		slog.Debug("resolveTargetType: 从缓存中找到", "targetType", targetType)
+		slog.Debug("resolveTargetType: 从缓存中找到", "targetType", targetType, "info.Name", info.Name, "info.ImportPath", info.ImportPath)
 		return info
 	}
 
 	// 立即将当前类型添加到缓存中，防止循环引用导致死循环
 	// 先创建一个占位符，稍后更新实际内容
 	w.typeCache[targetType] = types.TypeInfo{Name: targetType}
+	slog.Debug("resolveTargetType: 添加占位符到缓存", "targetType", targetType)
 
 	// 2. Handle local aliases within all known packages
 	slog.Debug("resolveTargetType: 检查所有已知包中的本地别名", "targetType", targetType)
 	for _, pkg := range w.allKnownPkgs {
-		slog.Debug("resolveTargetType: 检查包", "PkgPath", pkg.PkgPath)
+		// slog.Debug("resolveTargetType: 检查包", "PkgPath", pkg.PkgPath) // Too verbose
 		for _, file := range pkg.Syntax {
 			for _, decl := range file.Decls {
 				if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
 					for _, spec := range genDecl.Specs {
 						if typeSpec, ok := spec.(*goast.TypeSpec); ok && typeSpec.Name.Name == targetType {
-							slog.Debug("resolveTargetType: 在已知包中找到本地别名", "pkg", pkg.PkgPath, "alias", targetType)
+							slog.Debug("resolveTargetType: 在已知包中找到本地别名定义", "pkg", pkg.PkgPath, "alias", targetType)
 							if aliasIdent, aliasOk := typeSpec.Type.(*goast.Ident); aliasOk {
-								slog.Debug("resolveTargetType: 别名指向同一包内的类型", "alias", targetType, "target", aliasIdent.Name)
-								return w.resolveTargetType(aliasIdent.Name)
+								slog.Debug("resolveTargetType: 别名指向同一包内的类型 (Ident)", "alias", targetType, "targetIdent", aliasIdent.Name)
+								resolvedInfo := w.resolveTargetType(aliasIdent.Name) // RECURSIVE CALL
+								w.typeCache[targetType] = resolvedInfo               // Cache the final resolved type under the original alias name
+								slog.Debug("resolveTargetType: 递归调用返回 (Ident)", "targetType", targetType, "resolvedName", resolvedInfo.Name, "resolvedPath", resolvedInfo.ImportPath)
+								return resolvedInfo
 							} else if aliasSelector, aliasOk := typeSpec.Type.(*goast.SelectorExpr); aliasOk {
 								aliasedTypeName := w.exprToString(aliasSelector, pkg)
-								slog.Debug("resolveTargetType: 别名指向导入类型", "alias", targetType, "target", aliasedTypeName)
-								return w.resolveTargetType(aliasedTypeName)
+								slog.Debug("resolveTargetType: 别名指向导入类型 (SelectorExpr)", "alias", targetType, "targetQualified", aliasedTypeName)
+								resolvedInfo := w.resolveTargetType(aliasedTypeName) // RECURSIVE CALL
+								w.typeCache[targetType] = resolvedInfo               // Cache the final resolved type under the original alias name
+								slog.Debug("resolveTargetType: 递归调用返回 (SelectorExpr)", "targetType", targetType, "resolvedName", resolvedInfo.Name, "resolvedPath", resolvedInfo.ImportPath)
+								return resolvedInfo
 							}
 						}
 					}
@@ -420,7 +472,7 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 		// First, try to find the package by its full PkgPath if pkgIdentifier is a full path
 		slog.Debug("resolveTargetType: 尝试通过完整包路径查找", "pkgIdentifier", pkgIdentifier)
 		for _, p := range w.allKnownPkgs {
-			slog.Debug("resolveTargetType: 检查已知包", "p.PkgPath", p.PkgPath)
+			// slog.Debug("resolveTargetType: 检查已知包", "p.PkgPath", p.PkgPath) // Too verbose
 			if p.PkgPath == pkgIdentifier {
 				foundPkg = p
 				slog.Debug("resolveTargetType: 找到匹配的已知包 (通过完整路径)", "foundPkg.PkgPath", foundPkg.PkgPath, "foundPkg.Name", foundPkg.Name)
@@ -434,7 +486,7 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 			if importPath, exists := w.imports[pkgIdentifier]; exists {
 				slog.Debug("resolveTargetType: 找到导入别名", "alias", pkgIdentifier, "importPath", importPath)
 				for _, p := range w.allKnownPkgs {
-					slog.Debug("resolveTargetType: 检查已知包 (通过别名)", "p.PkgPath", p.PkgPath)
+					// slog.Debug("resolveTargetType: 检查已知包 (通过别名)", "p.PkgPath", p.PkgPath) // Too verbose
 					if p.PkgPath == importPath {
 						foundPkg = p
 						slog.Debug("resolveTargetType: 找到匹配的已知包 (通过别名)", "foundPkg.PkgPath", foundPkg.PkgPath, "foundPkg.Name", foundPkg.Name)
@@ -452,11 +504,11 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 					if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
 						for _, spec := range genDecl.Specs {
 							if typeSpec, ok := spec.(*goast.TypeSpec); ok && typeSpec.Name.Name == typeName {
-								slog.Debug("resolveTargetType: 成功找到 TypeSpec", "typeName", typeName)
+								slog.Debug("resolveTargetType: 成功找到 TypeSpec", "typeName", typeName, "pkgPath", foundPkg.PkgPath)
 								// 6. Parse and return its struct info
 								info := w.parseStructFields(typeSpec, foundPkg)
-								w.typeCache[targetType] = info // Cache the result with full qualifier
-								slog.Debug("resolveTargetType: 返回 TypeInfo", "typeName", info.Name, "pkgName", info.PkgName)
+								w.typeCache[targetType] = info // Cache the result with original targetType
+								slog.Debug("resolveTargetType: 返回 TypeInfo", "typeName", info.Name, "pkgName", info.PkgName, "importPath", info.ImportPath)
 								return info
 							}
 						}
@@ -465,7 +517,7 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 			}
 			slog.Debug("resolveTargetType: 未在找到的包的Syntax中找到TypeSpec", "typeName", typeName, "foundPkg.PkgPath", foundPkg.PkgPath)
 		} else {
-			slog.Debug("resolveTargetType: 未在已知包中找到限定类型所属的包", "pkgIdentifier", pkgIdentifier, "typeName", typeName)
+			slog.Debug("resolveTargetType: 未在已知包中找到限定类型所属的包，尝试动态加载", "pkgIdentifier", pkgIdentifier, "typeName", typeName)
 			// 尝试动态加载包
 			if strings.Contains(pkgIdentifier, "/") {
 				slog.Debug("resolveTargetType: 尝试动态加载包", "pkgPath", pkgIdentifier)
@@ -482,6 +534,7 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 										slog.Debug("resolveTargetType: 在动态加载的包中找到类型", "typeName", typeName)
 										info := w.parseStructFields(typeSpec, foundPkg)
 										w.typeCache[targetType] = info
+										slog.Debug("resolveTargetType: 返回动态加载包中的TypeInfo", "typeName", info.Name, "pkgName", info.PkgName, "importPath", info.ImportPath)
 										return info
 									}
 								}
@@ -660,56 +713,67 @@ func (w *PackageWalker) AddConversion(cfg *types.ConversionConfig) {
 	graphNode := w.graph[cfg.SourceType]
 	graphNode.Configs[configKey] = cfg
 
-	// 方向处理逻辑
-	switch cfg.Direction {
-	case "to":
-		graphNode.ToConversions = AppendIfNotExists(graphNode.ToConversions, cfg.TargetType)
-	case "from":
-		// 'from' means cfg.SourceType can be converted FROM cfg.TargetType.
-		// So cfg.TargetType becomes the source for conversion TO cfg.SourceType.
-		// We need to ensure the target type node exists to record this.
-		w.ensureNodeExists(cfg.TargetType)
-		targetNode := w.graph[cfg.TargetType]
-		targetNode.FromConversions = AppendIfNotExists(targetNode.FromConversions, cfg.SourceType)
-
-		// Also, register a conversion config from Target to Source.
-		// Create a new config for the reverse direction in the graph.
-		reverseCfg := *cfg // Create a copy
-		reverseCfg.SourceType = cfg.TargetType
-		reverseCfg.TargetType = cfg.SourceType
-		reverseCfg.Direction = "to" // The reversed config is now a "to" conversion from its new source.
-
-		reverseConfigKey := reverseCfg.SourceType + "2" + reverseCfg.TargetType
-		if targetNode.Configs == nil {
-			targetNode.Configs = make(map[string]*types.ConversionConfig)
+			// 方向处理逻辑
+		switch cfg.Direction {
+		case "to":
+			graphNode.ToConversions = AppendIfNotExists(graphNode.ToConversions, cfg.TargetType)
+		case "from":
+			// 'from' means cfg.SourceType can be converted FROM cfg.TargetType.
+			// So cfg.TargetType becomes the source for conversion TO cfg.SourceType.
+			// We need to ensure the target type node exists to record this.
+			w.ensureNodeExists(cfg.TargetType)
+			targetNode := w.graph[cfg.TargetType]
+			targetNode.FromConversions = AppendIfNotExists(targetNode.FromConversions, cfg.SourceType)
+	
+			// Also, register a conversion config from Target to Source.
+			// Create a new config for the reverse direction in the graph.
+			reverseCfg := *cfg // Create a copy
+			reverseCfg.SourceType = cfg.TargetType
+			reverseCfg.TargetType = cfg.SourceType
+			reverseCfg.Direction = "to" // The reversed config is now a "to" conversion from its new source.
+	
+			// Swap prefixes/suffixes for the reverse config
+			reverseCfg.SourcePrefix = cfg.TargetPrefix
+			reverseCfg.SourceSuffix = cfg.TargetSuffix
+			reverseCfg.TargetPrefix = cfg.SourcePrefix
+			reverseCfg.TargetSuffix = cfg.SourceSuffix
+	
+			reverseConfigKey := reverseCfg.SourceType + "2" + reverseCfg.TargetType
+			if targetNode.Configs == nil {
+				targetNode.Configs = make(map[string]*types.ConversionConfig)
+			}
+			targetNode.Configs[reverseConfigKey] = &reverseCfg
+	
+		default: // "both"
+			// Handle SourceType -> TargetType
+			graphNode.ToConversions = AppendIfNotExists(graphNode.ToConversions, cfg.TargetType)
+	
+			// Handle TargetType -> SourceType (the reverse conversion)
+			w.ensureNodeExists(cfg.TargetType)
+			targetNode := w.graph[cfg.TargetType]
+			targetNode.FromConversions = AppendIfNotExists(targetNode.FromConversions, cfg.SourceType)
+	
+			// Explicitly create and store a ConversionConfig for the reverse direction
+			reverseCfg := *cfg // Create a copy of the original config
+			reverseCfg.SourceType = cfg.TargetType
+			reverseCfg.TargetType = cfg.SourceType
+			reverseCfg.Direction = "to" // The reversed config is now a "to" conversion from its new source.
+	
+			// Swap prefixes/suffixes for the reverse config
+			reverseCfg.SourcePrefix = cfg.TargetPrefix
+			reverseCfg.SourceSuffix = cfg.TargetSuffix
+			reverseCfg.TargetPrefix = cfg.SourcePrefix
+			reverseCfg.TargetSuffix = cfg.SourceSuffix
+	
+			reverseConfigKey := reverseCfg.SourceType + "2" + reverseCfg.TargetType
+			if targetNode.Configs == nil {
+				targetNode.Configs = make(map[string]*types.ConversionConfig)
+			}
+			targetNode.Configs[reverseConfigKey] = &reverseCfg
 		}
-		targetNode.Configs[reverseConfigKey] = &reverseCfg
-
-	default: // "both"
-		// Handle SourceType -> TargetType
-		graphNode.ToConversions = AppendIfNotExists(graphNode.ToConversions, cfg.TargetType)
-
-		// Handle TargetType -> SourceType (the reverse conversion)
-		w.ensureNodeExists(cfg.TargetType)
-		targetNode := w.graph[cfg.TargetType]
-		targetNode.FromConversions = AppendIfNotExists(targetNode.FromConversions, cfg.SourceType)
-
-		// Explicitly create and store a ConversionConfig for the reverse direction
-		reverseCfg := *cfg // Create a copy of the original config
-		reverseCfg.SourceType = cfg.TargetType
-		reverseCfg.TargetType = cfg.SourceType
-		reverseCfg.Direction = "to" // The reversed config is now a "to" conversion from its new source.
-
-		reverseConfigKey := reverseCfg.SourceType + "2" + reverseCfg.TargetType
-		if targetNode.Configs == nil {
-			targetNode.Configs = make(map[string]*types.ConversionConfig)
-		}
-		targetNode.Configs[reverseConfigKey] = &reverseCfg
-	}
-	// For "to" and "both" directions, the original config (SourceType -> TargetType) is handled implicitly by graphNode.Configs[configKey] = cfg
-	// For "from" direction, we explicitly created and added a reversed config.
-	// We need to make sure that the original config (SourceType -> TargetType) is NOT stored if the direction is "from".
-	if cfg.Direction == "from" {
-		delete(graphNode.Configs, configKey)
-	}
-}
+		// For "to" and "both" directions, the original config (SourceType -> TargetType) is handled implicitly by graphNode.Configs[configKey] = cfg
+		// For "from" direction, we explicitly created and added a reversed config.
+		// We need to make sure that the original config (SourceType -> TargetType) is NOT stored if the direction is "from".
+		if cfg.Direction == "from" {
+			delete(graphNode.Configs, configKey)
+		}}
