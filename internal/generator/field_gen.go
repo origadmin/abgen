@@ -115,8 +115,8 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 			continue
 		}
 
-		if (resolvedRuleSource.ImportPath + "." + resolvedRuleSource.Name == sourceFieldTypeFQ || resolvedRuleSource.Name == strings.TrimPrefix(sourceFieldTypeFQ, "*")) &&
-			(resolvedRuleTarget.ImportPath + "." + resolvedRuleTarget.Name == targetFieldTypeFQ || resolvedRuleTarget.Name == strings.TrimPrefix(targetFieldTypeFQ, "*")) {
+		if (resolvedRuleSource.ImportPath+"."+resolvedRuleSource.Name == sourceFieldTypeFQ || resolvedRuleSource.Name == strings.TrimPrefix(sourceFieldTypeFQ, "*")) &&
+			(resolvedRuleTarget.ImportPath+"."+resolvedRuleTarget.Name == targetFieldTypeFQ || resolvedRuleTarget.Name == strings.TrimPrefix(targetFieldTypeFQ, "*")) {
 
 			slog.Debug("generateConversion: 应用 Type-level Custom Rule (FQ Match)",
 				"Source", sourceFieldTypeFQ,
@@ -126,7 +126,6 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 			return fmt.Sprintf("dst.%s = %s(src.%s)", dstField.Name, rule.ConvertFunc, srcField.Name), nil
 		}
 	}
-
 
 	// 2. 检查直接类型映射 (来自 RegisterTypeConversion/Pattern)
 	if rule, exists := fg.conversionRules[key]; exists {
@@ -278,7 +277,6 @@ func (fg *FieldGenerator) buildElementConversionFuncName(srcElem, dstElem string
 	srcAlias := cfg.SourcePrefix + srcInfo.Name + cfg.SourceSuffix
 	dstAlias := cfg.TargetPrefix + dstInfo.Name + cfg.TargetSuffix
 
-
 	slog.Debug("buildElementConversionFuncName: 生成函数名",
 		"fullSrcType", fullSrcType, "srcInfo.Name", srcInfo.Name, "srcAlias", srcAlias,
 		"fullDstType", fullDstType, "dstInfo.Name", dstInfo.Name, "dstAlias", dstAlias,
@@ -286,8 +284,6 @@ func (fg *FieldGenerator) buildElementConversionFuncName(srcElem, dstElem string
 
 	return fmt.Sprintf("Convert%sTo%s", srcAlias, dstAlias), nil
 }
-
-
 
 // UpdateTypeMap 更新类型映射表
 func (fg *FieldGenerator) UpdateTypeMap() {
@@ -497,4 +493,12 @@ func (fg *FieldGenerator) LoadTemplatesFromDir() error {
 // The resolver is used to inspect and get information about Go source types.
 func (fg *FieldGenerator) SetResolver(resolver ast.TypeResolver) {
 	fg.resolver = resolver
+}
+
+// createTypeAlias is a placeholder function to make the code compile.
+// The logic for managing imports and aliases should be handled more centrally.
+func createTypeAlias(name, pkgName, prefix, suffix, generatorPkgPath string) string {
+	// This is a simplification. A real implementation would need to manage
+	// import aliases to avoid conflicts. For now, just return the type name.
+	return name
 }

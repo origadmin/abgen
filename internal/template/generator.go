@@ -1,111 +1,62 @@
+// Package template provides the templating engine for abgen.
 package template
 
 import (
 	"bytes"
-	_ "embed"
-	"fmt"
-	"log/slog"
-	"os"
-	"path/filepath"
-	"strings"
+	"embed"
 	"text/template"
+
+	"github.com/origadmin/abgen/internal/types"
 )
 
-//go:embed generator.tpl
-var generatorTemplate string // generator.tpl
+//go:embed *.tpl
+var templates embed.FS
 
-const generatorTemplateName = "generator"
-
+// Renderer is the interface for rendering templates.
 type Renderer interface {
 	Render(templateName string, data interface{}) ([]byte, error)
 }
 
-type Generator struct {
-	templates map[string]*template.Template
+// Manager is a template manager that holds and renders templates.
+type Manager struct {
+	tmpl *template.Template
 }
 
-// Load 加载模板
-func (tm *Generator) Load(name string) error {
-	var tmplContent string
-
-	switch name {
-	case generatorTemplateName:
-		tmplContent = generatorTemplate
-	default:
-		return fmt.Errorf("未知模板: %s", name)
-	}
-
-	// 解析模板
-	tmpl, err := template.New(name).Parse(tmplContent)
-	if err != nil {
-		return err
-	}
-
-	tm.templates[name] = tmpl
-	return nil
+// NewManager creates a new template manager and parses the embedded templates.
+func NewManager() *Manager {
+	tmpl := template.Must(template.ParseFS(templates, "*.tpl"))
+	return &Manager{tmpl: tmpl}
 }
 
-// Render 渲染模板
-func (tm *Generator) Render(name string, data interface{}) ([]byte, error) {
-	if name == "" {
-		name = generatorTemplateName
-	}
-	// 先尝试使用已加载的模板
-	tmpl, exists := tm.templates[name]
-	if !exists {
-		// 如果没有加载，尝试加载内置模板
-		if err := tm.Load(generatorTemplateName); err != nil {
-			return nil, err
-		}
-		tmpl = tm.templates[name]
-	}
-
+// Render executes the named template with the given data.
+func (m *Manager) Render(templateName string, data interface{}) ([]byte, error) {
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
+	if err := m.tmpl.ExecuteTemplate(&buf, templateName, data); err != nil {
 		return nil, err
 	}
-
 	return buf.Bytes(), nil
 }
 
-func NewManager() Renderer {
-	return &Generator{
-		templates: make(map[string]*template.Template),
-	}
+// Data is the top-level struct passed to the template.
+type Data struct {
+	PackageName string
+	Imports     []Import
+	TypeAliases []string
+	Funcs       []*Function
 }
 
-// LoadFromDir 从目录加载自定义转换模板
-func (tm *Generator) LoadFromDir(dir string) error {
-	if dir == "" {
-		return nil
-	}
+// Import represents a single import statement.
+type Import struct {
+	Alias string
+	Path  string
+}
 
-	files, err := os.ReadDir(dir)
-	if err != nil {
-		return fmt.Errorf("读取模板目录失败: %w", err)
-	}
-
-	// 创建主转换模板
-	customTmpl := template.New("custom_conversion")
-
-	for _, file := range files {
-		if file.IsDir() || !strings.HasSuffix(file.Name(), ".tpl") {
-			continue
-		}
-
-		content, err := os.ReadFile(filepath.Join(dir, file.Name()))
-		if err != nil {
-			slog.Info("读取模板文件失败", "文件", file.Name(), "错误", err)
-			continue
-		}
-
-		_, err = customTmpl.Parse(string(content))
-		if err != nil {
-			slog.Info("模板内容", "内容", string(content))
-		}
-	}
-
-	// 存储自定义模板
-	tm.templates["custom_conversion"] = customTmpl
-	return nil
+// Function represents a single conversion function to be generated.
+type Function struct {
+	Name          string
+	SourceType    string
+	TargetType    string
+	SourcePointer string
+	TargetPointer string
+	Conversions   []types.FieldConversion
 }

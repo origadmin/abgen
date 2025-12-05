@@ -1,52 +1,52 @@
 // Package types implements the functions, types, and interfaces for the module.
 package types
 
+// EndpointConfig describes a source or target endpoint for a conversion.
+type EndpointConfig struct {
+	Type   string // Fully qualified type name, e.g., "github.com/my/pkg.UserEntity"
+	Prefix string // Prefix to add to the type name for function naming.
+	Suffix string // Suffix to add to the type name, e.g., "Ent".
+}
+
 // TypeConversionRule defines a rule for converting between two specific types.
 type TypeConversionRule struct {
 	SourceTypeName string // The name of the source type (e.g., "Gender", "time.Time").
 	TargetTypeName string // The name of the target type (e.g., "string", "timestamp.Timestamp").
 	ConvertFunc    string // The name of the custom conversion function to use.
-	// Direction   string // Optional: "to", "from", or "both" if different functions are used for each direction.
-	// For now, we assume a single rule implies a specific direction or is part of a pair.
 }
 
-// ConversionConfig 转换配置
+// ConversionConfig holds the complete configuration for a single conversion pair.
 type ConversionConfig struct {
-	SourceType       string
-	TargetType       string
-	Direction        string // both/to/from
-	IgnoreFields     map[string]bool
-	// FieldFuncs       map[string]string // Old: Replaced by FieldConversionRules
-	// FieldConversionRules []FieldConversionRule // Old: Replaced by TypeConversionRules
-	TypeConversionRules []TypeConversionRule // New: Stores detailed type conversion rules.
-	SrcPackage       string
-	DstPackage       string
-	SourcePrefix     string
-	SourceSuffix     string
-	TargetPrefix     string
-	TargetSuffix     string
-	GeneratorPkgPath string // The package path where the generation is happening
+	Source              *EndpointConfig
+	Target              *EndpointConfig
+	Direction           string // "both", "to", "from"
+	IgnoreFields        map[string]bool
+	RemapFields         map[string]string // Maps TargetField -> SourcePath (e.g., "RoleIDs": "Edges.Roles.ID")
+	TypeConversionRules []TypeConversionRule
+	GeneratorPkgPath    string // The package path where the generation is happening
 }
-
-// ConversionNode 类型转换节点
-type ConversionNode struct {
-	FromConversions []string // 该类型可作为源类型的转换目标
-	ToConversions   []string // 该类型可作为目标类型的来源
-	Configs         map[string]*ConversionConfig
-}
-
-// ConversionGraph 类型转换关系图
-type ConversionGraph map[string]*ConversionNode
 
 // PackageConversionConfig holds the configuration for converting all matching types between two packages.
 type PackageConversionConfig struct {
-	SourcePackage string
-	TargetPackage string
-	Direction     string
-	IgnoreTypes   map[string]bool
-	FieldMap      map[string]string
-	SourcePrefix  string
-	SourceSuffix  string
-	TargetPrefix  string
-	TargetSuffix  string
+	SourcePackage       string
+	TargetPackage       string
+	Direction           string
+	IgnoreTypes         map[string]bool
+	IgnoreFields        map[string]bool
+	RemapFields         map[string]string
+	TypeConversionRules []TypeConversionRule
+	SourcePrefix        string
+	SourceSuffix        string
+	TargetPrefix        string
+	TargetSuffix        string
 }
+
+// ConversionNode represents a type in the conversion graph.
+type ConversionNode struct {
+	FromConversions []string // List of types that can be converted TO this type.
+	ToConversions   []string // List of types this type can be converted FROM.
+	Configs         map[string]*ConversionConfig
+}
+
+// ConversionGraph represents the entire map of type conversions.
+type ConversionGraph map[string]*ConversionNode
