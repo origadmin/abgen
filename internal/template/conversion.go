@@ -90,7 +90,7 @@ func (c *Convert) LoadExternalTemplates(paths ...string) error {
 
 // Convert 带缓存的转换方法
 func (c *Convert) Convert(w io.Writer, params types.ConversionConfig) error {
-	key := fmt.Sprintf("%s:%s", params.SourceType, params.TargetType)
+	key := fmt.Sprintf("%s:%s", params.Source.Type, params.Target.Type)
 
 	// 缓存查找（O(1)时间复杂度）
 	templateName, exists := c.cacheMap[key]

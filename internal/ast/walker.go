@@ -28,8 +28,8 @@ type PackageWalker struct {
 	localTypeAliases map[string]string   // New: to track local type aliases
 }
 
-// AddKnownPackages adds more *packages.Package instances to the walker's known packages.
-func (w *PackageWalker) AddKnownPackages(pkgs ...*packages.Package) {
+// AddPackages adds more *packages.Package instances to the walker's known packages.
+func (w *PackageWalker) AddPackages(pkgs ...*packages.Package) {
 	existingPkgs := make(map[string]bool)
 	for _, p := range w.allKnownPkgs {
 		existingPkgs[p.PkgPath] = true
@@ -109,24 +109,42 @@ func (w *PackageWalker) WalkPackage(pkg *packages.Package) error {
 	slog.Info("开始遍历包", "包", pkg.PkgPath)
 	w.currentPkg = pkg
 
-	for _, file := range pkg.Syntax {
-		w.collectImports(file)
+	w.collectImports(pkg.Syntax) // Collect imports from all files in the package
+	slog.Debug("WalkPackage: collected imports", "imports", w.imports)
+
+	// Add the current package and all its imported packages to allKnownPkgs
+	w.AddPackages(pkg)
+	for _, impPkg := range pkg.Imports {
+		w.AddPackages(impPkg)
 	}
+	slog.Debug("WalkPackage: allKnownPkgs after adding imports", "allKnownPkgs", func() []string {
+		paths := make([]string, len(w.allKnownPkgs))
+		for i, p := range w.allKnownPkgs {
+			paths[i] = p.PkgPath
+		}
+		return paths
+	}())
+
+	slog.Debug("WalkPackage: Number of files in pkg.Syntax", "count", len(pkg.Syntax))
 
 	for _, file := range pkg.Syntax {
 		filename := pkg.Fset.File(file.Pos()).Name()
 		slog.Info("遍历文件", "文件", filename)
 		if strings.HasSuffix(filepath.Base(filename), ".gen.go") {
+			slog.Debug("WalkPackage: Skipping generated file", "file", filename)
 			continue
 		}
 		if err := w.processFileDecls(file); err != nil {
 			return err
 		}
 	}
+	slog.Debug("WalkPackage: Finished processing package", "pkgPath", pkg.PkgPath, "PackageConfigsFound", len(w.PackageConfigs))
 	return nil
 }
 
 func (w *PackageWalker) processFileDecls(file *goast.File) error {
+	slog.Debug("processFileDecls: Processing file", "filename", w.currentPkg.Fset.File(file.Pos()).Name())
+
 	// Pass 1: Collect all type aliases in the file first.
 	for _, decl := range file.Decls {
 		if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
@@ -142,7 +160,9 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 	}
 
 	// Pass 2: Find directive groups and process them.
+	slog.Debug("processFileDecls: Number of comment groups", "count", len(file.Comments))
 	for _, commentGroup := range file.Comments {
+		slog.Debug("processFileDecls: Processing comment group", "commentGroup", commentGroup.Text())
 		var definingDirective string
 		var modifierDirectives []string
 		isPackagePair := false
@@ -150,22 +170,28 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 
 		for _, comment := range commentGroup.List {
 			line := comment.Text
+			slog.Debug("processFileDecls: Processing comment line", "line", line)
 			if !strings.HasPrefix(line, "//go:abgen:") {
 				continue
 			}
 			isDirectiveGroup = true
 			directive := strings.TrimPrefix(line, "//go:abgen:")
+			slog.Debug("processFileDecls: Detected abgen directive", "directive", directive)
 			if strings.HasPrefix(directive, "pair:packages=") {
 				definingDirective = line
 				isPackagePair = true
+				slog.Debug("processFileDecls: Detected package pair directive", "definingDirective", definingDirective)
 			} else if strings.HasPrefix(directive, "convert=") {
 				definingDirective = line
+				slog.Debug("processFileDecls: Detected convert directive", "definingDirective", definingDirective)
 			} else {
 				modifierDirectives = append(modifierDirectives, line)
+				slog.Debug("processFileDecls: Detected modifier directive", "modifierDirective", line)
 			}
 		}
 
 		if !isDirectiveGroup || definingDirective == "" {
+			slog.Debug("processFileDecls: Not a directive group or no defining directive found", "isDirectiveGroup", isDirectiveGroup, "definingDirective", definingDirective)
 			continue
 		}
 
@@ -183,7 +209,10 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 			}
 			if pkgCfg.SourcePackage != "" && pkgCfg.TargetPackage != "" {
 				w.PackageConfigs = append(w.PackageConfigs, pkgCfg)
-			}
+                slog.Debug("processFileDecls: Appended package config", "sourcePackage", pkgCfg.SourcePackage, "targetPackage", pkgCfg.TargetPackage)
+			} else {
+                slog.Debug("processFileDecls: Did not append package config due to empty source/target package", "sourcePackage", pkgCfg.SourcePackage, "targetPackage", pkgCfg.TargetPackage)
+            }
 		} else { // This is a type-level convert config
 			var associatedDecl *goast.GenDecl
 			for _, decl := range file.Decls {
@@ -204,6 +233,7 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 			}
 
 			if associatedDecl == nil {
+				slog.Debug("processFileDecls: Type-level directive, but no associated declaration found")
 				continue
 			}
 
@@ -231,7 +261,10 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 				}
 				if typeCfg.Target.Type != "" {
 					w.AddConversion(typeCfg)
-				}
+                    slog.Debug("processFileDecls: Added type-level conversion config", "sourceType", typeCfg.Source.Type, "targetType", typeCfg.Target.Type)
+				} else {
+                    slog.Debug("processFileDecls: Did not add type-level conversion config due to empty target type", "sourceType", typeCfg.Source.Type)
+                }
 			}
 		}
 	}
@@ -244,6 +277,8 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 	value = strings.Trim(value, `"`)
 	keys := strings.Split(keyStr, ":")
 	verb := keys[0]
+
+    slog.Debug("parseAndApplyDirective: Processing directive", "line", line, "verb", verb, "keyStr", keyStr, "value", value)
 
 	if typeCfg == nil { // File-level
 		const pkgConfigKey = "pkg-pair"
@@ -258,6 +293,7 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 				if len(paths) == 2 {
 					cfg.SourcePackage = strings.TrimSpace(paths[0])
 					cfg.TargetPackage = strings.TrimSpace(paths[1])
+                    slog.Debug("parseAndApplyDirective: Set pkg-pair SourcePackage/TargetPackage", "source", cfg.SourcePackage, "target", cfg.TargetPackage)
 				}
 			}
 		case "convert":
@@ -312,6 +348,7 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 				} else {
 					typeCfg.Target.Type = targetName
 				}
+                slog.Debug("parseAndApplyDirective: Set type-level Target.Type", "target", typeCfg.Target.Type)
 			}
 		} else if len(keys) == 2 { // convert:ignore="..."
 			switch keys[1] {
@@ -360,20 +397,32 @@ func parseRule(value string, walker *PackageWalker) types.TypeConversionRule {
 		if len(kv) == 2 {
 			switch strings.TrimSpace(kv[0]) {
 			case "source":
-				resolvedType, err := walker.Resolve(strings.TrimSpace(kv[1]))
+				rawTypeName := strings.TrimSpace(kv[1])
+				slog.Debug("parseRule: Resolving source type", "rawTypeName", rawTypeName)
+				resolvedType, err := walker.Resolve(rawTypeName)
 				if err != nil {
-					slog.Warn("Failed to resolve source type in rule", "type", strings.TrimSpace(kv[1]), "error", err)
-					rule.SourceTypeName = strings.TrimSpace(kv[1]) // Fallback
+					slog.Warn("Failed to resolve source type in rule", "type", rawTypeName, "error", err)
+					rule.SourceTypeName = rawTypeName
 				} else {
-					rule.SourceTypeName = resolvedType.ImportPath + "." + resolvedType.Name
+                    if resolvedType.ImportPath == "builtin" {
+                        rule.SourceTypeName = resolvedType.Name
+                    } else {
+                        rule.SourceTypeName = resolvedType.ImportPath + "." + resolvedType.Name
+                    }
 				}
 			case "target":
-				resolvedType, err := walker.Resolve(strings.TrimSpace(kv[1]))
+				rawTypeName := strings.TrimSpace(kv[1])
+				slog.Debug("parseRule: Resolving target type", "rawTypeName", rawTypeName)
+				resolvedType, err := walker.Resolve(rawTypeName)
 				if err != nil {
-					slog.Warn("Failed to resolve target type in rule", "type", strings.TrimSpace(kv[1]), "error", err)
-					rule.TargetTypeName = strings.TrimSpace(kv[1]) // Fallback
+					slog.Warn("Failed to resolve target type in rule", "type", rawTypeName, "error", err)
+					rule.TargetTypeName = rawTypeName
 				} else {
-					rule.TargetTypeName = resolvedType.ImportPath + "." + resolvedType.Name
+                    if resolvedType.ImportPath == "builtin" {
+                        rule.TargetTypeName = resolvedType.Name
+                    } else {
+                        rule.TargetTypeName = resolvedType.ImportPath + "." + resolvedType.Name
+                    }
 				}
 			case "func":
 				rule.ConvertFunc = strings.TrimSpace(kv[1])
@@ -385,40 +434,61 @@ func parseRule(value string, walker *PackageWalker) types.TypeConversionRule {
 
 // resolveTargetType resolves the TypeInfo for a given type name, which may be in an external package.
 func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
-	slog.Debug("resolveTargetType: 开始解析目标类型", "targetType", targetType)
-	// 1. Check cache first
-	if info, exists := w.typeCache[targetType]; exists {
-		slog.Debug("resolveTargetType: 从缓存中找到", "targetType", targetType, "info.Name", info.Name, "info.ImportPath", info.ImportPath)
+	slog.Debug("resolveTargetType: starting type resolution", "targetType", targetType)
+
+	// 0. Handle built-in types (e.g., "string", "int", "bool")
+	// These types don't have an import path or package name in the same way as custom types.
+	if gotypes.Universe.Lookup(targetType) != nil { // Check if it's a Go built-in type
+		info := types.TypeInfo{
+			Name:       targetType,
+			PkgName:    "builtin",
+			ImportPath: "builtin", // A special placeholder for built-in types
+		}
+		w.typeCache[targetType] = info
+		slog.Debug("resolveTargetType: found built-in type", "targetType", targetType, "returnedInfo.Name", info.Name)
 		return info
 	}
 
-	// 立即将当前类型添加到缓存中，防止循环引用导致死循环
-	// 先创建一个占位符，稍后更新实际内容
+	// 1. Check cache first
+	if info, exists := w.typeCache[targetType]; exists {
+		slog.Debug("resolveTargetType: found in cache", "targetType", targetType, "info.Name", info.Name, "info.ImportPath", info.ImportPath)
+        return info // Return cached entry
+	}
+
+	// Immediately add a placeholder to the cache to prevent infinite recursion for cyclic type definitions
+	// The actual content will be updated later.
 	w.typeCache[targetType] = types.TypeInfo{Name: targetType}
-	slog.Debug("resolveTargetType: 添加占位符到缓存", "targetType", targetType)
+	slog.Debug("resolveTargetType: added placeholder to cache", "targetType", targetType)
 
 	// 2. Handle local aliases within all known packages
-	slog.Debug("resolveTargetType: 检查所有已知包中的本地别名", "targetType", targetType)
+	slog.Debug("resolveTargetType: checking local aliases in all known packages", "targetType", targetType)
 	for _, pkg := range w.allKnownPkgs {
 		for _, file := range pkg.Syntax {
 			for _, decl := range file.Decls {
 				if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
 					for _, spec := range genDecl.Specs {
-						if typeSpec, ok := spec.(*goast.TypeSpec); ok && typeSpec.Name.Name == targetType {
-							slog.Debug("resolveTargetType: 在已知包中找到本地别名定义", "pkg", pkg.PkgPath, "alias", targetType)
-							if aliasIdent, aliasOk := typeSpec.Type.(*goast.Ident); aliasOk {
-								slog.Debug("resolveTargetType: 别名指向同一包内的类型 (Ident)", "alias", targetType, "targetIdent", aliasIdent.Name)
-								resolvedInfo := w.resolveTargetType(aliasIdent.Name) // RECURSIVE CALL
-								w.typeCache[targetType] = resolvedInfo               // Cache the final resolved type under the original alias name
-								slog.Debug("resolveTargetType: 递归调用返回 (Ident)", "targetType", targetType, "resolvedName", resolvedInfo.Name, "resolvedPath", resolvedInfo.ImportPath)
-								return resolvedInfo
-							} else if aliasSelector, aliasOk := typeSpec.Type.(*goast.SelectorExpr); aliasOk {
-								aliasedTypeName := w.exprToString(aliasSelector, pkg)
-								slog.Debug("resolveTargetType: 别名指向导入类型 (SelectorExpr)", "alias", targetType, "targetQualified", aliasedTypeName)
-								resolvedInfo := w.resolveTargetType(aliasedTypeName) // RECURSIVE CALL
-								w.typeCache[targetType] = resolvedInfo               // Cache the final resolved type under the original alias name
-								slog.Debug("resolveTargetType: 递归调用返回 (SelectorExpr)", "targetType", targetType, "resolvedName", resolvedInfo.Name, "resolvedPath", resolvedInfo.ImportPath)
-								return resolvedInfo
+						if typeSpec, ok := spec.(*goast.TypeSpec); ok {
+							if typeSpec.Name.Name == targetType { // THIS IS WHERE THE COMPARISON HAPPENS
+								slog.Debug("resolveTargetType: successfully found TypeSpec", "typeName", typeSpec.Name.Name, "pkgPath", pkg.PkgPath)
+								var info types.TypeInfo
+								// Check if it's a struct type
+								if _, isStruct := typeSpec.Type.(*goast.StructType); isStruct {
+									// If it's a struct, parse its fields
+									info = w.parseStructFields(typeSpec, pkg)
+								} else {
+									// If it's a named type but not a struct (e.g., `type Status string`),
+									// just create a TypeInfo without parsing fields.
+									info = types.TypeInfo{
+										Name:        typeSpec.Name.Name,
+										PkgName:     pkg.Name,
+										ImportPath:  pkg.PkgPath,
+										ImportAlias: w.findAliasForPath(pkg.PkgPath),
+										// Fields remains empty for non-struct types
+									}
+								}
+								w.typeCache[targetType] = info // Cache the result with original targetType
+								slog.Debug("resolveTargetType: returning TypeInfo", "typeName", info.Name, "pkgName", info.PkgName, "importPath", info.ImportPath)
+								return info
 							}
 						}
 					}
@@ -432,74 +502,102 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 	if len(parts) > 1 {
 		pkgIdentifier := strings.Join(parts[:len(parts)-1], ".") // Handle full path like "a/b/c.Type"
 		typeName := parts[len(parts)-1]
-		slog.Debug("resolveTargetType: 处理限定类型", "pkgIdentifier", pkgIdentifier, "typeName", typeName)
+		slog.Debug("resolveTargetType: handling qualified type", "pkgIdentifier", pkgIdentifier, "typeName", typeName)
 
 		var foundPkg *packages.Package
 
 		// First, try to find the package by its full PkgPath if pkgIdentifier is a full path
-		slog.Debug("resolveTargetType: 尝试通过完整包路径查找", "pkgIdentifier", pkgIdentifier)
+		slog.Debug("resolveTargetType: trying to find by full package path", "pkgIdentifier", pkgIdentifier)
 		for _, p := range w.allKnownPkgs {
 			if p.PkgPath == pkgIdentifier {
 				foundPkg = p
-				slog.Debug("resolveTargetType: 找到匹配的已知包 (通过完整路径)", "foundPkg.PkgPath", foundPkg.PkgPath, "foundPkg.Name", foundPkg.Name)
+				slog.Debug("resolveTargetType: matched known package (by full path)", "foundPkg.PkgPath", foundPkg.PkgPath, "foundPkg.Name", foundPkg.Name)
 				break
 			}
+			slog.Debug("resolveTargetType: pkg path mismatch", "p.PkgPath", p.PkgPath, "pkgIdentifier", pkgIdentifier)
 		}
 
 		// If not found by full PkgPath, try to resolve via imports (alias)
 		if foundPkg == nil {
-			slog.Debug("resolveTargetType: 未通过完整路径找到，尝试通过导入别名查找", "pkgIdentifier", pkgIdentifier)
+			slog.Debug("resolveTargetType: not found by full path, trying by import alias", "pkgIdentifier", pkgIdentifier)
 			if importPath, exists := w.imports[pkgIdentifier]; exists {
-				slog.Debug("resolveTargetType: 找到导入别名", "alias", pkgIdentifier, "importPath", importPath)
+				slog.Debug("resolveTargetType: found import alias", "alias", pkgIdentifier, "importPath", importPath)
 				for _, p := range w.allKnownPkgs {
 					if p.PkgPath == importPath {
 						foundPkg = p
-						slog.Debug("resolveTargetType: 找到匹配的已知包 (通过别名)", "foundPkg.PkgPath", foundPkg.PkgPath, "foundPkg.Name", foundPkg.Name)
+						slog.Debug("resolveTargetType: matched known package (by alias)", "foundPkg.PkgPath", foundPkg.PkgPath, "foundPkg.Name", foundPkg.Name)
 						break
 					}
 				}
+                if foundPkg == nil {
+                    slog.Debug("resolveTargetType: import alias exists, but corresponding package not found in w.allKnownPkgs", "importPath", importPath, "allKnownPkgs_paths", func() []string {
+                        paths := make([]string, len(w.allKnownPkgs))
+                        for i, p := range w.allKnownPkgs {
+                            paths[i] = p.PkgPath
+                        }
+                        return paths
+                    }())
+                }
 			}
 		}
 
 		if foundPkg != nil {
-			slog.Debug("resolveTargetType: 在找到的包中查找类型", "foundPkg.PkgPath", foundPkg.PkgPath, "typeName", typeName)
+			slog.Debug("resolveTargetType: looking for type in found package", "foundPkg.PkgPath", foundPkg.PkgPath, "typeName", typeName)
 			// 5. Find the type spec in the found package
 			for _, file := range foundPkg.Syntax {
+                slog.Debug("resolveTargetType: examining file in foundPkg.Syntax", "fileName", foundPkg.Fset.File(file.Pos()).Name(), "foundPkg.PkgPath", foundPkg.PkgPath)
 				for _, decl := range file.Decls {
 					if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
 						for _, spec := range genDecl.Specs {
-							if typeSpec, ok := spec.(*goast.TypeSpec); ok && typeSpec.Name.Name == typeName {
-								slog.Debug("resolveTargetType: 成功找到 TypeSpec", "typeName", typeName, "pkgPath", foundPkg.PkgPath)
-								// 6. Parse and return its struct info
-								info := w.parseStructFields(typeSpec, foundPkg)
-								w.typeCache[targetType] = info // Cache the result with original targetType
-								slog.Debug("resolveTargetType: 返回 TypeInfo", "typeName", info.Name, "pkgName", info.PkgName, "importPath", info.ImportPath)
-								return info
-							}
-						}
+							if typeSpec, ok := spec.(*goast.TypeSpec); ok {
+                                slog.Debug("resolveTargetType: checking TypeSpec", "foundTypeSpecName", typeSpec.Name.Name, "lookingFor", typeName, "file", foundPkg.Fset.File(file.Pos()).Name())
+                                if typeSpec.Name.Name == typeName { // THIS IS WHERE THE COMPARISON HAPPENS
+                                    slog.Debug("resolveTargetType: successfully found TypeSpec", "typeName", typeSpec.Name.Name, "pkgPath", foundPkg.PkgPath)
+                                    var info types.TypeInfo
+                                    // Check if it's a struct type
+                                    if _, isStruct := typeSpec.Type.(*goast.StructType); isStruct {
+                                        // If it's a struct, parse its fields
+                                        info = w.parseStructFields(typeSpec, foundPkg)
+                                    } else {
+                                        // If it's a named type but not a struct (e.g., `type Status string`),
+                                        // just create a TypeInfo without parsing fields.
+                                        info = types.TypeInfo{
+                                            Name:        typeSpec.Name.Name,
+                                            PkgName:     foundPkg.Name,
+                                            ImportPath:  foundPkg.PkgPath,
+                                            ImportAlias: w.findAliasForPath(foundPkg.PkgPath),
+                                            // Fields remains empty for non-struct types
+                                        }
+                                    }
+                                    w.typeCache[targetType] = info // Cache the result with original targetType
+                                    slog.Debug("resolveTargetType: returning TypeInfo", "typeName", info.Name, "pkgName", info.PkgName, "importPath", info.ImportPath)
+                                    return info
+                                }
+                            }
+                        }
 					}
 				}
 			}
-			slog.Debug("resolveTargetType: 未在找到的包的Syntax中找到TypeSpec", "typeName", typeName, "foundPkg.PkgPath", foundPkg.PkgPath)
+			slog.Debug("resolveTargetType: TypeSpec not found in found package's Syntax", "typeName", typeName, "foundPkg.PkgPath", foundPkg.PkgPath)
 		} else {
-			slog.Debug("resolveTargetType: 未在已知包中找到限定类型所属的包，尝试动态加载", "pkgIdentifier", pkgIdentifier, "typeName", typeName)
-			// 尝试动态加载包
+			slog.Debug("resolveTargetType: qualified type's package not found in known packages, trying dynamic load", "pkgIdentifier", pkgIdentifier, "typeName", typeName)
+			// Attempt dynamic package loading
 			if strings.Contains(pkgIdentifier, "/") {
-				slog.Debug("resolveTargetType: 尝试动态加载包", "pkgPath", pkgIdentifier)
+				slog.Debug("resolveTargetType: attempting dynamic package load", "pkgPath", pkgIdentifier)
 				if loadedPkg, err := w.loadPackage(pkgIdentifier); err == nil {
-					slog.Debug("resolveTargetType: 成功动态加载包", "pkgPath", loadedPkg.PkgPath, "pkgName", loadedPkg.Name)
+					slog.Debug("resolveTargetType: successfully dynamically loaded package", "pkgPath", loadedPkg.PkgPath, "pkgName", loadedPkg.Name)
 					foundPkg = loadedPkg
 					w.allKnownPkgs = append(w.allKnownPkgs, loadedPkg)
-					// 重新查找类型
+					// Re-attempt resolution with the newly loaded package
 					for _, file := range foundPkg.Syntax {
 						for _, decl := range file.Decls {
 							if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
 								for _, spec := range genDecl.Specs {
 									if typeSpec, ok := spec.(*goast.TypeSpec); ok && typeSpec.Name.Name == typeName {
-										slog.Debug("resolveTargetType: 在动态加载的包中找到类型", "typeName", typeName)
+										slog.Debug("resolveTargetType: found type in dynamically loaded package", "typeName", typeName)
 										info := w.parseStructFields(typeSpec, foundPkg)
 										w.typeCache[targetType] = info
-										slog.Debug("resolveTargetType: 返回动态加载包中的TypeInfo", "typeName", info.Name, "pkgName", info.PkgName, "importPath", info.ImportPath)
+										slog.Debug("resolveTargetType: returning TypeInfo from dynamically loaded package", "typeName", info.Name, "pkgName", info.PkgName, "importPath", info.ImportPath)
 										return info
 									}
 								}
@@ -507,14 +605,14 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 						}
 					}
 				} else {
-					slog.Debug("resolveTargetType: 动态加载包失败", "pkgPath", pkgIdentifier, "error", err)
+					slog.Debug("resolveTargetType: dynamic package load failed", "pkgPath", pkgIdentifier, "error", err)
 				}
 			}
 		}
 	}
 
 	// If we reach here, the type was not found. Return an empty TypeInfo.
-	slog.Debug("resolveTargetType: 未找到类型，返回空的TypeInfo", "targetType", targetType)
+	slog.Debug("resolveTargetType: type not found, returning empty TypeInfo", "targetType", targetType)
 	delete(w.typeCache, targetType) // Remove the placeholder
 	return types.TypeInfo{}
 }
@@ -617,21 +715,28 @@ func (w *PackageWalker) loadPackage(importPath string) (*packages.Package, error
 	return pkgs[0], nil
 }
 
-// collectImports collects import statements from a go/ast.File and populates the walker's imports map.
-func (w *PackageWalker) collectImports(file *goast.File) {
-	for _, imp := range file.Imports {
-		alias := ""
-		if imp.Name != nil {
-			alias = imp.Name.Name
-		} else {
-			parts := strings.Split(strings.Trim(imp.Path.Value, `"`), "/")
-			alias = parts[len(parts)-1]
-		}
-		realPath := strings.Trim(imp.Path.Value, `"`)
-		if _, exists := w.imports[alias]; !exists {
-			w.imports[alias] = realPath
+// collectImports collects import statements from a slice of go/ast.File and populates the walker's imports map.
+func (w *PackageWalker) collectImports(files []*goast.File) {
+	for _, file := range files {
+		for _, imp := range file.Imports {
+			alias := ""
+			if imp.Name != nil {
+				alias = imp.Name.Name
+			} else {
+				parts := strings.Split(strings.Trim(imp.Path.Value, `"`), "/")
+				alias = parts[len(parts)-1]
+			}
+			realPath := strings.Trim(imp.Path.Value, `"`)
+			// Only add if not already present to avoid overwriting explicit aliases with implicit ones
+			if _, exists := w.imports[alias]; !exists {
+				w.imports[alias] = realPath
+			}
 		}
 	}
+}
+// GetKnownTypes returns the cache of known types.
+func (w *PackageWalker) GetKnownTypes() map[string]types.TypeInfo {
+	return w.typeCache
 }
 
 // ensureNodeExists ensures a ConversionNode exists for a given type name in the conversion graph.

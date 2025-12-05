@@ -1,6 +1,7 @@
 package core
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 )
 
 func TestGenerator_EndToEnd(t *testing.T) {
+	slog.SetLogLoggerLevel(slog.LevelDebug)
 	g := NewGenerator()
 	tempDir := t.TempDir()
 	g.Output = tempDir
@@ -39,10 +41,10 @@ generatedCode := string(content)
 		if !strings.Contains(generatedCode, "package testdata") {
 			t.Error("expected package 'testdata'")
 		}
-		if !strings.Contains(generatedCode, `ent \"github.com/origadmin/abgen/internal/testdata/ent\"`) {
+		if !strings.Contains(generatedCode, `ent "github.com/origadmin/abgen/internal/testdata/ent"`) {
 			t.Error("expected import for 'ent' package")
 		}
-		if !strings.Contains(generatedCode, `typespb \"github.com/origadmin/abgen/internal/testdata/typespb\"`) {
+		if !strings.Contains(generatedCode, `typespb "github.com/origadmin/abgen/internal/testdata/typespb"`) {
 			t.Error("expected import for 'typespb' package")
 		}
 
@@ -78,11 +80,12 @@ generatedCode := string(content)
 			t.Error("missing custom rule conversion for 'Status'")
 		}
 
-		// Check remap rule (still not implemented in field_gen, but parser handles it)
-		// We expect a warning for now.
-		if !strings.Contains(generatedCode, "// WARNING: unhandled type conversion for field Roles") {
-			// This assertion will change once remap is fully implemented.
-			// t.Error("expected remap conversion for 'Roles'")
+		// Check remap rule
+		if !strings.Contains(generatedCode, "dst.Roles = src.Edges.Roles") {
+			t.Error("missing remap conversion for 'Roles'")
+		}
+		if !strings.Contains(generatedCode, "dst.RoleIDs = src.Edges.Roles.ID") {
+			t.Error("missing remap conversion for 'RoleIDs'")
 		}
 	})
 }

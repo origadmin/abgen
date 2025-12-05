@@ -67,7 +67,7 @@ func (r *TypeResolverImpl) Resolve(typeName string) (types.TypeInfo, error) {
 func (r *TypeResolverImpl) UpdateFromWalker(walker *PackageWalker) error {
 	r.walker = walker
 	// Pass the resolver's accumulated packages to the walker
-	r.walker.AddKnownPackages(r.Pkgs...)
+	r.walker.AddPackages(r.Pkgs...)
 	return nil
 }
 

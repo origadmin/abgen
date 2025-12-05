@@ -1,13 +1,19 @@
 // Package types implements the functions, types, and interfaces for the module.
 package types
 
+import (
+	"fmt"
+	"path/filepath"
+	"sort"
+)
+
 const (
 	Application = "abgen"
 	Description = "Alias Binding Generator is a tool for generating code for conversion between two types"
 	WebSite     = "https://github.com/origadmin/abgen"
 	UI          = `
-   _____ ___.
-  /  _  \\_ |__    ____   ____   ____
+   _____ ___. 
+  /  _  \_ |__    ____   ____   ____
  /  /_\  \| __ \  / ___\_/ __ \ /    \
 /    |    \ \_\ \/ /_/  >  ___/|   |  \
 \____|__  /___  /\___  / \___  >___|  /
@@ -33,6 +39,13 @@ type StructField struct {
 	Type     string
 	Exported bool
 }
+
+// Import represents a single Go import statement.
+type Import struct {
+	Alias string
+	Path  string
+}
+
 
 type FieldConversion struct {
 	Name         string
@@ -74,3 +87,63 @@ func IsNumberType(t string) bool {
 	}
 	return numberTypes[t]
 }
+
+// ImportManager defines the interface for managing imports and aliases during code generation.
+type ImportManager interface {
+	GetType(pkgPath, typeName string) string
+	GetImports() []Import // Change to types.Import
+	RegisterAlias(alias string)
+	IsAliasRegistered(alias string) bool
+}
+
+// Concrete implementation of ImportManager
+type importManager struct {
+	imports           map[string]string
+	aliases           map[string]string
+	localPackage      string
+	registeredAliases map[string]bool
+}
+
+// NewImportManager creates and returns a new instance of importManager.
+func NewImportManager(localPackage string) *importManager {
+	return &importManager{
+		imports:           make(map[string]string),
+		aliases:           make(map[string]string),
+		localPackage:      localPackage,
+		registeredAliases: make(map[string]bool),
+	}
+}
+
+// GetType returns the aliased type name for a given package path and type name.
+func (im *importManager) GetType(pkgPath, typeName string) string {
+	if pkgPath == "" || pkgPath == im.localPackage {
+		return typeName
+	}
+	alias, exists := im.imports[pkgPath]
+	if !exists {
+		base := filepath.Base(pkgPath)
+		alias = base
+		for i := 1; im.aliases[alias] != "" && im.aliases[alias] != pkgPath; i++ {
+			alias = fmt.Sprintf("%s%d", base, i)
+		}
+		im.imports[pkgPath] = alias
+		im.aliases[alias] = pkgPath
+	}
+	return fmt.Sprintf("%s.%s", alias, typeName)
+}
+
+// GetImports returns a slice of types.Import representing the collected imports.
+func (im *importManager) GetImports() []Import { // Return []Import (the struct in types.go)
+	var imports []Import // Use Import (the struct in types.go)
+	for path, alias := range im.imports {
+		imports = append(imports, Import{Alias: alias, Path: path}) // Use Import (the struct in types.go)
+	}
+	sort.Slice(imports, func(i, j int) bool { return imports[i].Path < imports[j].Path })
+	return imports
+}
+
+// RegisterAlias registers an alias to prevent conflicts.
+func (im *importManager) RegisterAlias(alias string) { im.registeredAliases[alias] = true }
+
+// IsAliasRegistered checks if an alias is already registered.
+func (im *importManager) IsAliasRegistered(alias string) bool { return im.registeredAliases[alias] }

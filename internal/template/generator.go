@@ -40,15 +40,9 @@ func (m *Manager) Render(templateName string, data interface{}) ([]byte, error) 
 // Data is the top-level struct passed to the template.
 type Data struct {
 	PackageName string
-	Imports     []Import
+	Imports     []types.Import // Use types.Import
 	TypeAliases []string
 	Funcs       []*Function
-}
-
-// Import represents a single import statement.
-type Import struct {
-	Alias string
-	Path  string
 }
 
 // Function represents a single conversion function to be generated.

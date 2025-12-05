@@ -8,10 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"text/template"
+	tmpl "text/template"
 
-	"github.com/origadmin/abgen/internal/ast"   // Corrected import path
-	"github.com/origadmin/abgen/internal/types" // Corrected import path
+	"github.com/origadmin/abgen/internal/ast"
+	"github.com/origadmin/abgen/internal/types"
+
 )
 
 // TemplateData 模板数据结构
@@ -28,7 +29,7 @@ type TemplateData struct {
 // ConversionRule 定义类型转换规则
 type ConversionRule struct {
 	// 使用标准Go模板的转换模板
-	tmpl *template.Template
+	Tmpl *tmpl.Template // Use tmpl.Template
 
 	// 简单转换的格式字符串
 	Pattern string
@@ -44,10 +45,12 @@ type FieldGenerator struct {
 	conversionRules map[string]ConversionRule
 
 	// templateDir is the directory where custom conversion template files are located.
-	templateDir string
+templateDir string
 
 	// customTypeConversionRules stores user-defined type conversion rules from directives.
 	customTypeConversionRules []types.TypeConversionRule
+
+	importMgr types.ImportManager // Change to interface // Add this
 }
 
 // RegisterTypeConversion registers a type conversion rule using a Go template string.
@@ -55,13 +58,13 @@ func (fg *FieldGenerator) RegisterTypeConversion(srcType, dstType, templateStr s
 	key := srcType + ":" + dstType
 
 	// 解析模板
-	tmpl, err := template.New(key).Parse(templateStr)
+	t, err := tmpl.New(key).Parse(templateStr) // Use tmpl.New and rename var to 't'
 	if err != nil {
 		return fmt.Errorf("failed to parse template: %w", err)
 	}
 
 	fg.conversionRules[key] = ConversionRule{
-		tmpl: tmpl,
+		Tmpl: t, // Use capitalized Tmpl and 't'
 	}
 	return nil
 }
@@ -98,11 +101,6 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 			"srcFieldType", srcField.Type,
 			"dstFieldType", dstField.Type,
 		)
-		// Custom rules from directives might use base types or resolved full paths.
-		// Try to match both fully qualified and base names.
-		sourceFieldTypeFQ := srcField.Type // Keep it simple for now, as resolver returns FQ.
-		targetFieldTypeFQ := dstField.Type // Keep it simple for now, as resolver returns FQ.
-
 		// Ensure we resolve the types for comparison, as directive types might be short names or aliases.
 		resolvedRuleSource, err := fg.resolver.Resolve(rule.SourceTypeName)
 		if err != nil {
@@ -115,22 +113,44 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 			continue
 		}
 
-		if (resolvedRuleSource.ImportPath+"."+resolvedRuleSource.Name == sourceFieldTypeFQ || resolvedRuleSource.Name == strings.TrimPrefix(sourceFieldTypeFQ, "*")) &&
-			(resolvedRuleTarget.ImportPath+"."+resolvedRuleTarget.Name == targetFieldTypeFQ || resolvedRuleTarget.Name == strings.TrimPrefix(targetFieldTypeFQ, "*")) {
+		// Resolve the actual field types for comparison
+	srcFieldTypeInfo, err := fg.resolver.Resolve(srcField.Type)
+		if err != nil {
+			slog.Debug("generateConversion: 无法解析源字段类型", "type", srcField.Type, "error", err)
+			continue
+		}
+		dstFieldTypeInfo, err := fg.resolver.Resolve(dstField.Type)
+		if err != nil {
+			slog.Debug("generateConversion: 无法解析目标字段类型", "type", dstField.Type, "error", err)
+			continue
+		}
 
-			slog.Debug("generateConversion: 应用 Type-level Custom Rule (FQ Match)",
-				"Source", sourceFieldTypeFQ,
-				"Target", targetFieldTypeFQ,
+		// Compare fully qualified names derived from TypeInfo
+	srcMatch := (resolvedRuleSource.ImportPath == srcFieldTypeInfo.ImportPath && resolvedRuleSource.Name == srcFieldTypeInfo.Name)
+		dstMatch := (resolvedRuleTarget.ImportPath == dstFieldTypeInfo.ImportPath && resolvedRuleTarget.Name == dstFieldTypeInfo.Name)
+
+		if srcMatch && dstMatch {
+			slog.Debug("generateConversion: 应用 Type-level Custom Rule (FQ TypeInfo Match)",
+				"SourceRule", resolvedRuleSource.ImportPath+"."+resolvedRuleSource.Name,
+				"TargetRule", resolvedRuleTarget.ImportPath+"."+resolvedRuleTarget.Name,
+				"SourceField", srcFieldTypeInfo.ImportPath+"."+srcFieldTypeInfo.Name,
+				"TargetField", dstFieldTypeInfo.ImportPath+"."+dstFieldTypeInfo.Name,
 				"Func", rule.ConvertFunc,
 			)
 			return fmt.Sprintf("dst.%s = %s(src.%s)", dstField.Name, rule.ConvertFunc, srcField.Name), nil
 		}
 	}
 
-	// 2. 检查直接类型映射 (来自 RegisterTypeConversion/Pattern)
+	// 2. Handle remapped fields (high priority after custom rules)
+	if sourcePath, exists := cfg.RemapFields[dstField.Name]; exists {
+		return fg.generateRemapConversion(srcField, dstField, sourcePath, cfg)
+	}
+
+
+	// 3. 检查直接类型映射 (来自 RegisterTypeConversion/Pattern)
 	if rule, exists := fg.conversionRules[key]; exists {
 		slog.Debug("generateConversion: 命中 fg.conversionRules", "key", key)
-		if rule.tmpl != nil {
+		if rule.Tmpl != nil { // Use capitalized Tmpl
 			// 准备模板数据
 			data := TemplateData{
 				Src:      "src." + srcField.Name,
@@ -144,7 +164,7 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 
 			// 执行模板
 			var buf bytes.Buffer
-			if err := rule.tmpl.Execute(&buf, data); err != nil {
+			if err := rule.Tmpl.Execute(&buf, data); err != nil { // Use capitalized Tmpl
 				slog.Error("generateConversion: 模板执行失败", "key", key, "error", err)
 				return "", fmt.Errorf("failed to execute template: %w", err)
 			}
@@ -155,7 +175,7 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 			// 使用模式字符串生成代码
 			return fmt.Sprintf(rule.Pattern,
 				"dst."+dstField.Name,
-				"src."+srcField.Name), nil
+				"src."+srcField.Name), nil // Fixed 'il' to 'nil'
 		}
 	}
 
@@ -178,24 +198,24 @@ func (fg *FieldGenerator) generateConversion(srcField, dstField types.StructFiel
 			return fg.unhandledConversion(srcField, dstField)
 		}
 
-		// 使用目标类型的别名来创建切片
-		dstElemAlias := createTypeAlias(dstElemInfo.Name, dstElemInfo.PkgName, "", "", cfg.GeneratorPkgPath)
-		dstSliceType := fmt.Sprintf("[]*%s", dstElemAlias)
-		if !strings.HasPrefix(dstElem, "*") { // 如果目标元素类型不是指针，则切片类型也不是指针切片
-			dstSliceType = fmt.Sprintf("[]%s", dstElemAlias)
+		// Construct the destination slice type string for make using the aliased element type.
+		dstSliceType := "[]"
+		if strings.HasPrefix(dstElem, "*") { // If the element type is a pointer, add '*'
+			dstSliceType += "*"
 		}
+		dstSliceType += fg.importMgr.GetType(dstElemInfo.ImportPath, dstElemInfo.Name) // Use importMgr for alias
 
 		// 判断源元素是否为指针，以决定循环中传递 item 还是 &item
 		srcItemRef := "item"
 		if !strings.HasPrefix(srcElem, "*") {
-			srcItemRef = "&item"
+			srcItemRef = "&" + srcItemRef
 		}
 
 		// 生成 for 循环转换代码
 		return fmt.Sprintf(`
 if src.%s != nil {
 	dst.%s = make(%s, len(src.%s))
-	for i, item := range src.%s {
+	for i, item := range %s {
 		dst.%s[i] = %s(%s)
 	}
 }`, srcField.Name, dstField.Name, dstSliceType, srcField.Name, srcField.Name, dstField.Name, funcName, srcItemRef), nil
@@ -274,8 +294,8 @@ func (fg *FieldGenerator) buildElementConversionFuncName(srcElem, dstElem string
 	}
 
 	// Directly apply suffixes from cfg
-	srcAlias := cfg.SourcePrefix + srcInfo.Name + cfg.SourceSuffix
-	dstAlias := cfg.TargetPrefix + dstInfo.Name + cfg.TargetSuffix
+	srcAlias := cfg.Source.Prefix + srcInfo.Name + cfg.Source.Suffix
+	dstAlias := cfg.Target.Prefix + dstInfo.Name + cfg.Target.Suffix
 
 	slog.Debug("buildElementConversionFuncName: 生成函数名",
 		"fullSrcType", fullSrcType, "srcInfo.Name", srcInfo.Name, "srcAlias", srcAlias,
@@ -306,14 +326,15 @@ func (fg *FieldGenerator) UpdateTypeMap() {
 		"%s = %s.String()")
 
 	// 特殊类型处理 - 使用Go模板
-	err := fg.RegisterTypeConversion("map[string]interface{}", "google.golang.org/protobuf/types/known/structpb.Struct", `
+	err := fg.RegisterTypeConversion("map[string]interface{}}", "google.golang.org/protobuf/types/known/structpb.Struct", `
 {{if .Src}}
 var err error
 {{.Dst}}, err = structpb.NewStruct({{.Src}})
 if err != nil {
 	slog.Error("failed to convert field", "field", "{{.SrcName}}", "error", err)
 }
-{{end}}`)
+{{end}}
+`)
 	if err != nil {
 		slog.Error("failed to register template", "error", err)
 	}
@@ -327,12 +348,95 @@ for _, v := range {{.Src}} {
 		{{.Dst}} = append({{.Dst}}, num)
 	}
 }
-{{end}}`)
+{{end}}
+`)
 	if err != nil {
 		slog.Error("failed to register template", "error", err)
 	}
 }
 
+// generateRemapConversion handles generating code for remapped fields.
+func (fg *FieldGenerator) generateRemapConversion(srcField, dstField types.StructField, sourcePath string, cfg *types.ConversionConfig) (string, error) {
+	slog.Debug("generateRemapConversion: handling remap", "dstField", dstField.Name, "sourcePath", sourcePath)
+
+	// First, resolve the TypeInfo of the root source object (e.g., *ent.User for "src")
+	// The srcField.Type will be "*ent.User" if this is called for a root field,
+	// but it's passed as a specific field in the loop in GenerateFields.
+	// The 'sourceType' parameter to GenerateFields is the overall Source struct type.
+	// We need the TypeInfo for that overall Source struct.
+	
+	// Assuming sourcePath starts from the root of the 'src' object passed to the conversion function
+	// So, the baseTypeInfo for resolvePathType should be the TypeInfo of cfg.Source.Type.
+	srcRootTypeInfo, err := fg.resolver.Resolve(cfg.Source.Type)
+	if err != nil {
+		return "", fmt.Errorf("generateRemapConversion: failed to resolve source root type %s: %w", cfg.Source.Type, err)
+	}
+
+	// Resolve the actual type of the sourcePath (e.g., for "Edges.Roles", get type of src.Edges.Roles)
+	resolvedSourcePathType, err := fg.resolvePathType(srcRootTypeInfo, sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("generateRemapConversion: failed to resolve type of source path %s: %w", sourcePath, err)
+	}
+
+	slog.Debug("generateRemapConversion: resolved source path type", 
+		"sourcePath", sourcePath, 
+		"resolvedType", resolvedSourcePathType.Name, // Use .Name
+		"isSlice", strings.HasPrefix(resolvedSourcePathType.Name, "[]"), // Use .Name
+		"isPointer", strings.HasPrefix(resolvedSourcePathType.Name, "*"), // Use .Name
+	)
+
+	// Construct the full source access string (e.g., "src.Edges.Roles" or "src.Edges.Roles.ID")
+	fullSourceAccess := fmt.Sprintf("src.%s", sourcePath)
+
+	// If the resolved source path is a slice, and the destination is not a slice, then it's a projection (e.g., RolesIDs)
+	if strings.HasPrefix(resolvedSourcePathType.Name, "[]") { // Use .Name for slice check
+		slog.Info("generateRemapConversion: detected slice in source path, checking for projection", "sourcePath", sourcePath)
+		
+		// If the destination field is a slice, and the last part of sourcePath refers to a struct type,
+		// it's likely a slice-to-slice conversion (e.g. Roles -> Roles)
+		// We need to compare resolvedSourcePathType.ElemType with dstField.ElemType
+		
+		// If the destination field is NOT a slice, and the last part of sourcePath is "ID" or "IDs", it's a slice projection for IDs
+		// This needs more granular checks
+		
+		// For RoleIDs:Edges.Roles.ID
+		// sourcePath = "Edges.Roles.ID"
+		// resolvedSourcePathType = TypeInfo for 'int64' (if ID is int64)
+		// But the original source is src.Edges.Roles which is a slice.
+		// This means sourcePath itself might already represent the element to project.
+		
+		// Need to rethink how sourcePath is defined for slice projections.
+		// If `remap="RoleIDs:Edges.Roles.ID"`
+		// It means `dst.RoleIDs` (int64) comes from `src.Edges.Roles` ( []*ent.Role).
+		// We need to iterate over `src.Edges.Roles` and extract `ID` from each.
+		
+		// Temporarily return a specific TODO for slice projection that needs a helper function.
+		return fmt.Sprintf("// TODO: Implement slice projection helper for %s from %s", dstField.Name, fullSourceAccess), nil
+	} else { // Source path is a single struct or primitive, not a slice
+		slog.Info("generateRemapConversion: detected simple nested field copy", "sourcePath", sourcePath)
+		// This is a simple nested struct/field copy.
+		// Need to call conversion function if types are different, or direct assign if compatible.
+		
+		// If types are different, need to find/generate a conversion function.
+		if resolvedSourcePathType.Name != dstField.Type { // Use .Name
+			funcName, err := fg.buildElementConversionFuncName(resolvedSourcePathType.Name, dstField.Type, cfg) // Use .Name
+			if err != nil {
+				return "", fmt.Errorf("failed to build conversion func name for remapped field: %w", err)
+			}
+			
+			// Determine if source needs address taken
+			srcArg := fullSourceAccess
+			if !strings.HasPrefix(resolvedSourcePathType.Name, "*") { // Use .Name for pointer check
+				srcArg = "&" + srcArg
+			}
+
+			return fmt.Sprintf("dst.%s = %s(%s)", dstField.Name, funcName, srcArg), nil
+		} else {
+			// Direct assignment if types are compatible (or same)
+			return fmt.Sprintf("dst.%s = %s", dstField.Name, fullSourceAccess), nil
+		}
+	}
+}
 // GenerateFields generates a list of field conversion snippets for a given source and target type.
 // It uses the registered rules and built-in logic to determine the conversion code for each matching field.
 func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *types.ConversionConfig) []types.FieldConversion {
@@ -363,8 +467,7 @@ func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *typ
 		return fields
 	}
 
-	cfg.SrcPackage = srcInfo.ImportPath
-	cfg.DstPackage = dstInfo.ImportPath
+
 
 	// 创建目标字段映射
 	dstFieldMap := make(map[string]types.StructField)
@@ -410,10 +513,11 @@ func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *typ
 }
 
 // NewFieldGenerator creates and initializes a new FieldGenerator instance.
-func NewFieldGenerator(customRules []types.TypeConversionRule) *FieldGenerator {
+func NewFieldGenerator(customRules []types.TypeConversionRule, importMgr types.ImportManager) *FieldGenerator {
 	fg := &FieldGenerator{
 		conversionRules:           make(map[string]ConversionRule),
 		customTypeConversionRules: customRules,
+		importMgr:                 importMgr, // Assign the import manager
 	}
 	fg.UpdateTypeMap()
 	return fg
@@ -425,7 +529,7 @@ func (fg *FieldGenerator) SetTemplateDir(dir string) {
 }
 
 // SetCustomTypeConversionRules sets the custom type conversion rules from directives.
-func (fg *FieldGenerator) SetCustomTypeConversionRules(rules []types.TypeConversionRule) {
+func (fg *FieldGenerator) SetCustomTypeConversionRules(rules []types.TypeConversionRule) { // Fixed type
 	fg.customTypeConversionRules = rules
 }
 
@@ -442,7 +546,7 @@ func (fg *FieldGenerator) LoadTemplatesFromDir() error {
 	}
 
 	// 创建主模板
-	masterTmpl := template.New("master")
+	masterTmpl := tmpl.New("master") // Use tmpl.New
 
 	for _, file := range files {
 		if file.IsDir() || !strings.HasSuffix(file.Name(), ".tpl") {
@@ -465,8 +569,8 @@ func (fg *FieldGenerator) LoadTemplatesFromDir() error {
 	}
 
 	// 查找并注册所有定义的转换模板
-	for _, tmpl := range masterTmpl.Templates() {
-		name := tmpl.Name()
+	for _, t := range masterTmpl.Templates() { // Changed tmpl to t to avoid variable shadowing
+		name := t.Name() // Use t.Name()
 		if !strings.Contains(name, ":") || name == "master" {
 			continue // 跳过非转换模板
 		}
@@ -481,12 +585,17 @@ func (fg *FieldGenerator) LoadTemplatesFromDir() error {
 
 		// 注册模板
 		fg.conversionRules[srcType+":"+dstType] = ConversionRule{
-			tmpl: tmpl,
+			Tmpl: t, // Use capitalized Tmpl and 't'
 		}
 		slog.Info("registered template from file", "source_type", srcType, "target_type", dstType)
 	}
 
 	return nil
+}
+
+// SetImportManager sets the import manager for the field generator.
+func (fg *FieldGenerator) SetImportManager(im types.ImportManager) {
+	fg.importMgr = im
 }
 
 // SetResolver sets the type resolver for the generator.
@@ -495,10 +604,58 @@ func (fg *FieldGenerator) SetResolver(resolver ast.TypeResolver) {
 	fg.resolver = resolver
 }
 
-// createTypeAlias is a placeholder function to make the code compile.
-// The logic for managing imports and aliases should be handled more centrally.
-func createTypeAlias(name, pkgName, prefix, suffix, generatorPkgPath string) string {
-	// This is a simplification. A real implementation would need to manage
-	// import aliases to avoid conflicts. For now, just return the type name.
-	return name
+// resolvePathType resolves the TypeInfo for a nested field path starting from a base TypeInfo.
+// Example: baseTypeInfo for "User", fieldPath "Edges.Roles"
+func (fg *FieldGenerator) resolvePathType(baseTypeInfo types.TypeInfo, fieldPath string) (types.TypeInfo, error) {
+	currentTypeInfo := baseTypeInfo
+	parts := strings.Split(fieldPath, ".")
+
+	for _, part := range parts {
+		// If currentTypeInfo is a pointer, resolve its element type.
+		if strings.HasPrefix(currentTypeInfo.Name, "*") { // Corrected: Use .Name for pointer check
+			resolvedPtrType, err := fg.resolver.Resolve(strings.TrimPrefix(currentTypeInfo.Name, "*")) // Corrected: Use .Name
+			if err != nil {
+				return types.TypeInfo{}, fmt.Errorf("failed to resolve pointer type %s: %w", currentTypeInfo.Name, err)
+			}
+			currentTypeInfo = resolvedPtrType
+		}
+
+		// If currentTypeInfo is a slice, resolve its element type.
+		if strings.HasPrefix(currentTypeInfo.Name, "[]") { // Corrected: Use .Name for slice check
+			resolvedSliceType, err := fg.resolver.Resolve(strings.TrimPrefix(currentTypeInfo.Name, "[]")) // Corrected: Use .Name
+			if err != nil {
+				return types.TypeInfo{}, fmt.Errorf("failed to resolve slice element type %s: %w", currentTypeInfo.Name, err)
+			}
+			currentTypeInfo = resolvedSliceType
+		}
+
+		if types.IsPrimitiveType(currentTypeInfo.Name) && len(parts) > 1 {
+			return types.TypeInfo{}, fmt.Errorf("cannot access field %s on primitive type %s", part, currentTypeInfo.Name)
+		}
+
+		found := false
+		// The resolvedStructType might be a pointer or slice itself, so we need to get its base type
+		baseStructTypeName := strings.TrimPrefix(strings.TrimPrefix(currentTypeInfo.Name, "*"), "[]") // Corrected: Use .Name
+		resolvedStructType, err := fg.resolver.Resolve(baseStructTypeName)
+		if err != nil {
+			return types.TypeInfo{}, fmt.Errorf("failed to resolve struct info for type %s: %w", baseStructTypeName, err)
+		}
+
+		for _, field := range resolvedStructType.Fields {
+			if field.Name == part {
+				fieldTypeInfo, err := fg.resolver.Resolve(field.Type)
+				if err != nil {
+					return types.TypeInfo{}, fmt.Errorf("failed to resolve type of field %s.%s: %w", currentTypeInfo.Name, field.Name, err)
+				}
+				currentTypeInfo = fieldTypeInfo
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return types.TypeInfo{}, fmt.Errorf("field %s not found in type %s.%s", part, currentTypeInfo.ImportPath, currentTypeInfo.Name)
+		}
+	}
+	return currentTypeInfo, nil
 }

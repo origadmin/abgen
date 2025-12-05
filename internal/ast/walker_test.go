@@ -1,6 +1,7 @@
 package ast
 
 import (
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -21,7 +22,11 @@ func loadTestPackages(t *testing.T) []*packages.Package {
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
 		Dir:  testDir,
 	}
-	pkgs, err := packages.Load(cfg, "./...")
+	pkgs, err := packages.Load(cfg,
+		"github.com/origadmin/abgen/internal/ast/testdata",
+		"github.com/origadmin/abgen/internal/testdata/ent",
+		"github.com/origadmin/abgen/internal/testdata/typespb",
+	)
 	if err != nil {
 		t.Fatalf("Failed to load packages: %v", err)
 	}
@@ -42,6 +47,7 @@ func findPackage(pkgs []*packages.Package, suffix string) *packages.Package {
 }
 
 func TestWalker_Parser(t *testing.T) {
+	slog.SetLogLoggerLevel(slog.LevelDebug)
 	allPkgs := loadTestPackages(t)
 	targetPkg := findPackage(allPkgs, "testdata")
 	if targetPkg == nil {
@@ -50,7 +56,7 @@ func TestWalker_Parser(t *testing.T) {
 
 	graph := make(types.ConversionGraph)
 	walker := NewPackageWalker(graph)
-	walker.AddKnownPackages(allPkgs...)
+	walker.AddPackages(allPkgs...)
 
 	err := walker.WalkPackage(targetPkg)
 	if err != nil {
@@ -90,8 +96,8 @@ func TestWalker_Parser(t *testing.T) {
 		}
 
 		expectedRules := []types.TypeConversionRule{
-			{SourceTypeName: "github.com/origadmin/abgen/internal/testdata/ent.Status", TargetTypeName: "string", ConvertFunc: "ConvertStatusToString"},
-			{SourceTypeName: "string", TargetTypeName: "github.com/origadmin/abgen/internal/testdata/ent.Status", ConvertFunc: "ConvertString2Status"},
+			{SourceTypeName: "github.com/origadmin/abgen/internal/testdata/ent.Status", TargetTypeName: "builtin.string", ConvertFunc: "ConvertStatusToString"},
+			{SourceTypeName: "builtin.string", TargetTypeName: "github.com/origadmin/abgen/internal/testdata/ent.Status", ConvertFunc: "ConvertString2Status"},
 		}
 		if !reflect.DeepEqual(pkgCfg.TypeConversionRules, expectedRules) {
 			t.Errorf("Expected rules %v, got %v", expectedRules, pkgCfg.TypeConversionRules)

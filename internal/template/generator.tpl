@@ -32,4 +32,3 @@ func {{ .Name }}(src {{ .SourcePointer }}{{ .SourceType }}) {{ .TargetPointer }}
 	return dst
 }
 {{- end }}
-{{- end -}}
