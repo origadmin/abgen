@@ -73,13 +73,14 @@ func (g *ConverterGenerator) ParseSource(dir string) error {
 	var allPackageConfigs []*types.PackageConversionConfig
 	for _, pkg := range directivePkgs {
 		// Use a temporary walker to extract PackageConfigs from directives
-		tempWalker := ast.NewPackageWalker(nil)
+		// Pass a non-nil graph to tempWalker so it can store configs.
+		// Or, more simply, collect from tempWalker.PackageConfigs directly.
+		tempWalker := ast.NewPackageWalker(make(types.ConversionGraph)) // Pass a new graph instance
 		if err := tempWalker.WalkPackage(pkg); err != nil {
 			return fmt.Errorf("Phase 1: 遍历指令包失败: %w", err)
 		}
-		for _, cfg := range tempWalker.PackageConfigs {
-			allPackageConfigs = append(allPackageConfigs, cfg)
-		}
+		// Corrected: Collect PackageConfigs from the tempWalker after it has walked the package.
+		allPackageConfigs = append(allPackageConfigs, tempWalker.PackageConfigs...)
 	}
 
 	if len(allPackageConfigs) == 0 {

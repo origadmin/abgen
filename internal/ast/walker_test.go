@@ -1,202 +1,154 @@
 package ast
 
 import (
-	"log/slog"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
-	"github.com/origadmin/abgen/internal/types"
 	"golang.org/x/tools/go/packages"
+
+	"github.com/origadmin/abgen/internal/types"
 )
 
-func loadTestPackages(t *testing.T) []*packages.Package {
+// loadTestPackages loads the Go packages required for a specific test case.
+// It takes the root directory of the test case (e.g., "../../testdata/directives/p01_basic")
+// and a list of dependent package paths to load.
+// It returns all loaded packages and the specific directive package.
+func loadTestPackages(t *testing.T, testCaseDir string, dependencies ...string) (pkgs []*packages.Package, directivePkg *packages.Package) {
 	t.Helper()
-	testDir, err := filepath.Abs("../../testdata/directives")
+	absTestCaseDir, err := filepath.Abs(testCaseDir)
 	if err != nil {
-		t.Fatalf("Failed to get absolute path for testdata: %v", err)
+		t.Fatalf("Failed to get absolute path for test case dir %s: %v", testCaseDir, err)
 	}
 
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
-		Dir:  testDir,
+		Dir:  absTestCaseDir, // Set the working directory for package loading
 	}
-	pkgs, err := packages.Load(cfg,
-		"github.com/origadmin/abgen/testdata/directives",
-		"github.com/origadmin/abgen/testdata/internal/ent",
-		"github.com/origadmin/abgen/testdata/exps/typespb",
-	)
+
+	// The patterns to load: the directive package itself ("./") and its dependencies.
+	loadPatterns := append([]string{"."}, dependencies...)
+
+	loadedPkgs, err := packages.Load(cfg, loadPatterns...)
 	if err != nil {
 		t.Fatalf("Failed to load packages: %v", err)
 	}
 
-	if packages.PrintErrors(pkgs) > 0 {
+	if packages.PrintErrors(loadedPkgs) > 0 {
 		t.Fatal("Errors occurred while loading packages.")
 	}
-	return pkgs
+
+	if len(loadedPkgs) == 0 {
+		t.Fatal("Expected to load at least one package, but got none.")
+	}
+
+	// Find the directive package, which is the one loaded from the current directory (".").
+	for _, p := range loadedPkgs {
+		// A package loaded from "." will have its directory as its ID if it's not in GOPATH.
+		// We check if any of its Go files are in the target directory.
+		if len(p.GoFiles) > 0 && filepath.Dir(p.GoFiles[0]) == absTestCaseDir {
+			return loadedPkgs, p
+		}
+	}
+
+	t.Fatalf("Could not find the directive package in directory %s", absTestCaseDir)
+	return nil, nil // Should be unreachable
 }
 
-func findPackage(pkgs []*packages.Package, suffix string) *packages.Package {
+func findPackage(pkgs []*packages.Package, pkgPath string) *packages.Package {
 	for _, pkg := range pkgs {
-		if strings.HasSuffix(pkg.PkgPath, suffix) {
+		if pkg.PkgPath == pkgPath {
 			return pkg
 		}
 	}
 	return nil
 }
 
-func TestWalker_Parser(t *testing.T) {
-	slog.SetLogLoggerLevel(slog.LevelDebug)
-	allPkgs := loadTestPackages(t)
-	targetPkg := findPackage(allPkgs, "ast")
-	if targetPkg == nil {
-		t.Fatal("Could not find the target ast package.")
-	}
+func TestWalker_P01BasicDirectives(t *testing.T) {
+	// Avoid setting global logger state in tests. Use t.Logf for debugging if needed.
+	// slog.SetLogLoggerLevel(slog.LevelDebug)
+
+	// Load packages for p01_basic test case
+	allPkgs, directivePkg := loadTestPackages(t,
+		"../../testdata/directives/p01_basic",
+		"github.com/origadmin/abgen/testdata/fixture/ent",
+		"github.com/origadmin/abgen/testdata/fixture/types",
+	)
 
 	graph := make(types.ConversionGraph)
 	walker := NewPackageWalker(graph)
-	walker.AddPackages(allPkgs...)
+	walker.AddPackages(allPkgs...) // Add all loaded packages to the walker for resolution
 
-	err := walker.WalkPackage(targetPkg)
+	err := walker.WalkPackage(directivePkg) // Walk the directive package to extract configs
 	if err != nil {
 		t.Fatalf("Walker.WalkPackage() failed: %v", err)
 	}
-	
+
 	t.Run("PackagePairDirective", func(t *testing.T) {
 		if len(walker.PackageConfigs) != 1 {
 			t.Fatalf("Expected 1 PackageConversionConfig, got %d", len(walker.PackageConfigs))
 		}
 		pkgCfg := walker.PackageConfigs[0]
 
-		if pkgCfg.SourcePackage != "github.com/origadmin/abgen/testdata/exps/ent" {
-			t.Errorf("Expected SourcePackage %q, got %q", "github.com/origadmin/abgen/testdata/exps/ent", pkgCfg.SourcePackage)
+		// Define constants for package paths to avoid magic strings and improve maintainability.
+		const (
+			entPkgPath   = "github.com/origadmin/abgen/testdata/fixture/ent"
+			typesPkgPath = "github.com/origadmin/abgen/testdata/fixture/types"
+		)
+
+		// Helper to create fully-qualified names for cleaner test assertions.
+		fqn := func(pkgPath, typeName, fieldName string) string {
+			return pkgPath + "." + typeName + "#" + fieldName
 		}
-		if pkgCfg.TargetPackage != "github.com/origadmin/abgen/testdata/exps/typespb" {
-			t.Errorf("Expected TargetPackage %q, got %q", "github.com/origadmin/abgen/internal/testdata/typespb", pkgCfg.TargetPackage)
+
+		if pkgCfg.SourcePackage != entPkgPath {
+			t.Errorf("Expected SourcePackage %q, got %q", entPkgPath, pkgCfg.SourcePackage)
+		}
+		if pkgCfg.TargetPackage != typesPkgPath {
+			t.Errorf("Expected TargetPackage %q, got %q", typesPkgPath, pkgCfg.TargetPackage)
 		}
 		if pkgCfg.SourceSuffix != "" {
 			t.Errorf("Expected SourceSuffix \"\", got %q", pkgCfg.SourceSuffix)
 		}
-		if pkgCfg.TargetSuffix != "PB" {
+		if pkgCfg.TargetSuffix != "PB" { // This comes from convert:target:suffix="PB"
 			t.Errorf("Expected TargetSuffix 'PB', got %q", pkgCfg.TargetSuffix)
 		}
-		if pkgCfg.Direction != "both" {
-			t.Errorf("Expected Direction 'both', got %q", pkgCfg.Direction)
+		// This comes from convert:direction="oneway"
+		if pkgCfg.Direction != "oneway" { 
+			t.Errorf("Expected Direction 'oneway', got %q", pkgCfg.Direction)
 		}
 
-		expectedIgnores := map[string]bool{"Password": true, "Salt": true}
-		if !reflect.DeepEqual(pkgCfg.IgnoreFields, expectedIgnores) {
-			t.Errorf("Expected ignored fields %v, got %v", expectedIgnores, pkgCfg.IgnoreFields)
-		}
-		
-		expectedRemaps := map[string]string{"Roles": "Edges.Roles", "RoleIDs": "Edges.Roles.ID"}
+		// Test RemapFields
+		expectedRemaps := map[string]string{fqn(entPkgPath, "User", "ID"): "Id"}
 		if !reflect.DeepEqual(pkgCfg.RemapFields, expectedRemaps) {
 			t.Errorf("Expected remap fields %v, got %v", expectedRemaps, pkgCfg.RemapFields)
 		}
 
-		expectedRules := []types.TypeConversionRule{
-			{SourceTypeName: "github.com/origadmin/abgen/testdata/exps/ent.Status", TargetTypeName: "string", ConvertFunc: "ConvertStatusToString"},
-			{SourceTypeName: "string", TargetTypeName: "github.com/origadmin/abgen/testdata/exps/ent.Status", ConvertFunc: "ConvertString2Status"},
+		// Test IgnoreFields
+		expectedIgnores := map[string]bool{
+			fqn(entPkgPath, "User", "Password"):  true,
+			fqn(entPkgPath, "User", "Salt"):      true,
+			fqn(entPkgPath, "User", "CreatedAt"): true,
+			fqn(entPkgPath, "User", "UpdatedAt"): true,
+			fqn(entPkgPath, "User", "Edges"):     true,
+			fqn(entPkgPath, "User", "Gender"):    true,
 		}
-		if !reflect.DeepEqual(pkgCfg.TypeConversionRules, expectedRules) {
-			t.Errorf("Expected rules %v, got %v", expectedRules, pkgCfg.TypeConversionRules)
-		}
-	})
-
-	t.Run("ConvertDirectives", func(t *testing.T) {
-		if len(graph) != 2 {
-			t.Fatalf("Expected 2 nodes in graph, got %d", len(graph))
-		}
-
-		key1 := "github.com/origadmin/abgen/testdata/exps/ent.User2github.com/origadmin/abgen/testdata/exps/typespb.User"
-		node1, ok := graph["github.com/origadmin/abgen/testdata/exps/ent.User"]
-		if !ok {
-			t.Fatalf("Graph missing node for ent.User")
-		}
-		cfg1, ok := node1.Configs[key1]
-		if !ok {
-			t.Fatalf("Node for ent.User missing config for key: %s", key1)
+		if !reflect.DeepEqual(pkgCfg.IgnoreFields, expectedIgnores) {
+			t.Errorf("Expected ignored fields %v, got %v", expectedIgnores, pkgCfg.IgnoreFields)
 		}
 
-		// Assert EndpointConfig usage
-		if cfg1.Source.Type != "github.com/origadmin/abgen/testdata/exps/ent.User" {
-			t.Errorf("Cfg1: Expected source type %q, got %q", "github.com/origadmin/abgen/testdata/exps/ent.User", cfg1.Source.Type)
-		}
-		if cfg1.Target.Type != "github.com/origadmin/abgen/testdata/exps/typespb.User" {
-			t.Errorf("Cfg1: Expected target type %q, got %q", "github.com/origadmin/abgen/internal/testdata/typespb.User", cfg1.Target.Type)
-		}
-
-		expectedIgnores1 := map[string]bool{"CreatedAt": true, "UpdatedAt": true}
-		if !reflect.DeepEqual(cfg1.IgnoreFields, expectedIgnores1) {
-			t.Errorf("Cfg1: Expected ignored fields %v, got %v", expectedIgnores1, cfg1.IgnoreFields)
-		}
-		if cfg1.Direction != "both" {
-			t.Errorf("Cfg1: Expected direction 'both', got %q", cfg1.Direction)
-		}
-
-		// Remap fields are not present in this config based on testdata.
-		if len(cfg1.RemapFields) != 0 {
-			t.Errorf("Cfg1: Expected 0 remap fields, got %d", len(cfg1.RemapFields))
-		}
-
-		revKey1 := "github.com/origadmin/abgen/testdata/exps/typespb.User2github.com/origadmin/abgen/testdata/exps/ent.User"
-		revNode1, ok := graph["github.com/origadmin/abgen/testdata/exps/typespb.User"]
-		if !ok {
-			t.Fatalf("Graph missing reverse node for typespb.User")
-		}
-		revCfg1, ok := revNode1.Configs[revKey1]
-		if !ok {
-			t.Fatalf("Reverse node for typespb.User missing config for key: %s", revKey1)
-		}
-		if revCfg1.Direction != "to" {
-			t.Errorf("revCfg1: Expected direction 'to', got %q", revCfg1.Direction)
-		}
-		// Check that the reverse config correctly inherited remap fields from original
-		if !reflect.DeepEqual(revCfg1.RemapFields, cfg1.RemapFields) {
-			t.Errorf("Reverse config remap fields mismatch: expected %v, got %v", cfg1.RemapFields, revCfg1.RemapFields)
-		}
-		// Check that the reverse config has correct prefixes/suffixes
-		if revCfg1.Source.Suffix != "" || revCfg1.Target.Suffix != "" {
-			t.Errorf("Reverse config: Expected empty suffixes, got Source.Suffix=%q, Target.Suffix=%q", revCfg1.Source.Suffix, revCfg1.Target.Suffix)
-		}
-	})
-
-	t.Run("ConvertDirectives_Directional", func(t *testing.T) {
-		// This is for SingleDirection -> SingleDirectionPB (direction=from)
-		// The logic for "from" creates a reverse conversion config.
-		key2 := "github.com/origadmin/abgen/testdata/exps/typespb.User2github.com/origadmin/abgen/testdata/exps/ent.User"
-		node2, ok := graph["github.com/origadmin/abgen/testdata/exps/typespb.User"]
-		if !ok {
-			t.Fatalf("Graph missing node for typespb.User for the 'from' directive")
-		}
-		
-		// The original forward config (SingleDirection -> SingleDirectionPB) should NOT exist in the graph.
-		// It only exists as a basis for the reverse config.
-		// So we check the one created by AddConversion's internal reversal.
-		cfg2, ok := node2.Configs[key2]
-		if !ok {
-			t.Fatalf("Node for typespb.User missing config for key: %s", key2)
-		}
-
-		if cfg2.Direction != "to" {
-			t.Errorf("Cfg2: Expected direction of reversed config to be 'to', got %q", cfg2.Direction)
-		}
-		if cfg2.Source.Type != "github.com/origadmin/abgen/testdata/exps/typespb.User" {
-			t.Errorf("Cfg2: Expected source type to be typespb.User, got %q", cfg2.Source.Type)
-		}
-		if cfg2.Target.Type != "github.com/origadmin/abgen/testdata/exps/ent.User" {
-			t.Errorf("Cfg2: Expected target type to be ent.User, got %q", cfg2.Target.Type)
+		// TypeConversionRules should be empty for p01_basic
+		if len(pkgCfg.TypeConversionRules) != 0 {
+			t.Errorf("Expected 0 TypeConversionRules, got %d", len(pkgCfg.TypeConversionRules))
 		}
 	})
 
 	t.Run("LocalTypeNameToFQN", func(t *testing.T) {
+		// This test is for the local aliases defined in directives.go
 		nameToFQN := walker.GetLocalTypeNameToFQN()
 		expected := map[string]string{
-			"User":              "github.com/origadmin/abgen/testdata/exps/ent.User",
-			"UserPB":            "github.com/origadmin/abgen/testdata/exps/typespb.User",
-			"SingleDirection":   "github.com/origadmin/abgen/testdata/exps/ent.User",
-			"SingleDirectionPB": "github.com/origadmin/abgen/testdata/exps/typespb.User",
+			"User":   "github.com/origadmin/abgen/testdata/fixture/ent.User",
+			"UserPB": "github.com/origadmin/abgen/testdata/fixture/types.User",
 		}
 
 		if len(nameToFQN) != len(expected) {

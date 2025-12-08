@@ -1,10 +1,8 @@
-//go:build abgen_p02_alias
-
 package directives
 
 import (
-	"github.com/origadmin/abgen/internal/testdata/fixture/ent"
-	"github.com/origadmin/abgen/internal/testdata/fixture/typespb"
+	"github.com/origadmin/abgen/testdata/fixture/ent"
+	"github.com/origadmin/abgen/testdata/fixture/typespb"
 )
 
 // Phase 2: Alias-First Naming Convention

@@ -1,17 +1,15 @@
-//go:build abgen_p03_remap
-
 package directives
 
 import (
-	_ "github.com/origadmin/abgen/internal/testdata/fixture/ent"
-	_ "github.com/origadmin/abgen/internal/testdata/fixture/typespb"
+	_ "github.com/origadmin/abgen/testdata/fixture/ent"
+	_ "github.com/origadmin/abgen/testdata/fixture/typespb"
 )
 
 // Phase 3: Field Path Remapping
 // This file tests the advanced 'remap' functionality with nested field paths.
 
-//go:abgen:package:path=github.com/origadmin/abgen/internal/testdata/fixture/ent,alias=ent
-//go:abgen:package:path=github.com/origadmin/abgen/internal/testdata/fixture/typespb,alias=pb
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/ent,alias=ent
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/typespb,alias=pb
 
 // Test remap from a simple field to a nested field path.
 //go:abgen:convert="ent.User,pb.User"

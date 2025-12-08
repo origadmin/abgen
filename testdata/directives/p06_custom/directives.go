@@ -1,18 +1,16 @@
-//go:build abgen_p06_custom
-
 package directives
 
 import (
-	_ "github.com/origadmin/abgen/internal/testdata/fixture/ent"
-	_ "github.com/origadmin/abgen/internal/testdata/fixture/typespb"
+	_ "github.com/origadmin/abgen/testdata/fixture/ent"
+	_ "github.com/origadmin/abgen/testdata/fixture/typespb"
 )
 
 // Phase 6: Custom Rule and Dummy File Generation
 // This file tests the highest-priority 'rule' directive and the generation
 // of a safe-to-edit 'abgen.custom.go' file for placeholder functions.
 
-//go:abgen:package:path=github.com/origadmin/abgen/internal/testdata/fixture/ent,alias=ent
-//go:abgen:package:path=github.com/origadmin/abgen/internal/testdata/fixture/typespb,alias=pb
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/ent,alias=ent
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/typespb,alias=pb
 
 // The 'User' struct has a 'CreatedAt' field of type 'time.Time'.
 // We want to convert this to a 'string' in the target.

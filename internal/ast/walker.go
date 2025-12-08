@@ -324,49 +324,22 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 
 		}
 
-		if !isDirectiveGroup || definingDirective == "" {
-
+		if !isDirectiveGroup {
 			slog.Debug("processFileDecls: Not a directive group or no defining directive found", "isDirectiveGroup", isDirectiveGroup, "definingDirective", definingDirective)
 
 			continue
 
 		}
 
-		if isPackagePair {
-
-			pkgCfg := &types.PackageConversionConfig{
-
-				IgnoreTypes: make(map[string]bool),
-
-				IgnoreFields: make(map[string]bool),
-
-				RemapFields: make(map[string]string),
-
-				TypeConversionRules: make([]types.TypeConversionRule, 0),
+		// This logic now handles any file-level directive group.
+		// It applies all found directives to the single, package-level config.
+		if isPackagePair || (definingDirective == "" && len(modifierDirectives) > 0) {
+			if definingDirective != "" {
+				w.parseAndApplyDirective(definingDirective, nil, map[string]*types.PackageConversionConfig{"pkg-pair": w.PackageConfigs[0]})
 			}
-
-			tempPkgConfigs := map[string]*types.PackageConversionConfig{"pkg-pair": pkgCfg}
-
-			w.parseAndApplyDirective(definingDirective, nil, tempPkgConfigs)
-
 			for _, mod := range modifierDirectives {
-
-				w.parseAndApplyDirective(mod, nil, tempPkgConfigs)
-
+				w.parseAndApplyDirective(mod, nil, map[string]*types.PackageConversionConfig{"pkg-pair": w.PackageConfigs[0]})
 			}
-
-			if pkgCfg.SourcePackage != "" && pkgCfg.TargetPackage != "" {
-
-				w.PackageConfigs = append(w.PackageConfigs, pkgCfg)
-
-				slog.Debug("processFileDecls: Appended package config", "sourcePackage", pkgCfg.SourcePackage, "targetPackage", pkgCfg.TargetPackage)
-
-			} else {
-
-				slog.Debug("processFileDecls: Did not append package config due to empty source/target package", "sourcePackage", pkgCfg.SourcePackage, "targetPackage", pkgCfg.TargetPackage)
-
-			}
-
 		} else { // This is a type-level convert config
 
 			var associatedDecl *goast.GenDecl
@@ -472,12 +445,34 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 
 func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.ConversionConfig, pkgConfigs map[string]*types.PackageConversionConfig) {
 	directive := strings.TrimPrefix(line, "//go:abgen:")
-	keyStr, value, _ := strings.Cut(directive, "=")
-	value = strings.Trim(value, `"`)
+
+	// Use SplitN to correctly handle '=' within the value part.
+	parts := strings.SplitN(directive, "=", 2)
+	keyStr := parts[0]
+	value := ""
+	if len(parts) > 1 {
+		valStr := parts[1]
+		// Correctly extract the value within quotes, ignoring trailing comments.
+		if strings.HasPrefix(valStr, `"`) {
+			// Find the closing quote.
+			lastQuoteIndex := strings.LastIndex(valStr, `"`)
+			if lastQuoteIndex > 0 { // Ensure it's not the opening quote
+				value = valStr[1:lastQuoteIndex]
+			}
+		} else {
+			// Handle cases where value is not quoted (if any)
+			value = valStr
+		}
+	}
+	
 	keys := strings.Split(keyStr, ":")
 	verb := keys[0]
+	subject := ""
+	if len(keys) > 1 {
+		subject = keys[1]
+	}
 
-	slog.Debug("parseAndApplyDirective: Processing directive", "line", line, "verb", verb, "keyStr", keyStr, "value", value)
+	slog.Debug("parseAndApplyDirective: Processing directive", "line", line, "verb", verb, "subject", subject, "value", value)
 
 	if typeCfg == nil { // File-level
 		const pkgConfigKey = "pkg-pair"
@@ -487,7 +482,7 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 		cfg := pkgConfigs[pkgConfigKey]
 		switch verb {
 		case "pair":
-			if len(keys) > 1 && keys[1] == "packages" {
+			if subject == "packages" {
 				paths := strings.Split(value, ",")
 				if len(paths) == 2 {
 					cfg.SourcePackage = strings.TrimSpace(paths[0])
@@ -496,18 +491,23 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 				}
 			}
 		case "convert":
-			if len(keys) == 2 {
-				switch keys[1] {
+			switch len(keys) {
+			case 2: // Handles convert:direction, convert:ignore, convert:remap, convert:rule
+				switch subject { // subject is keys[1]
 				case "direction":
 					cfg.Direction = value
 				case "ignore":
-					for _, f := range strings.Split(value, ",") {
-						cfg.IgnoreFields[strings.TrimSpace(f)] = true
+					ignoreParts := strings.Split(value, ",")
+					for _, part := range ignoreParts {
+						cfg.IgnoreFields[strings.TrimSpace(part)] = true
 					}
-				case "remap": // File-level remap
-					parts := strings.SplitN(value, ":", 2)
-					if len(parts) == 2 {
-						cfg.RemapFields[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+				case "remap":
+					remapParts := strings.Split(value, ";")
+					for _, remapEntry := range remapParts {
+						kv := strings.SplitN(remapEntry, ":", 2)
+						if len(kv) == 2 {
+							cfg.RemapFields[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+						}
 					}
 				case "rule":
 					rule := parseRule(value, w)
@@ -515,7 +515,7 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 						cfg.TypeConversionRules = append(cfg.TypeConversionRules, rule)
 					}
 				}
-			} else if len(keys) == 3 {
+			case 3: // Handles convert:source:suffix, convert:target:prefix etc.
 				subject, property := keys[1], keys[2]
 				switch subject {
 				case "source":
@@ -557,13 +557,19 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 			case "direction":
 				typeCfg.Direction = value
 			case "ignore":
-				for _, f := range strings.Split(value, ",") {
-					typeCfg.IgnoreFields[strings.TrimSpace(f)] = true
+				// Parse FQN#FieldName,FieldName,...
+				ignoreParts := strings.Split(value, ",")
+				for _, part := range ignoreParts {
+					typeCfg.IgnoreFields[strings.TrimSpace(part)] = true
 				}
 			case "remap": // Type-level remap
-				parts := strings.SplitN(value, ":", 2)
-				if len(parts) == 2 {
-					typeCfg.RemapFields[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+				// Parse FQN#SourceFieldPath:TargetFieldPath
+				remapParts := strings.Split(value, ";") // Allow multiple remaps separated by semicolon
+				for _, remapEntry := range remapParts {
+					kv := strings.SplitN(remapEntry, ":", 2)
+					if len(kv) == 2 {
+						typeCfg.RemapFields[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+					}
 				}
 			case "rule":
 				rule := parseRule(value, w)
@@ -674,7 +680,7 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 								slog.Debug("resolveTargetType: successfully found TypeSpec", "typeName", typeSpec.Name.Name, "pkgPath", pkg.PkgPath)
 								// If this TypeSpec is just an alias to another type, resolve the actual type.
 								if _, isStruct := typeSpec.Type.(*goast.StructType); !isStruct {
-									underlyingTypeName := w.exprToString(typeSpec.Type, pkg)
+									underlyingTypeName := w.exprToString(typeSpec.Type, w.currentPkg)
 									slog.Debug("resolveTargetType: type is an alias, recursively resolving", "alias", targetType, "underlyingType", underlyingTypeName)
 									// Resolve the underlying type.
 									resolvedUnderlyingInfo := w.resolveTargetType(underlyingTypeName)
