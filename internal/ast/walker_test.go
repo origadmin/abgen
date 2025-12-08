@@ -82,9 +82,9 @@ func TestWalker_P01_EndToEnd(t *testing.T) {
 	walker := NewPackageWalker(graph)
 	walker.AddPackages(allPkgs...) // Add all loaded packages to the walker for resolution
 
-	err := walker.WalkPackage(directivePkg) // Walk the directive package to extract configs
+	err := walker.Analyze(directivePkg) // Analyze the directive package to extract configs
 	if err != nil {
-		t.Fatalf("Walker.WalkPackage() failed: %v", err)
+		t.Fatalf("Walker.Analyze() failed: %v", err)
 	}
 
 	t.Run("VerifyFinalPackageConfig", func(t *testing.T) {
@@ -164,8 +164,8 @@ func TestWalker_P01_AnalysisPhase(t *testing.T) {
 	graph := make(types.ConversionGraph)
 	walker := NewPackageWalker(graph)
 	walker.AddPackages(allPkgs...)
-	if err := walker.WalkPackage(directivePkg); err != nil {
-		t.Fatalf("Walker.WalkPackage() failed: %v", err)
+	if err := walker.Analyze(directivePkg); err != nil {
+		t.Fatalf("Walker.Analyze() failed: %v", err)
 	}
 
 	// Define the expected mapping from local type aliases to their FQNs.

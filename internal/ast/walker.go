@@ -187,8 +187,11 @@ func (w *PackageWalker) DiscoverPackages(pkg *packages.Package) ([]string, error
 	return pathList, nil
 }
 
-// WalkPackage 遍历包内的类型定义
-
+// Analyze performs the main analysis pass. It assumes all necessary packages
+// (the directive package and any discovered dependencies) have already been
+// added to the walker via AddPackages. It then processes all directives
+// and builds the conversion configurations.
+// This function replaces the monolithic WalkPackage.
 func (w *PackageWalker) WalkPackage(pkg *packages.Package) error {
 
 	slog.Info("开始遍历包", "包", pkg.PkgPath)
@@ -263,6 +266,54 @@ func (w *PackageWalker) WalkPackage(pkg *packages.Package) error {
 
 	return nil
 
+}
+func (w *PackageWalker) Analyze(pkg *packages.Package) error {
+	slog.Info("开始分析阶段", "包", pkg.PkgPath)
+
+	// Initialize a single, global package config for this walk.
+	if len(w.PackageConfigs) == 0 {
+		w.PackageConfigs = append(w.PackageConfigs, &types.PackageConversionConfig{
+			IgnoreTypes:         make(map[string]bool),
+			IgnoreFields:        make(map[string]bool),
+			RemapFields:         make(map[string]string),
+			Direction:           "oneway", // Default direction
+			TypeConversionRules: make([]types.TypeConversionRule, 0),
+		})
+	}
+
+	w.currentPkg = pkg
+	w.collectImports(pkg.Syntax)
+	slog.Debug("Analyze: collected imports", "imports", w.imports)
+
+	// The caller is now responsible for adding all necessary packages beforehand.
+	// We ensure the current package is in the list.
+	w.AddPackages(pkg)
+
+	slog.Debug("Analyze: allKnownPkgs", "allKnownPkgs", func() []string {
+		paths := make([]string, len(w.allKnownPkgs))
+		for i, p := range w.allKnownPkgs {
+			paths[i] = p.PkgPath
+		}
+		return paths
+	}())
+
+	slog.Debug("Analyze: Number of files in pkg.Syntax", "count", len(pkg.Syntax))
+	for _, file := range pkg.Syntax {
+		filename := pkg.Fset.File(file.Pos()).Name()
+		slog.Info("分析文件", "文件", filename)
+
+		if strings.HasSuffix(filepath.Base(filename), ".gen.go") {
+			slog.Debug("Analyze: Skipping generated file", "file", filename)
+			continue
+		}
+
+		if err := w.processFileDecls(file); err != nil {
+			return err
+		}
+	}
+
+	slog.Debug("Analyze: Finished processing package", "pkgPath", pkg.PkgPath, "PackageConfigsFound", len(w.PackageConfigs))
+	return nil
 }
 
 func (w *PackageWalker) processFileDecls(file *goast.File) error {
