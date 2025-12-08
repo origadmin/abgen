@@ -2,7 +2,7 @@ package directives
 
 import (
 	_ "github.com/origadmin/abgen/testdata/fixture/ent"
-	_ "github.com/origadmin/abgen/testdata/fixture/typespb"
+	_ "github.com/origadmin/abgen/testdata/fixture/types"
 )
 
 // Phase 5: Automatic String-to-Enum Conversion
@@ -10,7 +10,7 @@ import (
 // between string and enum-like integer types.
 
 //go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/ent,alias=ent
-//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/typespb,alias=pb
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/types,alias=pb
 
 // The 'User' struct has a 'Status' field, which is 'ent.Status' (a string)
 // in the source and 'pb.Status' (an int32 enum) in the target.

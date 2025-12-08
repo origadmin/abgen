@@ -15,13 +15,11 @@ import (
 
 // 2. Conversion Behavior Rules (Global):
 //    - Apply a suffix to the target type's alias.
-//    - Direction is not specified, so it defaults to "oneway".
+//    - Direction defaults to "both", so it is not explicitly specified.
 //go:abgen:convert:target:suffix="PB"
-//go:abgen:convert:direction="both"
 
 // 3. Field Control Rule (Precise Remap):
-//    - Remap 'ID' to 'Id' for the 'User' type.
-//go:abgen:convert:remap="github.com/origadmin/abgen/testdata/fixture/ent.User#ID:Id"
+//    - Field name case-insensitive matching is handled automatically, so explicit remap for 'ID' to 'Id' is not needed.
 
 // 4. Field Control Rule (Precise Ignore):
 //    - Ignore fields from the source that do not exist in the target, or are handled in later phases.

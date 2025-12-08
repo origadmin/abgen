@@ -72,6 +72,7 @@ type TypeInfo struct {
 	PkgName     string                 // 包名称 (例如 "po", "system")
 	ImportPath  string                 // 导入路径
 	ImportAlias string                 // 在当前代码中的导入别名 (例如 "typespb", "ent")
+	LocalAlias  string                 // The local type alias name if this TypeInfo represents a local alias
 	Fields      []StructField          // 结构体字段 (for struct types only)
 	FieldsMap   map[string]StructField // 字段映射，方便通过字段名查找 (for struct types only)
 	AliasFor    string                 // 类型别名目标

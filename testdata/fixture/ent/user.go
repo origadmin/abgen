@@ -41,6 +41,19 @@ type User struct {
 	Gender    Gender
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	Status    string
+	RoleIDs   []int
+	Roles     []*Role
 	// This field uses an intentionally undefined type to trigger the bug.
 	Edges ResourceEdges
 }
+
+type Role struct {
+	ID   int
+	Name string
+}
+
+const (
+	GenderMale Gender = iota
+	GenderFemale
+)

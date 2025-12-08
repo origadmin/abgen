@@ -2,7 +2,7 @@ package directives
 
 import (
 	_ "github.com/origadmin/abgen/testdata/fixture/ent"
-	_ "github.com/origadmin/abgen/testdata/fixture/typespb"
+	_ "github.com/origadmin/abgen/testdata/fixture/types"
 )
 
 // Phase 6: Custom Rule and Dummy File Generation
@@ -10,7 +10,7 @@ import (
 // of a safe-to-edit 'abgen.custom.go' file for placeholder functions.
 
 //go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/ent,alias=ent
-//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/typespb,alias=pb
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/types,alias=pb
 
 // The 'User' struct has a 'CreatedAt' field of type 'time.Time'.
 // We want to convert this to a 'string' in the target.

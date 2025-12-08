@@ -2,14 +2,14 @@ package directives
 
 import (
 	_ "github.com/origadmin/abgen/testdata/fixture/ent"
-	_ "github.com/origadmin/abgen/testdata/fixture/typespb"
+	_ "github.com/origadmin/abgen/testdata/fixture/types"
 )
 
 // Phase 4: Automatic Slice Conversion
 // This file tests abgen's ability to automatically handle conversions for slice fields.
 
 //go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/ent,alias=ent
-//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/typespb,alias=pb
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/types,alias=pb
 
 // By pairing the packages, abgen will find both 'User' and 'Role' types.
 // The 'User' struct contains a 'Roles' field which is a slice of 'Role' structs.

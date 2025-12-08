@@ -2,7 +2,7 @@ package directives
 
 import (
 	"github.com/origadmin/abgen/testdata/fixture/ent"
-	"github.com/origadmin/abgen/testdata/fixture/typespb"
+	"github.com/origadmin/abgen/testdata/fixture/types"
 )
 
 // Phase 2: Alias-First Naming Convention
@@ -10,7 +10,7 @@ import (
 
 // Define local aliases for source and target types.
 type UserEntity = ent.User
-type UserProto = typespb.User
+type UserProto = types.User
 
 // Bind the conversion directly using the aliases.
 //go:abgen:convert="UserEntity,UserProto"
