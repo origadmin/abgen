@@ -61,7 +61,7 @@ func (g *ConverterGenerator) ParseSource(dir string) error {
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedImports | packages.NeedSyntax, // Mode DOES include NeedSyntax
 		Dir:  dir,
 	}
-	directivePkgs, err := packages.Load(cfgPhase1, "./...")
+	directivePkgs, err := packages.Load(cfgPhase1, ".")
 	if err != nil {
 		return fmt.Errorf("Phase 1: 加载指令包失败: %w", err)
 	}

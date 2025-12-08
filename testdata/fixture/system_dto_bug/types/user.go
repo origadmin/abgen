@@ -7,10 +7,16 @@ const (
 	GenderFemale Gender = "female"
 )
 
-type UserPB struct {
-	ID       int
+type User struct {
+	Id       int
 	Username string
 	Age      int
 	Gender   Gender
 	// Note: No Edges field here
+}
+
+type Resource struct {
+	Id       int
+	Name     string
+	ParentId int
 }

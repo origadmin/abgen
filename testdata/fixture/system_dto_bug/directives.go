@@ -17,4 +17,4 @@ import (
 //go:abgen:convert:source:suffix=""
 //go:abgen:convert:target:suffix="PB"
 type User = ent.User
-type UserPB = types.UserPB
+type UserPB = types.User
