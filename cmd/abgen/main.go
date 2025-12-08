@@ -10,7 +10,7 @@ import (
 
 	goversion "github.com/caarlos0/go-version"
 
-	"github.com/origadmin/abgen/internal/core"
+	"github.com/origadmin/abgen/internal/generator"
 	"github.com/origadmin/abgen/internal/types"
 )
 
@@ -48,7 +48,7 @@ func main() {
 	}
 
 	// 在创建生成器后设置模板目录
-	generator := core.NewGenerator()
+	generator := generator.NewGenerator()
 	if *templateDir != "" {
 		generator.SetTemplateDir(*templateDir)
 	}

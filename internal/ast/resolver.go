@@ -13,10 +13,9 @@ import (
 type TypeResolver interface {
 	Resolve(typeName string) (types.TypeInfo, error)
 	UpdateFromWalker(walker *PackageWalker) error
-	GetImports() map[string]string
 	GetKnownTypes() map[string]types.TypeInfo
-	AddPackages(pkgs ...*packages.Package) // New method to add more packages dynamically
-	GetLocalTypeAliases() map[string]string // New: Get local type aliases
+	AddPackages(pkgs ...*packages.Package)
+	GetLocalTypeNameToFQN() map[string]string
 }
 
 // TypeResolverImpl implements the TypeResolver interface.
@@ -71,14 +70,6 @@ func (r *TypeResolverImpl) UpdateFromWalker(walker *PackageWalker) error {
 	return nil
 }
 
-// GetImports returns the collected imports.
-func (r *TypeResolverImpl) GetImports() map[string]string {
-	if r.walker == nil {
-		return make(map[string]string)
-	}
-	return r.walker.GetImports()
-}
-
 // GetKnownTypes returns the cache of known types.
 func (r *TypeResolverImpl) GetKnownTypes() map[string]types.TypeInfo {
 	if r.walker == nil {
@@ -87,10 +78,10 @@ func (r *TypeResolverImpl) GetKnownTypes() map[string]types.TypeInfo {
 	return r.walker.GetTypeCache()
 }
 
-// GetLocalTypeAliases returns the local type aliases collected by the walker.
-func (r *TypeResolverImpl) GetLocalTypeAliases() map[string]string {
+// GetLocalTypeNameToFQN returns the local type name to FQN map collected by the walker.
+func (r *TypeResolverImpl) GetLocalTypeNameToFQN() map[string]string {
 	if r.walker == nil {
 		return make(map[string]string)
 	}
-	return r.walker.GetLocalTypeAliases()
+	return r.walker.GetLocalTypeNameToFQN()
 }

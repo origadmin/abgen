@@ -1,5 +1,5 @@
-// Package core implements the functions, types, and interfaces for the module.
-package core
+// Package generator implements the functions, types, and interfaces for the module.
+package generator
 
 import (
 	"fmt"
@@ -12,21 +12,21 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	"github.com/origadmin/abgen/internal/ast"
-	"github.com/origadmin/abgen/internal/generator"
+	"github.com/origadmin/abgen/internal/fieldgen"
 	"github.com/origadmin/abgen/internal/template"
 	"github.com/origadmin/abgen/internal/types"
 )
 
 // ConverterGenerator 代码生成器
 type ConverterGenerator struct {
-	walker      *ast.PackageWalker
-	resolver    ast.TypeResolver // Add this field
-	graph       types.ConversionGraph
-	PkgPath     string
-	Output      string
-	fieldGen    *generator.FieldGenerator
-	tmplMgr     *template.Manager
-	importMgr   types.ImportManager // Change type to interface
+	walker    *ast.PackageWalker
+	resolver  ast.TypeResolver // Add this field
+	graph     types.ConversionGraph
+	PkgPath   string
+	Output    string
+	fieldGen  *fieldgen.FieldGenerator
+	tmplMgr   *template.Manager
+	importMgr types.ImportManager // Change type to interface
 }
 
 // SetTemplateDir sets the directory for custom type conversion templates in the embedded field generator.
@@ -39,15 +39,15 @@ func (g *ConverterGenerator) SetTemplateDir(dir string) {
 // NewGenerator 创建新的生成器实例
 func NewGenerator() *ConverterGenerator {
 	g := &ConverterGenerator{
-		graph:   make(types.ConversionGraph),
-		tmplMgr: template.NewManager(),
+		graph:     make(types.ConversionGraph),
+		tmplMgr:   template.NewManager(),
 		importMgr: types.NewImportManager(""), // Call types.NewImportManager
 	}
 	g.walker = ast.NewPackageWalker(g.graph)
 	g.resolver = ast.NewResolver(nil) // Create the actual resolver here
-	
-	g.fieldGen = generator.NewFieldGenerator(nil, g.importMgr) // Pass g.importMgr
-	g.fieldGen.SetResolver(g.resolver) // Set the resolver to fieldGen
+
+	g.fieldGen = fieldgen.New(nil, g.importMgr) // Pass g.importMgr
+	g.fieldGen.SetResolver(g.resolver)          // Set the resolver to fieldGen
 	return g
 }
 
@@ -73,7 +73,7 @@ func (g *ConverterGenerator) ParseSource(dir string) error {
 	var allPackageConfigs []*types.PackageConversionConfig
 	for _, pkg := range directivePkgs {
 		// Use a temporary walker to extract PackageConfigs from directives
-		tempWalker := ast.NewPackageWalker(nil) 
+		tempWalker := ast.NewPackageWalker(nil)
 		if err := tempWalker.WalkPackage(pkg); err != nil {
 			return fmt.Errorf("Phase 1: 遍历指令包失败: %w", err)
 		}
@@ -90,6 +90,27 @@ func (g *ConverterGenerator) ParseSource(dir string) error {
 	uniquePkgPaths := make(map[string]bool)
 	var explicitLoadPaths []string
 
+	// CRITICAL FIX: Add the output directory's package to the load paths first.
+	// This ensures that we analyze the destination package for existing types *before*
+	// processing any conversion directives.
+	if g.Output != "" {
+		// We need to resolve the output directory to a package import path.
+		// A simple way is to load it. We'll use a temporary config for this.
+		cfgOut := &packages.Config{Mode: packages.NeedName, Dir: g.Output}
+		outPkgs, err := packages.Load(cfgOut, ".")
+		if err != nil {
+			return fmt.Errorf("无法解析输出目录 %s 的包路径: %w", g.Output, err)
+		}
+		if len(outPkgs) > 0 && outPkgs[0].PkgPath != "" {
+			outPkgPath := outPkgs[0].PkgPath
+			if !uniquePkgPaths[outPkgPath] {
+				slog.Debug("将输出包添加到加载路径", "path", outPkgPath)
+				uniquePkgPaths[outPkgPath] = true
+				explicitLoadPaths = append(explicitLoadPaths, outPkgPath)
+			}
+		}
+	}
+
 	for _, cfg := range allPackageConfigs {
 		if !uniquePkgPaths[cfg.SourcePackage] {
 			uniquePkgPaths[cfg.SourcePackage] = true
@@ -100,7 +121,7 @@ func (g *ConverterGenerator) ParseSource(dir string) error {
 			explicitLoadPaths = append(explicitLoadPaths, cfg.TargetPackage)
 		}
 	}
-	
+
 	// Add the directive packages themselves to be fully loaded, as their ASTs might be needed for later resolution
 	for _, pkg := range directivePkgs {
 		if !uniquePkgPaths[pkg.PkgPath] {
@@ -109,13 +130,12 @@ func (g *ConverterGenerator) ParseSource(dir string) error {
 		}
 	}
 
-
 	sort.Strings(explicitLoadPaths) // Sort for deterministic behavior
 
 	// Phase 2: Load all identified packages (source, target, and directive packages) with full syntax and type info
 	cfgPhase2 := &packages.Config{
 		Mode: packages.NeedSyntax | packages.NeedName | packages.NeedFiles | packages.NeedImports | packages.NeedTypes | packages.NeedTypesInfo, // Mode DOES include NeedSyntax
-		Dir:  dir, // Keep original dir for context, though explicitLoadPaths overrides what's loaded
+		Dir:  dir,                                                                                                                               // Keep original dir for context, though explicitLoadPaths overrides what's loaded
 	}
 	allLoadedPkgs, err := packages.Load(cfgPhase2, explicitLoadPaths...)
 	if err != nil {
@@ -129,7 +149,7 @@ func (g *ConverterGenerator) ParseSource(dir string) error {
 	for i, p := range allLoadedPkgs {
 		slog.Debug("ParseSource: Loaded package (explicit)", "index", i, "path", p.PkgPath, "files", len(p.Syntax))
 	}
-	
+
 	// Set the main package path for code generation (e.g., for import paths)
 	g.PkgPath = directivePkgs[0].PkgPath // The package where directives were found
 	g.walker.AddPackages(allLoadedPkgs...)
@@ -137,7 +157,7 @@ func (g *ConverterGenerator) ParseSource(dir string) error {
 
 	// Fully initialize the importManager for Generator and FieldGenerator now that g.PkgPath is known
 	g.importMgr = types.NewImportManager(g.PkgPath) // Call types.NewImportManager
-	g.fieldGen.SetImportManager(g.importMgr)         // Update fieldGen's importMgr
+	g.fieldGen.SetImportManager(g.importMgr)        // Update fieldGen's importMgr
 	// g.tmplMgr.SetLocalPackage(g.PkgPath)          // Removed - no such method on template.Manager
 	// Create a map for quick package lookup
 	pkgMap := make(map[string]*packages.Package)
@@ -211,20 +231,20 @@ func (g *ConverterGenerator) matchTypesInPackages(srcPkg, dstPkg *packages.Packa
 	}
 }
 
-
-
 // Generate 生成转换代码
 func (g *ConverterGenerator) Generate() error {
 	slog.Info("开始生成转换代码")
 	packageName := filepath.Base(g.PkgPath)
-	// Use the importMgr from the generator struct
-	importMgr := g.importMgr // Use g.importMgr
+	importMgr := g.importMgr
 	var funcs []*template.Function
 	var typeAliases []string
 	generatedFuncs := make(map[string]bool)
-	seenCustomRuleFuncs := make(map[string]bool) // Map to store unique custom rule function names
+	seenCustomRuleFuncs := make(map[string]bool)
 
 	importMgr.GetType("log/slog", "")
+
+	// Get all existing type names in the target generation package to check for collisions.
+	localTypeNameToFQN := g.resolver.GetLocalTypeNameToFQN()
 
 	for _, node := range g.graph {
 		for _, cfg := range node.Configs {
@@ -243,68 +263,23 @@ func (g *ConverterGenerator) Generate() error {
 			srcLocalType := importMgr.GetType(sourceInfo.ImportPath, sourceInfo.Name)
 			dstLocalType := importMgr.GetType(targetInfo.ImportPath, targetInfo.Name)
 
-			slog.Debug("Generate: processing conversion",
-				"sourceInfo.ImportPath", sourceInfo.ImportPath,
-				"sourceInfo.Name", sourceInfo.Name,
-				"srcAlias", srcAlias,
-				"srcLocalType", srcLocalType,
-				"targetInfo.ImportPath", targetInfo.ImportPath,
-				"targetInfo.Name", targetInfo.Name,
-				"targetAlias", targetAlias,
-				"dstLocalType", dstLocalType,
-			)
-
-			if !importMgr.IsAliasRegistered(srcAlias) { // Condition removed
-				localAliases := g.resolver.GetLocalTypeAliases()
-				skip := false
-				if existingLocalAliasUnderlying, exists := localAliases[srcAlias]; exists {
-					// Resolve srcLocalType (e.g., "ent.User") to its FQN for accurate comparison.
-					// srcLocalType is like "pkgAlias.TypeName" or "TypeName".
-					srcLocalTypeInfo, err := g.resolver.Resolve(srcLocalType)
-					if err == nil {
-						resolvedSrcLocalTypeFQN := srcLocalTypeInfo.ImportPath
-						if resolvedSrcLocalTypeFQN != "" && resolvedSrcLocalTypeFQN != "builtin" {
-							resolvedSrcLocalTypeFQN += "."
-						}
-						resolvedSrcLocalTypeFQN += srcLocalTypeInfo.Name
-
-						if existingLocalAliasUnderlying == resolvedSrcLocalTypeFQN {
-							slog.Debug("Generate: skipping redundant source alias generation (FQN match)", "alias", srcAlias, "generatedType", srcLocalType, "existingLocalType", existingLocalAliasUnderlying)
-							skip = true
-						}
-					}
-				}
-				if !skip {
-					typeAliases = append(typeAliases, fmt.Sprintf("type %s = %s", srcAlias, srcLocalType))
-					importMgr.RegisterAlias(srcAlias)
-				}
+			// Check if the alias name *itself* already exists as a defined type in the target package.
+			if _, exists := localTypeNameToFQN[srcAlias]; !exists {
+				typeAliases = append(typeAliases, fmt.Sprintf("type %s = %s", srcAlias, srcLocalType))
+				importMgr.RegisterAlias(srcAlias) // Mark as "to be generated"
+			} else {
+				slog.Debug("Generate: skipping alias generation, name already exists in target package", "alias", srcAlias)
 			}
-			            if !importMgr.IsAliasRegistered(targetAlias) { // Condition removed
-			                localAliases := g.resolver.GetLocalTypeAliases()
-			                skip := false
-			                if existingLocalAliasUnderlying, exists := localAliases[targetAlias]; exists {
-			                    dstLocalTypeInfo, err := g.resolver.Resolve(cfg.Target.Type)
-			                    if err == nil {
-			                        resolvedDstFQN := dstLocalTypeInfo.ImportPath
-			                        if resolvedDstFQN != "" {
-			                            resolvedDstFQN += "."
-			                        }
-			                        resolvedDstFQN += dstLocalTypeInfo.Name
-			
-			                        if existingLocalAliasUnderlying == resolvedDstFQN || (dstLocalTypeInfo.ImportPath == g.PkgPath && existingLocalAliasUnderlying == dstLocalTypeInfo.Name) {
-			                            slog.Debug("Generate: skipping redundant target alias generation", "alias", targetAlias, "type", dstLocalType)
-			                            skip = true
-			                        }
-			                    }
-			                }
-			                if !skip {
-			                    typeAliases = append(typeAliases, fmt.Sprintf("type %s = %s", targetAlias, dstLocalType))
-			                    importMgr.RegisterAlias(targetAlias)
-			                }
-			            }
+
+			if _, exists := localTypeNameToFQN[targetAlias]; !exists {
+				typeAliases = append(typeAliases, fmt.Sprintf("type %s = %s", targetAlias, dstLocalType))
+				importMgr.RegisterAlias(targetAlias) // Mark as "to be generated"
+			} else {
+				slog.Debug("Generate: skipping alias generation, name already exists in target package", "alias", targetAlias)
+			}
+
 			g.fieldGen.SetCustomTypeConversionRules(cfg.TypeConversionRules)
-			
-			// Collect custom rule function names
+
 			for _, rule := range cfg.TypeConversionRules {
 				if rule.ConvertFunc != "" {
 					seenCustomRuleFuncs[rule.ConvertFunc] = true
@@ -314,8 +289,8 @@ func (g *ConverterGenerator) Generate() error {
 
 			funcs = append(funcs, &template.Function{
 				Name:          funcName,
-				SourceType:    srcAlias, // Use the aliased name for function signature
-				TargetType:    targetAlias, // Use the aliased name for function signature
+				SourceType:    srcAlias,
+				TargetType:    targetAlias,
 				SourcePointer: "*",
 				TargetPointer: "*",
 				Conversions:   fields,
@@ -324,7 +299,6 @@ func (g *ConverterGenerator) Generate() error {
 	}
 	sort.Strings(typeAliases)
 
-	// Convert seenCustomRuleFuncs map to a sorted slice
 	var customRuleFuncs []string
 	for funcName := range seenCustomRuleFuncs {
 		customRuleFuncs = append(customRuleFuncs, funcName)
@@ -332,11 +306,11 @@ func (g *ConverterGenerator) Generate() error {
 	sort.Strings(customRuleFuncs)
 
 	templateData := &template.Data{
-		PackageName: packageName,
-		Imports:     importMgr.GetImports(),
-		TypeAliases: typeAliases,
-		Funcs:       funcs,
-		CustomRuleFuncs: customRuleFuncs, // Assign the collected function names
+		PackageName:     packageName,
+		Imports:         importMgr.GetImports(),
+		TypeAliases:     typeAliases,
+		Funcs:           funcs,
+		CustomRuleFuncs: customRuleFuncs,
 	}
 
 	output, err := g.tmplMgr.Render("generator.tpl", templateData)

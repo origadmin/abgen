@@ -1,4 +1,4 @@
-package generator
+package fieldgen
 
 import (
 	"bytes"
@@ -534,8 +534,8 @@ func (fg *FieldGenerator) GenerateFields(sourceType, targetType string, cfg *typ
 	return fields
 }
 
-// NewFieldGenerator creates and initializes a new FieldGenerator instance.
-func NewFieldGenerator(customRules []types.TypeConversionRule, importMgr types.ImportManager) *FieldGenerator {
+// New creates and initializes a new FieldGenerator instance.
+func New(customRules []types.TypeConversionRule, importMgr types.ImportManager) *FieldGenerator {
 	fg := &FieldGenerator{
 		conversionRules:           make(map[string]ConversionRule),
 		customTypeConversionRules: customRules,

@@ -13,7 +13,7 @@ import (
 
 func loadTestPackages(t *testing.T) []*packages.Package {
 	t.Helper()
-	testDir, err := filepath.Abs("./testdata")
+	testDir, err := filepath.Abs("../../testdata/directives")
 	if err != nil {
 		t.Fatalf("Failed to get absolute path for testdata: %v", err)
 	}
@@ -23,9 +23,9 @@ func loadTestPackages(t *testing.T) []*packages.Package {
 		Dir:  testDir,
 	}
 	pkgs, err := packages.Load(cfg,
-		"github.com/origadmin/abgen/internal/ast/testdata",
-		"github.com/origadmin/abgen/internal/testdata/ent",
-		"github.com/origadmin/abgen/internal/testdata/typespb",
+		"github.com/origadmin/abgen/testdata/directives",
+		"github.com/origadmin/abgen/testdata/internal/ent",
+		"github.com/origadmin/abgen/testdata/exps/typespb",
 	)
 	if err != nil {
 		t.Fatalf("Failed to load packages: %v", err)
@@ -49,9 +49,9 @@ func findPackage(pkgs []*packages.Package, suffix string) *packages.Package {
 func TestWalker_Parser(t *testing.T) {
 	slog.SetLogLoggerLevel(slog.LevelDebug)
 	allPkgs := loadTestPackages(t)
-	targetPkg := findPackage(allPkgs, "testdata")
+	targetPkg := findPackage(allPkgs, "ast")
 	if targetPkg == nil {
-		t.Fatal("Could not find the target testdata package.")
+		t.Fatal("Could not find the target ast package.")
 	}
 
 	graph := make(types.ConversionGraph)
@@ -69,14 +69,14 @@ func TestWalker_Parser(t *testing.T) {
 		}
 		pkgCfg := walker.PackageConfigs[0]
 
-		if pkgCfg.SourcePackage != "github.com/origadmin/abgen/internal/testdata/ent" {
-			t.Errorf("Expected SourcePackage %q, got %q", "github.com/origadmin/abgen/internal/testdata/ent", pkgCfg.SourcePackage)
+		if pkgCfg.SourcePackage != "github.com/origadmin/abgen/testdata/exps/ent" {
+			t.Errorf("Expected SourcePackage %q, got %q", "github.com/origadmin/abgen/testdata/exps/ent", pkgCfg.SourcePackage)
 		}
-		if pkgCfg.TargetPackage != "github.com/origadmin/abgen/internal/testdata/typespb" {
+		if pkgCfg.TargetPackage != "github.com/origadmin/abgen/testdata/exps/typespb" {
 			t.Errorf("Expected TargetPackage %q, got %q", "github.com/origadmin/abgen/internal/testdata/typespb", pkgCfg.TargetPackage)
 		}
-		if pkgCfg.SourceSuffix != "Ent" {
-			t.Errorf("Expected SourceSuffix 'Ent', got %q", pkgCfg.SourceSuffix)
+		if pkgCfg.SourceSuffix != "" {
+			t.Errorf("Expected SourceSuffix \"\", got %q", pkgCfg.SourceSuffix)
 		}
 		if pkgCfg.TargetSuffix != "PB" {
 			t.Errorf("Expected TargetSuffix 'PB', got %q", pkgCfg.TargetSuffix)
@@ -96,8 +96,8 @@ func TestWalker_Parser(t *testing.T) {
 		}
 
 		expectedRules := []types.TypeConversionRule{
-			{SourceTypeName: "github.com/origadmin/abgen/internal/testdata/ent.Status", TargetTypeName: "builtin.string", ConvertFunc: "ConvertStatusToString"},
-			{SourceTypeName: "builtin.string", TargetTypeName: "github.com/origadmin/abgen/internal/testdata/ent.Status", ConvertFunc: "ConvertString2Status"},
+			{SourceTypeName: "github.com/origadmin/abgen/testdata/exps/ent.Status", TargetTypeName: "string", ConvertFunc: "ConvertStatusToString"},
+			{SourceTypeName: "string", TargetTypeName: "github.com/origadmin/abgen/testdata/exps/ent.Status", ConvertFunc: "ConvertString2Status"},
 		}
 		if !reflect.DeepEqual(pkgCfg.TypeConversionRules, expectedRules) {
 			t.Errorf("Expected rules %v, got %v", expectedRules, pkgCfg.TypeConversionRules)
@@ -109,8 +109,8 @@ func TestWalker_Parser(t *testing.T) {
 			t.Fatalf("Expected 2 nodes in graph, got %d", len(graph))
 		}
 
-		key1 := "github.com/origadmin/abgen/internal/testdata/ent.User2github.com/origadmin/abgen/internal/testdata/typespb.User"
-		node1, ok := graph["github.com/origadmin/abgen/internal/testdata/ent.User"]
+		key1 := "github.com/origadmin/abgen/testdata/exps/ent.User2github.com/origadmin/abgen/testdata/exps/typespb.User"
+		node1, ok := graph["github.com/origadmin/abgen/testdata/exps/ent.User"]
 		if !ok {
 			t.Fatalf("Graph missing node for ent.User")
 		}
@@ -120,10 +120,10 @@ func TestWalker_Parser(t *testing.T) {
 		}
 
 		// Assert EndpointConfig usage
-		if cfg1.Source.Type != "github.com/origadmin/abgen/internal/testdata/ent.User" {
-			t.Errorf("Cfg1: Expected source type %q, got %q", "github.com/origadmin/abgen/internal/testdata/ent.User", cfg1.Source.Type)
+		if cfg1.Source.Type != "github.com/origadmin/abgen/testdata/exps/ent.User" {
+			t.Errorf("Cfg1: Expected source type %q, got %q", "github.com/origadmin/abgen/testdata/exps/ent.User", cfg1.Source.Type)
 		}
-		if cfg1.Target.Type != "github.com/origadmin/abgen/internal/testdata/typespb.User" {
+		if cfg1.Target.Type != "github.com/origadmin/abgen/testdata/exps/typespb.User" {
 			t.Errorf("Cfg1: Expected target type %q, got %q", "github.com/origadmin/abgen/internal/testdata/typespb.User", cfg1.Target.Type)
 		}
 
@@ -140,8 +140,8 @@ func TestWalker_Parser(t *testing.T) {
 			t.Errorf("Cfg1: Expected 0 remap fields, got %d", len(cfg1.RemapFields))
 		}
 
-		revKey1 := "github.com/origadmin/abgen/internal/testdata/typespb.User2github.com/origadmin/abgen/internal/testdata/ent.User"
-		revNode1, ok := graph["github.com/origadmin/abgen/internal/testdata/typespb.User"]
+		revKey1 := "github.com/origadmin/abgen/testdata/exps/typespb.User2github.com/origadmin/abgen/testdata/exps/ent.User"
+		revNode1, ok := graph["github.com/origadmin/abgen/testdata/exps/typespb.User"]
 		if !ok {
 			t.Fatalf("Graph missing reverse node for typespb.User")
 		}
@@ -165,8 +165,8 @@ func TestWalker_Parser(t *testing.T) {
 	t.Run("ConvertDirectives_Directional", func(t *testing.T) {
 		// This is for SingleDirection -> SingleDirectionPB (direction=from)
 		// The logic for "from" creates a reverse conversion config.
-		key2 := "github.com/origadmin/abgen/internal/testdata/typespb.User2github.com/origadmin/abgen/internal/testdata/ent.User"
-		node2, ok := graph["github.com/origadmin/abgen/internal/testdata/typespb.User"]
+		key2 := "github.com/origadmin/abgen/testdata/exps/typespb.User2github.com/origadmin/abgen/testdata/exps/ent.User"
+		node2, ok := graph["github.com/origadmin/abgen/testdata/exps/typespb.User"]
 		if !ok {
 			t.Fatalf("Graph missing node for typespb.User for the 'from' directive")
 		}
@@ -182,11 +182,33 @@ func TestWalker_Parser(t *testing.T) {
 		if cfg2.Direction != "to" {
 			t.Errorf("Cfg2: Expected direction of reversed config to be 'to', got %q", cfg2.Direction)
 		}
-		if cfg2.Source.Type != "github.com/origadmin/abgen/internal/testdata/typespb.User" {
+		if cfg2.Source.Type != "github.com/origadmin/abgen/testdata/exps/typespb.User" {
 			t.Errorf("Cfg2: Expected source type to be typespb.User, got %q", cfg2.Source.Type)
 		}
-		if cfg2.Target.Type != "github.com/origadmin/abgen/internal/testdata/ent.User" {
+		if cfg2.Target.Type != "github.com/origadmin/abgen/testdata/exps/ent.User" {
 			t.Errorf("Cfg2: Expected target type to be ent.User, got %q", cfg2.Target.Type)
+		}
+	})
+
+	t.Run("LocalTypeNameToFQN", func(t *testing.T) {
+		nameToFQN := walker.GetLocalTypeNameToFQN()
+		expected := map[string]string{
+			"User":              "github.com/origadmin/abgen/testdata/exps/ent.User",
+			"UserPB":            "github.com/origadmin/abgen/testdata/exps/typespb.User",
+			"SingleDirection":   "github.com/origadmin/abgen/testdata/exps/ent.User",
+			"SingleDirectionPB": "github.com/origadmin/abgen/testdata/exps/typespb.User",
+		}
+
+		if len(nameToFQN) != len(expected) {
+			t.Errorf("Expected %d defined types, but got %d. Got: %v", len(expected), len(nameToFQN), nameToFQN)
+		}
+
+		for name, expectedFQN := range expected {
+			if fqn, ok := nameToFQN[name]; !ok {
+				t.Errorf("Expected local type %q to be defined, but it was not found.", name)
+			} else if fqn != expectedFQN {
+				t.Errorf("For local type %q, expected FQN %q, but got %q", name, expectedFQN, fqn)
+			}
 		}
 	})
 }
