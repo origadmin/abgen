@@ -3,6 +3,7 @@ package ast
 import (
 	"path/filepath"
 	"reflect"
+	"sort"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
@@ -116,7 +117,7 @@ func TestWalker_P01_EndToEnd(t *testing.T) {
 			t.Errorf("Expected TargetSuffix 'PB', got %q", pkgCfg.TargetSuffix)
 		}
 		// This comes from convert:direction="oneway"
-		if pkgCfg.Direction != "oneway" { 
+		if pkgCfg.Direction != "oneway" {
 			t.Errorf("Expected Direction 'oneway', got %q", pkgCfg.Direction)
 		}
 
@@ -182,4 +183,37 @@ func TestWalker_P01_AnalysisPhase(t *testing.T) {
 			t.Errorf("Mismatched local type alias to FQN map.\nExpected: %v\nGot:      %v", expectedAliasMap, actualAliasMap)
 		}
 	})
+}
+
+// TestWalker_P01_DiscoveryPhase specifically tests the package discovery phase.
+// It provides the walker with only the directive package and verifies that it
+// correctly identifies the source and target packages that need to be loaded.
+func TestWalker_P01_DiscoveryPhase(t *testing.T) {
+	// Step 1: Load ONLY the directive package, simulating the initial state.
+	_, directivePkg := loadTestPackages(t,
+		"../../testdata/directives/p01_basic",
+		// NO other dependencies are provided here.
+	)
+
+	// Step 2: Initialize the walker and run the discovery phase.
+	graph := make(types.ConversionGraph)
+	walker := NewPackageWalker(graph)
+	discoveredPaths, err := walker.DiscoverPackages(directivePkg)
+	if err != nil {
+		t.Fatalf("Walker.DiscoverPackages() failed: %v", err)
+	}
+
+	// Step 3: Verify the results.
+	expectedPaths := []string{
+		"github.com/origadmin/abgen/testdata/fixture/ent",
+		"github.com/origadmin/abgen/testdata/fixture/types",
+	}
+
+	// Sort slices for consistent comparison
+	sort.Strings(discoveredPaths)
+	sort.Strings(expectedPaths)
+
+	if !reflect.DeepEqual(expectedPaths, discoveredPaths) {
+		t.Errorf("Discovered package paths do not match expected paths.\nExpected: %v\nGot:      %v", expectedPaths, discoveredPaths)
+	}
 }
