@@ -17,6 +17,7 @@ import (
 //    - Apply a suffix to the target type's alias.
 //    - Direction is not specified, so it defaults to "oneway".
 //go:abgen:convert:target:suffix="PB"
+//go:abgen:convert:direction="both"
 
 // 3. Field Control Rule (Precise Remap):
 //    - Remap 'ID' to 'Id' for the 'User' type.

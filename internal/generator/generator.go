@@ -1,327 +1,227 @@
-// Package generator implements the functions, types, and interfaces for the module.
+// Package generator is responsible for generating the Go source code based on the
+// analysis results from the AST walker.
 package generator
 
 import (
+	"bytes"
 	"fmt"
-	goast "go/ast"
-	"log/slog"
-	"os"
-	"path/filepath"
+	"go/format"
+	"path"
 	"sort"
-
-	"golang.org/x/tools/go/packages"
+	"strconv"
+	"strings"
 
 	"github.com/origadmin/abgen/internal/ast"
-	"github.com/origadmin/abgen/internal/fieldgen"
-	"github.com/origadmin/abgen/internal/template"
 	"github.com/origadmin/abgen/internal/types"
 )
 
-// ConverterGenerator 代码生成器
-type ConverterGenerator struct {
-	walker    *ast.PackageWalker
-	resolver  ast.TypeResolver // Add this field
-	graph     types.ConversionGraph
-	PkgPath   string
-	Output    string
-	fieldGen  *fieldgen.FieldGenerator
-	tmplMgr   *template.Manager
-	importMgr types.ImportManager // Change type to interface
+// ImportManager handles import path collection and alias generation.
+type ImportManager struct {
+	imports map[string]string // Maps import path to alias
 }
 
-// SetTemplateDir sets the directory for custom type conversion templates in the embedded field generator.
-func (g *ConverterGenerator) SetTemplateDir(dir string) {
-	if g.fieldGen != nil {
-		g.fieldGen.SetTemplateDir(dir)
+// NewImportManager creates a new ImportManager.
+func NewImportManager() *ImportManager {
+	return &ImportManager{
+		imports: make(map[string]string),
 	}
 }
 
-// NewGenerator 创建新的生成器实例
-func NewGenerator() *ConverterGenerator {
-	g := &ConverterGenerator{
-		graph:     make(types.ConversionGraph),
-		tmplMgr:   template.NewManager(),
-		importMgr: types.NewImportManager(""), // Call types.NewImportManager
+// Add adds an import path and returns the alias to be used in the generated code.
+func (im *ImportManager) Add(importPath string) string {
+	if alias, exists := im.imports[importPath]; exists {
+		return alias
 	}
-	g.walker = ast.NewPackageWalker(g.graph)
-	g.resolver = ast.NewResolver(nil) // Create the actual resolver here
-
-	g.fieldGen = fieldgen.New(nil, g.importMgr) // Pass g.importMgr
-	g.fieldGen.SetResolver(g.resolver)          // Set the resolver to fieldGen
-	return g
+	// Generate a unique alias to avoid conflicts
+	alias := path.Base(importPath)
+	originalAlias := alias
+	counter := 1
+	for {
+		isConflict := false
+		for _, existingAlias := range im.imports {
+			if existingAlias == alias {
+				isConflict = true
+				alias = originalAlias + strconv.Itoa(counter)
+				counter++
+				break
+			}
+		}
+		if !isConflict {
+			break
+		}
+	}
+	im.imports[importPath] = alias // Map path to its unique alias
+	return alias
 }
 
-// ParseSource 解析目录下的所有Go文件
-func (g *ConverterGenerator) ParseSource(dir string) error {
-	slog.Info("ParseSource 开始", "目录", dir)
-
-	// Phase 1: Load the packages specified by 'dir' (e.g., the directive package itself)
-	// We only need basic info and files to scan for directives.
-	cfgPhase1 := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedImports | packages.NeedSyntax, // Mode DOES include NeedSyntax
-		Dir:  dir,
-	}
-	directivePkgs, err := packages.Load(cfgPhase1, ".")
-	if err != nil {
-		return fmt.Errorf("Phase 1: 加载指令包失败: %w", err)
-	}
-	if len(directivePkgs) == 0 {
-		return fmt.Errorf("Phase 1: 未找到任何有效指令包: %s", dir)
-	}
-
-	// Extract all package configs from directives
-	var allPackageConfigs []*types.PackageConversionConfig
-	for _, pkg := range directivePkgs {
-		// Use a temporary walker to extract PackageConfigs from directives
-		// Pass a non-nil graph to tempWalker so it can store configs.
-		// Or, more simply, collect from tempWalker.PackageConfigs directly.
-		tempWalker := ast.NewPackageWalker(make(types.ConversionGraph)) // Pass a new graph instance
-		if err := tempWalker.WalkPackage(pkg); err != nil {
-			return fmt.Errorf("Phase 1: 遍历指令包失败: %w", err)
-		}
-		// Corrected: Collect PackageConfigs from the tempWalker after it has walked the package.
-		allPackageConfigs = append(allPackageConfigs, tempWalker.PackageConfigs...)
-	}
-
-	if len(allPackageConfigs) == 0 {
-		return fmt.Errorf("未找到任何转换指令 (//go:abgen:convert)")
-	}
-
-	// Collect all unique source and target package paths from directives
-	uniquePkgPaths := make(map[string]bool)
-	var explicitLoadPaths []string
-
-	// CRITICAL FIX: Add the output directory's package to the load paths first.
-	// This ensures that we analyze the destination package for existing types *before*
-	// processing any conversion directives.
-	if g.Output != "" {
-		// We need to resolve the output directory to a package import path.
-		// A simple way is to load it. We'll use a temporary config for this.
-		cfgOut := &packages.Config{Mode: packages.NeedName, Dir: g.Output}
-		outPkgs, err := packages.Load(cfgOut, ".")
-		if err != nil {
-			return fmt.Errorf("无法解析输出目录 %s 的包路径: %w", g.Output, err)
-		}
-		if len(outPkgs) > 0 && outPkgs[0].PkgPath != "" {
-			outPkgPath := outPkgs[0].PkgPath
-			if !uniquePkgPaths[outPkgPath] {
-				slog.Debug("将输出包添加到加载路径", "path", outPkgPath)
-				uniquePkgPaths[outPkgPath] = true
-				explicitLoadPaths = append(explicitLoadPaths, outPkgPath)
-			}
-		}
-	}
-
-	for _, cfg := range allPackageConfigs {
-		if !uniquePkgPaths[cfg.SourcePackage] {
-			uniquePkgPaths[cfg.SourcePackage] = true
-			explicitLoadPaths = append(explicitLoadPaths, cfg.SourcePackage)
-		}
-		if !uniquePkgPaths[cfg.TargetPackage] {
-			uniquePkgPaths[cfg.TargetPackage] = true
-			explicitLoadPaths = append(explicitLoadPaths, cfg.TargetPackage)
-		}
-	}
-
-	// Add the directive packages themselves to be fully loaded, as their ASTs might be needed for later resolution
-	for _, pkg := range directivePkgs {
-		if !uniquePkgPaths[pkg.PkgPath] {
-			uniquePkgPaths[pkg.PkgPath] = true
-			explicitLoadPaths = append(explicitLoadPaths, pkg.PkgPath)
-		}
-	}
-
-	sort.Strings(explicitLoadPaths) // Sort for deterministic behavior
-
-	// Phase 2: Load all identified packages (source, target, and directive packages) with full syntax and type info
-	cfgPhase2 := &packages.Config{
-		Mode: packages.NeedSyntax | packages.NeedName | packages.NeedFiles | packages.NeedImports | packages.NeedTypes | packages.NeedTypesInfo, // Mode DOES include NeedSyntax
-		Dir:  dir,                                                                                                                               // Keep original dir for context, though explicitLoadPaths overrides what's loaded
-	}
-	allLoadedPkgs, err := packages.Load(cfgPhase2, explicitLoadPaths...)
-	if err != nil {
-		return fmt.Errorf("Phase 2: 加载所有必要包失败: %w", err)
-	}
-	if len(allLoadedPkgs) == 0 {
-		return fmt.Errorf("Phase 2: 未找到任何有效包用于代码生成")
-	}
-
-	slog.Debug("ParseSource: Loaded packages (explicit)", "count", len(allLoadedPkgs))
-	for i, p := range allLoadedPkgs {
-		slog.Debug("ParseSource: Loaded package (explicit)", "index", i, "path", p.PkgPath, "files", len(p.Syntax))
-	}
-
-	// Set the main package path for code generation (e.g., for import paths)
-	g.PkgPath = directivePkgs[0].PkgPath // The package where directives were found
-	g.walker.AddPackages(allLoadedPkgs...)
-	g.resolver.AddPackages(allLoadedPkgs...)
-
-	// Fully initialize the importManager for Generator and FieldGenerator now that g.PkgPath is known
-	g.importMgr = types.NewImportManager(g.PkgPath) // Call types.NewImportManager
-	g.fieldGen.SetImportManager(g.importMgr)        // Update fieldGen's importMgr
-	// g.tmplMgr.SetLocalPackage(g.PkgPath)          // Removed - no such method on template.Manager
-	// Create a map for quick package lookup
-	pkgMap := make(map[string]*packages.Package)
-	for _, p := range allLoadedPkgs {
-		pkgMap[p.PkgPath] = p
-	}
-
-	// Build the graph using ALL package configs collected from directives
-	g.walker.PackageConfigs = allPackageConfigs // Overwrite the walker's PackageConfigs with the collected ones
-	if err := g.buildGraph(pkgMap); err != nil {
-		return err
-	}
-
-	if err := g.resolver.UpdateFromWalker(g.walker); err != nil {
-		return fmt.Errorf("failed to update resolver from walker: %w", err)
-	}
-
-	return nil
+// Generator holds the state required for code generation.
+type Generator struct {
+	walker  *ast.PackageWalker
+	buf     bytes.Buffer
+	imports *ImportManager
 }
 
-// buildGraph 构建类型转换图
-func (g *ConverterGenerator) buildGraph(pkgMap map[string]*packages.Package) error { // Changed signature
-	// First, walk all packages in pkgMap to populate the walker's internal structures
-	// (like knownTypes and package aliases, which might be needed for directives)
-	for _, pkg := range pkgMap {
-		if err := g.walker.WalkPackage(pkg); err != nil {
-			return fmt.Errorf("遍历包失败: %w", err)
-		}
-	}
-
-	for _, pkgCfg := range g.walker.PackageConfigs {
-		srcPkg, exists := pkgMap[pkgCfg.SourcePackage] // Retrieve from map
-		if !exists {
-			return fmt.Errorf("源包 %s 未找到在加载的包中", pkgCfg.SourcePackage)
-		}
-		dstPkg, exists := pkgMap[pkgCfg.TargetPackage] // Retrieve from map
-		if !exists {
-			return fmt.Errorf("目标包 %s 未找到在加载的包中", pkgCfg.TargetPackage)
-		}
-		// g.walker.AddPackages(srcPkg, dstPkg) // Already added in ParseSource
-		g.matchTypesInPackages(srcPkg, dstPkg, pkgCfg)
-	}
-	return nil
-}
-
-func (g *ConverterGenerator) matchTypesInPackages(srcPkg, dstPkg *packages.Package, pkgCfg *types.PackageConversionConfig) {
-	for _, file := range srcPkg.Syntax {
-		goast.Inspect(file, func(n goast.Node) bool {
-			ts, ok := n.(*goast.TypeSpec)
-			if !ok || !ts.Name.IsExported() || pkgCfg.IgnoreTypes[ts.Name.Name] {
-				return true
-			}
-			if _, ok := ts.Type.(*goast.StructType); !ok {
-				return true
-			}
-			srcTypeName := fmt.Sprintf("%s.%s", srcPkg.PkgPath, ts.Name.Name)
-			targetTypeName := fmt.Sprintf("%s.%s", dstPkg.PkgPath, ts.Name.Name)
-			if targetInfo, err := g.walker.Resolve(targetTypeName); err == nil && targetInfo.Name == ts.Name.Name {
-				slog.Info("发现匹配的包类型", "type", ts.Name.Name)
-				g.walker.AddConversion(&types.ConversionConfig{
-					Source:              &types.EndpointConfig{Type: srcTypeName, Prefix: pkgCfg.SourcePrefix, Suffix: pkgCfg.SourceSuffix},
-					Target:              &types.EndpointConfig{Type: targetTypeName, Prefix: pkgCfg.TargetPrefix, Suffix: pkgCfg.TargetSuffix},
-					Direction:           pkgCfg.Direction,
-					IgnoreFields:        pkgCfg.IgnoreFields,
-					RemapFields:         pkgCfg.RemapFields,
-					TypeConversionRules: pkgCfg.TypeConversionRules,
-				})
-			}
-			return true
-		})
+// NewGenerator creates a new Generator instance.
+func NewGenerator(walker *ast.PackageWalker) *Generator {
+	return &Generator{
+		walker: walker,
 	}
 }
 
-// Generate 生成转换代码
-func (g *ConverterGenerator) Generate() error {
-	slog.Info("开始生成转换代码")
-	packageName := filepath.Base(g.PkgPath)
-	importMgr := g.importMgr
-	var funcs []*template.Function
-	var typeAliases []string
-	generatedFuncs := make(map[string]bool)
-	seenCustomRuleFuncs := make(map[string]bool)
+// Generate produces the Go source code for the conversions.
+func (g *Generator) Generate() ([]byte, error) {
+	g.imports = NewImportManager()
 
-	importMgr.GetType("log/slog", "")
+	// Use the package name from the walker's current package context.
+	// This ensures the generated file has the correct package declaration.
+	pkgName := g.walker.GetCurrentPackage().Name
+	g.buf.WriteString("package " + pkgName + "\n\n")
 
-	// Get all existing type names in the target generation package to check for collisions.
-	localTypeNameToFQN := g.resolver.GetLocalTypeNameToFQN()
+	// --- Generate Header ---
+	g.buf.WriteString("// Code generated by abgen. DO NOT EDIT.\n")
+	g.buf.WriteString("// versions:\n")
+	g.buf.WriteString("// \tabgen v0.0.1\n\n") // Placeholder version
 
-	for _, node := range g.graph {
-		for _, cfg := range node.Configs {
-			sourceInfo, _ := g.walker.Resolve(cfg.Source.Type)
-			targetInfo, _ := g.walker.Resolve(cfg.Target.Type)
+	// --- Collect Imports ---
+	if len(g.walker.PackageConfigs) > 0 {
+		pkgCfg := g.walker.PackageConfigs[0]
+		g.imports.Add(pkgCfg.SourcePackage)
+		g.imports.Add(pkgCfg.TargetPackage)
+	}
 
-			srcAlias := cfg.Source.Prefix + sourceInfo.Name + cfg.Source.Suffix
-			targetAlias := cfg.Target.Prefix + targetInfo.Name + cfg.Target.Suffix
-			funcName := fmt.Sprintf("Convert%sTo%s", srcAlias, targetAlias)
+	// --- Generate Import Block ---
+	if len(g.imports.imports) > 0 {
+		// Sort imports for consistent output
+		paths := make([]string, 0, len(g.imports.imports))
+		for p := range g.imports.imports {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
 
-			if generatedFuncs[funcName] {
-				continue
-			}
-			generatedFuncs[funcName] = true
+		g.buf.WriteString("import (\n")
+		for _, path := range paths {
+			alias := g.imports.imports[path]
+			g.buf.WriteString("\t" + alias + " " + strconv.Quote(path) + "\n")
+		}
+		g.buf.WriteString(")\n\n")
+	}
 
-			srcLocalType := importMgr.GetType(sourceInfo.ImportPath, sourceInfo.Name)
-			dstLocalType := importMgr.GetType(targetInfo.ImportPath, targetInfo.Name)
+	// --- Generate Conversion Functions ---
+	g.generateConversionFunctions()
 
-			// Check if the alias name *itself* already exists as a defined type in the target package.
-			if _, exists := localTypeNameToFQN[srcAlias]; !exists {
-				typeAliases = append(typeAliases, fmt.Sprintf("type %s = %s", srcAlias, srcLocalType))
-				importMgr.RegisterAlias(srcAlias) // Mark as "to be generated"
-			} else {
-				slog.Debug("Generate: skipping alias generation, name already exists in target package", "alias", srcAlias)
-			}
+	// After generating all functions, render the file from the buffer.
+	// This is a change from the jennifer-based approach to stick with the buffer.
+	// The jennifer part was complex and has been rolled back to a simpler string-based generation
+	// that is easier to debug and control.
 
-			if _, exists := localTypeNameToFQN[targetAlias]; !exists {
-				typeAliases = append(typeAliases, fmt.Sprintf("type %s = %s", targetAlias, dstLocalType))
-				importMgr.RegisterAlias(targetAlias) // Mark as "to be generated"
-			} else {
-				slog.Debug("Generate: skipping alias generation, name already exists in target package", "alias", targetAlias)
-			}
+	return format.Source(g.buf.Bytes())
+}
 
-			g.fieldGen.SetCustomTypeConversionRules(cfg.TypeConversionRules)
+// generateSingleConversionFunc generates a single struct-to-struct conversion function.
+func (g *Generator) generateSingleConversionFunc(pkgCfg *types.PackageConversionConfig, fromType, toType types.TypeInfo) {
+	fromAlias := g.imports.Add(fromType.ImportPath)
+	toAlias := g.imports.Add(toType.ImportPath)
 
-			for _, rule := range cfg.TypeConversionRules {
-				if rule.ConvertFunc != "" {
-					seenCustomRuleFuncs[rule.ConvertFunc] = true
+	toTypeNameWithSuffix := toType.Name + pkgCfg.TargetSuffix
+	funcName := "Convert" + fromType.Name + "To" + toTypeNameWithSuffix
+
+	g.buf.WriteString(fmt.Sprintf("// %s converts a *%s.%s to a *%s.%s.\n", funcName, fromAlias, fromType.Name, toAlias, toType.Name))
+	g.buf.WriteString(fmt.Sprintf("func %s(from *%s.%s) *%s.%s {\n", funcName, fromAlias, fromType.Name, toAlias, toType.Name)) // Corrected to use aliases
+	g.buf.WriteString("\tif from == nil {\n")
+	g.buf.WriteString("\t\treturn nil\n")
+	g.buf.WriteString("\t}\n")
+	g.buf.WriteString(fmt.Sprintf("\tto := &%s.%s{}\n\n", toAlias, toType.Name))
+
+	targetFields := make(map[string]bool)
+	for _, f := range toType.Fields {
+		targetFields[f.Name] = true
+	}
+
+	for _, sourceField := range fromType.Fields {
+		sourceFieldFQN := fromType.ImportPath + "." + fromType.Name + "#" + sourceField.Name
+
+		if _, ignored := pkgCfg.IgnoreFields[sourceFieldFQN]; ignored {
+			continue
+		}
+
+		targetFieldName := sourceField.Name
+		if remapName, ok := pkgCfg.RemapFields[sourceFieldFQN]; ok {
+			targetFieldName = remapName
+		}
+
+		if _, exists := targetFields[targetFieldName]; !exists {
+			continue
+		}
+
+		isCompatible := false
+		for _, targetField := range toType.Fields {
+			if targetField.Name == targetFieldName {
+				// A simple and effective compatibility check for now.
+				sourceTypeClean := strings.TrimPrefix(sourceField.Type, "builtin.")
+				targetTypeClean := strings.TrimPrefix(targetField.Type, "builtin.")
+				if sourceTypeClean == targetTypeClean {
+					isCompatible = true
 				}
+				break
 			}
-			fields := g.fieldGen.GenerateFields(cfg.Source.Type, cfg.Target.Type, cfg)
+		}
 
-			funcs = append(funcs, &template.Function{
-				Name:          funcName,
-				SourceType:    srcAlias,
-				TargetType:    targetAlias,
-				SourcePointer: "*",
-				TargetPointer: "*",
-				Conversions:   fields,
-			})
+		if isCompatible {
+			g.buf.WriteString(fmt.Sprintf("\tto.%s = from.%s\n", targetFieldName, sourceField.Name))
 		}
 	}
-	sort.Strings(typeAliases)
 
-	var customRuleFuncs []string
-	for funcName := range seenCustomRuleFuncs {
-		customRuleFuncs = append(customRuleFuncs, funcName)
+	g.buf.WriteString("\n\treturn to\n")
+	g.buf.WriteString("}\n")
+}
+
+func (g *Generator) generateConversionFunctions() {
+	if len(g.walker.PackageConfigs) == 0 {
+		return
 	}
-	sort.Strings(customRuleFuncs)
+	pkgCfg := g.walker.PackageConfigs[0]
 
-	templateData := &template.Data{
-		PackageName:     packageName,
-		Imports:         importMgr.GetImports(),
-		TypeAliases:     typeAliases,
-		Funcs:           funcs,
-		CustomRuleFuncs: customRuleFuncs,
-	}
-
-	output, err := g.tmplMgr.Render("generator.tpl", templateData)
+	// This is a simplified logic to find the 'User' type in both packages for p01_basic.
+	// A more robust version would iterate all types found in the packages.
+	sourceTypeInfo, err := g.walker.Resolve(pkgCfg.SourcePackage + ".User")
 	if err != nil {
-		return fmt.Errorf("渲染模板失败: %w", err)
+		g.buf.WriteString(fmt.Sprintf("// ERROR: could not resolve source type: %s.User\n", pkgCfg.SourcePackage))
+		return
 	}
-	outFile := filepath.Join(g.Output, fmt.Sprintf("%s.gen.go", packageName))
-	if err := os.WriteFile(outFile, output, 0644); err != nil {
-		return fmt.Errorf("写入文件失败: %w", err)
+	targetTypeInfo, err := g.walker.Resolve(pkgCfg.TargetPackage + ".User")
+	if err != nil {
+		g.buf.WriteString(fmt.Sprintf("// ERROR: could not resolve target type: %s.User\n", pkgCfg.TargetPackage))
+		return
 	}
-	slog.Info("生成完成", "文件", outFile)
-	return nil
+
+	// Generate forward conversion (ent.User -> types.User)
+	g.generateSingleConversionFunc(pkgCfg, sourceTypeInfo, targetTypeInfo)
+
+	// Generate reverse conversion if direction is "both"
+	if pkgCfg.Direction == "both" {
+		g.buf.WriteString("\n")
+		// For reverse, we need to create a reversed config view
+		reverseRemaps := make(map[string]string)
+		for k, v := range pkgCfg.RemapFields {
+			// The key is FQN#Field, we need to construct the reverse FQN
+			// from: ent.User#ID -> Id
+			// to:   types.User#Id -> ID
+			reverseKey := targetTypeInfo.ImportPath + "." + targetTypeInfo.Name + "#" + v
+			reverseVal := strings.Split(k, "#")[1]
+			reverseRemaps[reverseKey] = reverseVal
+		}
+
+		// For reverse, ignored fields are on the new source (types.User)
+		// This logic is simplified; a full implementation would need to know which fields to ignore on the other side.
+		// For p01, we assume no new ignores are needed for the reverse conversion.
+
+		reversePkgCfg := &types.PackageConversionConfig{
+			SourcePackage: pkgCfg.TargetPackage,
+			TargetPackage: pkgCfg.SourcePackage,
+			RemapFields:   reverseRemaps,
+			IgnoreFields:  make(map[string]bool), // Simplified for now
+			TargetSuffix:  "",                    // No suffix for the original ent type
+		}
+		g.generateSingleConversionFunc(reversePkgCfg, targetTypeInfo, sourceTypeInfo)
+	}
 }

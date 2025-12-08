@@ -91,6 +91,11 @@ func (w *PackageWalker) GetLocalTypeNameToFQN() map[string]string {
 
 }
 
+// GetCurrentPackage returns the package currently being processed by the walker.
+func (w *PackageWalker) GetCurrentPackage() *packages.Package {
+	return w.currentPkg
+}
+
 // NewPackageWalker 创建新的遍历器
 
 func NewPackageWalker(graph types.ConversionGraph) *PackageWalker {

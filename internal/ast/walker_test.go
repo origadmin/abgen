@@ -217,3 +217,91 @@ func TestWalker_P01_DiscoveryPhase(t *testing.T) {
 		t.Errorf("Discovered package paths do not match expected paths.\nExpected: %v\nGot:      %v", expectedPaths, discoveredPaths)
 	}
 }
+
+// TestWalker_P01_ParsedTypeStructure verifies that after the analysis phase,
+// the walker has correctly parsed the structure of the source and target types
+// (e.g., ent.User and types.User) and stored them in its internal type cache.
+// This is a critical check to ensure the generator has accurate information
+// before applying rules and generating code.
+func TestWalker_P01_ParsedTypeStructure(t *testing.T) {
+	// Step 1: Load all necessary packages.
+	allPkgs, directivePkg := loadTestPackages(t,
+		"../../testdata/directives/p01_basic",
+		"github.com/origadmin/abgen/testdata/fixture/ent",
+		"github.com/origadmin/abgen/testdata/fixture/types",
+	)
+
+	// Step 2: Initialize the walker and run the analysis.
+	graph := make(types.ConversionGraph)
+	walker := NewPackageWalker(graph)
+	walker.AddPackages(allPkgs...)
+	if err := walker.Analyze(directivePkg); err != nil {
+		t.Fatalf("Walker.Analyze() failed: %v", err)
+	}
+
+	// Step 3: Retrieve the type cache and verify its contents.
+	typeCache := walker.GetTypeCache()
+
+	// Define constants for FQNs to avoid magic strings.
+	const (
+		entUserFQN   = "github.com/origadmin/abgen/testdata/fixture/ent.User"
+		typesUserFQN = "github.com/origadmin/abgen/testdata/fixture/types.User"
+	)
+
+	// --- Verification for ent.User ---
+	t.Run("VerifyEntUserStructure", func(t *testing.T) {
+		info, ok := typeCache[entUserFQN]
+		if !ok {
+			t.Fatalf("Expected type cache to contain info for %q, but it was not found.", entUserFQN)
+		}
+
+		// Verify basic info
+		if info.Name != "User" || info.ImportPath != "github.com/origadmin/abgen/testdata/fixture/ent" {
+			t.Errorf("Incorrect basic info for ent.User. Got Name: %q, ImportPath: %q", info.Name, info.ImportPath)
+		}
+
+		// Verify that at least some key fields are correctly parsed.
+		// A full field-by-field comparison can be overly brittle.
+		expectedFields := map[string]string{
+			"ID":       "int",
+			"Username": "string",
+			"Password": "string",
+		}
+		actualFields := make(map[string]string)
+		for _, f := range info.Fields {
+			actualFields[f.Name] = f.Type
+		}
+
+		for name, typeStr := range expectedFields {
+			if actualType, ok := actualFields[name]; !ok {
+				t.Errorf("Expected field %q not found in parsed ent.User", name)
+			} else if actualType != typeStr {
+				t.Errorf("For field %q, expected type %q, got %q", name, typeStr, actualType)
+			}
+		}
+	})
+
+	// --- Verification for types.User ---
+	t.Run("VerifyTypesUserStructure", func(t *testing.T) {
+		info, ok := typeCache[typesUserFQN]
+		if !ok {
+			t.Fatalf("Expected type cache to contain info for %q, but it was not found.", typesUserFQN)
+		}
+
+		if info.Name != "User" || info.ImportPath != "github.com/origadmin/abgen/testdata/fixture/types" {
+			t.Errorf("Incorrect basic info for types.User. Got Name: %q, ImportPath: %q", info.Name, info.ImportPath)
+		}
+
+		// A simple check for a key field is sufficient here.
+		foundId := false
+		for _, f := range info.Fields {
+			if f.Name == "Id" && f.Type == "int" {
+				foundId = true
+				break
+			}
+		}
+		if !foundId {
+			t.Error("Expected to find field 'Id' of type 'int' in parsed types.User")
+		}
+	})
+}

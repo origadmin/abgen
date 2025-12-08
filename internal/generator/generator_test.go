@@ -1,158 +1,80 @@
 package generator
 
 import (
-	"go/parser"
-	"go/token"
-	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
+
+	"github.com/origadmin/abgen/internal/ast"
+	"github.com/origadmin/abgen/internal/types"
 )
 
-func TestGenerator_EndToEnd(t *testing.T) {
-	slog.SetLogLoggerLevel(slog.LevelDebug)
-	g := NewGenerator()
-
-	outputDir := "testoutput"
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		t.Fatalf("Failed to create output dir: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(outputDir) })
-
-	g.Output = outputDir
-
-	sourceDir, err := filepath.Abs("../../testdata/directives")
+// loadTestPackages is a helper function from the ast package's tests.
+// We are re-using it here to set up the walker.
+func loadTestPackages(t *testing.T, testCaseDir string, dependencies ...string) (pkgs []*packages.Package, directivePkg *packages.Package) {
+	t.Helper()
+	absTestCaseDir, err := filepath.Abs(testCaseDir)
 	if err != nil {
-		t.Fatalf("Failed to get absolute path for source dir: %v", err)
+		t.Fatalf("Failed to get absolute path for test case dir %s: %v", testCaseDir, err)
 	}
-
-	if err := g.ParseSource(sourceDir); err != nil {
-		t.Fatalf("ParseSource() failed: %v", err)
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
+		Dir:  absTestCaseDir,
 	}
-
-	if err := g.Generate(); err != nil {
-		t.Fatalf("Generate() failed: %v", err)
-	}
-
-	generatedFile := filepath.Join(outputDir, "directives.gen.go")
-	content, err := os.ReadFile(generatedFile)
+	loadPatterns := append([]string{"."}, dependencies...)
+	loadedPkgs, err := packages.Load(cfg, loadPatterns...)
 	if err != nil {
-		t.Fatalf("Failed to read generated file: %v", err)
+		t.Fatalf("Failed to load packages: %v", err)
 	}
-
-	generatedCode := string(content)
-	t.Logf("Generated Code:\n%s", generatedCode)
-
-	t.Run("GeneratedCodeValidation", func(t *testing.T) {
-		// Check package and imports
-		if !strings.Contains(generatedCode, "package directives") {
-			t.Error("expected package 'directives'")
+	if packages.PrintErrors(loadedPkgs) > 0 {
+		t.Fatal("Errors occurred while loading packages.")
+	}
+	for _, p := range loadedPkgs {
+		if len(p.GoFiles) > 0 && filepath.Dir(p.GoFiles[0]) == absTestCaseDir {
+			return loadedPkgs, p
 		}
-		if !strings.Contains(generatedCode, `ent "github.com/origadmin/abgen/testdata/exps/ent"`) {
-			t.Error("expected import for 'ent' package")
-		}
-		if !strings.Contains(generatedCode, `typespb "github.com/origadmin/abgen/testdata/exps/typespb"`) {
-			t.Error("expected import for 'typespb' package")
-		}
-
-		// Check type aliases from package-pair
-		if !strings.Contains(generatedCode, "type UserEnt = ent.User") {
-			t.Error("expected 'UserEnt' type alias")
-		}
-		if !strings.Contains(generatedCode, "type UserPB = typespb.User") {
-			t.Error("expected 'UserPB' type alias")
-		}
-
-		// Check function signatures using aliases
-		expectedFunc1 := "func ConvertUserEntToUserPB(src *UserEnt) *UserPB"
-		if !strings.Contains(generatedCode, expectedFunc1) {
-			t.Errorf("missing expected function: %s", expectedFunc1)
-		}
-
-		// Check file-level ignore rules
-		if strings.Contains(generatedCode, "dst.Password =") {
-			t.Error("should not have conversion for 'Password' (ignored at file-level)")
-		}
-		if strings.Contains(generatedCode, "dst.Salt =") {
-			t.Error("should not have conversion for 'Salt' (ignored at file-level)")
-		}
-
-		// Check type-level ignore rules
-		if strings.Contains(generatedCode, "dst.CreatedAt =") {
-			t.Error("should not have conversion for 'CreatedAt' (ignored at type-level)")
-		}
-
-		// Check file-level custom rule
-		if !strings.Contains(generatedCode, "dst.Status = ConvertStatusToString(src.Status)") {
-			t.Error("missing custom rule conversion for 'Status'")
-		}
-
-		// Check remap rule
-		if !strings.Contains(generatedCode, "dst.Roles = src.Edges.Roles") {
-			t.Error("missing remap conversion for 'Roles'")
-		}
-		if !strings.Contains(generatedCode, "dst.RoleIDs = src.Edges.Roles.ID") {
-			t.Error("missing remap conversion for 'RoleIDs'")
-		}
-	})
+	}
+	t.Fatalf("Could not find the directive package in directory %s", absTestCaseDir)
+	return nil, nil
 }
 
-func TestGenerator_SystemDTOBug(t *testing.T) {
-	slog.SetLogLoggerLevel(slog.LevelDebug)
-	g := NewGenerator()
-
-	outputDir := "testoutput"
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		t.Fatalf("Failed to create output dir: %v", err)
+func TestGenerator_P01_CodeGeneration(t *testing.T) {
+	// Step 1: Perform a full analysis to get the walker into its final state.
+	allPkgs, directivePkg := loadTestPackages(t,
+		"../../testdata/directives/p01_basic",
+		"github.com/origadmin/abgen/testdata/fixture/ent",
+		"github.com/origadmin/abgen/testdata/fixture/types",
+	)
+	graph := make(types.ConversionGraph)
+	walker := ast.NewPackageWalker(graph)
+	walker.AddPackages(allPkgs...)
+	if err := walker.Analyze(directivePkg); err != nil {
+		t.Fatalf("Walker.Analyze() failed: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(outputDir) })
 
-	g.Output = outputDir
-
-	sourceDir, err := filepath.Abs("../../testdata/core/system_dto_bug")
+	// Step 2: Run the generator.
+	g := NewGenerator(walker)
+	generatedCode, err := g.Generate()
 	if err != nil {
-		t.Fatalf("Failed to get absolute path for source dir: %v", err)
-	}
-
-	if err := g.ParseSource(sourceDir); err != nil {
-		t.Fatalf("ParseSource() failed: %v", err)
-	}
-
-	if err := g.Generate(); err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
 
-	generatedFile := filepath.Join(outputDir, "system_dto_bug.gen.go") // Expecting this filename based on package name
-	content, err := os.ReadFile(generatedFile)
-	if err != nil {
-		t.Fatalf("Failed to read generated file: %v", err)
+	// Step 3: Snapshot testing - compare against a "golden" file.
+	goldenFile := filepath.Join("../../testdata/golden", "p01_basic.golden")
+	if os.Getenv("UPDATE_GOLDEN_FILES") != "" {
+		os.WriteFile(goldenFile, generatedCode, 0644)
+		t.Logf("Updated golden file: %s", goldenFile)
 	}
 
-	generatedCode := string(content)
-	t.Logf("Generated Code for SystemDTOBug:\n%s", generatedCode)
+	expectedCode, err := os.ReadFile(goldenFile)
+	if err != nil {
+		t.Fatalf("Failed to read golden file %s: %v", goldenFile, err)
+	}
 
-	t.Run("InvalidTypePBGeneration", func(t *testing.T) {
-		if strings.Contains(generatedCode, "type PB = ") {
-			t.Errorf("Generated code contains invalid 'type PB = ' alias. Content:\n%s", generatedCode)
-		}
-	})
-
-	t.Run("UndefinedResourceEdgesSkipped", func(t *testing.T) {
-		// This assertion is tricky. We want to ensure NO code was generated for ResourceEdges.
-		// A simple check is that the generated file should not contain 'ResourceEdges'.
-		// The ideal fix would be to make the generated code valid Go code.
-		if strings.Contains(generatedCode, "ResourceEdges") {
-			t.Errorf("Generated code still contains 'ResourceEdges', expected it to be skipped. Content:\n%s", generatedCode)
-		}
-
-		// Further validation: try to parse the generated code to catch compilation errors
-		fset := token.NewFileSet()
-		_, parseErr := parser.ParseFile(fset, "", generatedCode, 0)
-		if parseErr != nil {
-			t.Errorf("Generated code is not valid Go code (due to undefined types?): %v\nContent:\n%s", parseErr, generatedCode)
-		}
-	})
-
-	// Add more specific assertions here if needed as the bug becomes clearer
+	if string(generatedCode) != string(expectedCode) {
+		t.Errorf("Generated code does not match the golden file %s.\n---EXPECTED---\n%s\n---GOT---\n%s",
+			goldenFile, string(expectedCode), string(generatedCode))
+	}
 }
