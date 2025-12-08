@@ -145,6 +145,7 @@ func (w *PackageWalker) WalkPackage(pkg *packages.Package) error {
 			IgnoreTypes:         make(map[string]bool),
 			IgnoreFields:        make(map[string]bool),
 			RemapFields:         make(map[string]string),
+			Direction:           "oneway", // Default direction
 			TypeConversionRules: make([]types.TypeConversionRule, 0),
 		})
 	}
@@ -407,9 +408,23 @@ func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.Conve
 				case "direction":
 					cfg.Direction = value
 				case "ignore":
-					ignoreParts := strings.Split(value, ",")
-					for _, part := range ignoreParts {
-						cfg.IgnoreFields[strings.TrimSpace(part)] = true
+					// Correctly handle "FQN#Field1,Field2,Field3" format
+					var currentFQNPrefix string
+					parts := strings.Split(value, ",")
+					for _, part := range parts {
+						trimmedPart := strings.TrimSpace(part)
+						if strings.Contains(trimmedPart, "#") {
+							// This part contains a full FQN, update the prefix
+							prefixParts := strings.Split(trimmedPart, "#")
+							currentFQNPrefix = prefixParts[0] + "#"
+							cfg.IgnoreFields[trimmedPart] = true
+						} else if currentFQNPrefix != "" {
+							// This part is just a field name, prepend the last seen FQN prefix
+							cfg.IgnoreFields[currentFQNPrefix+trimmedPart] = true
+						} else {
+							// This part has no FQN prefix, add it as is (might be less common)
+							cfg.IgnoreFields[trimmedPart] = true
+						}
 					}
 				case "remap":
 					remapParts := strings.Split(value, ";")
