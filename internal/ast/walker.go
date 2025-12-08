@@ -150,7 +150,7 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 		if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
 			for _, spec := range genDecl.Specs {
 				if typeSpec, ok := spec.(*goast.TypeSpec); ok {
-					if _, isStruct := typeSpec.Type.(*goast.StructType); !isStruct {
+					if typeSpec.Type != nil {
 						aliasedToTypeExpr := typeSpec.Type
 						aliasedToTypeStr := w.exprToString(aliasedToTypeExpr, w.currentPkg) // e.g., "ent.User"
 
