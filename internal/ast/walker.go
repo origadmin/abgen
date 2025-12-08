@@ -138,6 +138,17 @@ func (w *PackageWalker) WalkPackage(pkg *packages.Package) error {
 
 	slog.Info("开始遍历包", "包", pkg.PkgPath)
 
+	// Initialize a single, global package config for this walk.
+	// This ensures there's always one config object to apply file-level rules to.
+	if len(w.PackageConfigs) == 0 {
+		w.PackageConfigs = append(w.PackageConfigs, &types.PackageConversionConfig{
+			IgnoreTypes:         make(map[string]bool),
+			IgnoreFields:        make(map[string]bool),
+			RemapFields:         make(map[string]string),
+			TypeConversionRules: make([]types.TypeConversionRule, 0),
+		})
+	}
+
 	w.currentPkg = pkg
 
 	w.collectImports(pkg.Syntax) // Collect imports from all files in the package
@@ -202,245 +213,144 @@ func (w *PackageWalker) processFileDecls(file *goast.File) error {
 
 	slog.Debug("processFileDecls: Processing file", "filename", w.currentPkg.Fset.File(file.Pos()).Name())
 
-	// Pass 1: Collect all local type specs and resolve their FQNs.
+	w.collectLocalTypeAliases(file)
+	w.processCommentDirectives(file)
 
+	return nil
+}
+
+// collectLocalTypeAliases scans the file for all type declarations and aliases,
+// populating the walker's localTypeNameToFQN map. This corresponds to Pass 1.
+func (w *PackageWalker) collectLocalTypeAliases(file *goast.File) {
 	for _, decl := range file.Decls {
-
 		if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
-
 			for _, spec := range genDecl.Specs {
-
 				if typeSpec, ok := spec.(*goast.TypeSpec); ok {
-
-					// For any type `type T = some.OtherType` or `type T struct{}`,
-
-					// we want to know the FQN of what `T` represents.
-
 					var fqn string
-
 					if _, isStruct := typeSpec.Type.(*goast.StructType); isStruct {
-
-						// If it's a struct defined locally, its FQN is in the current package.
-
 						fqn = w.currentPkg.PkgPath + "." + typeSpec.Name.Name
-
 					} else {
-
-						// It's an alias or a named primitive type. Resolve what it points to.
-
 						underlyingTypeStr := w.exprToString(typeSpec.Type, w.currentPkg)
-
 						resolvedInfo := w.resolveTargetType(underlyingTypeStr)
-
 						if resolvedInfo.Name != "" {
-
 							if resolvedInfo.ImportPath == "builtin" {
-
-								fqn = resolvedInfo.Name // e.g., "string"
-
+								fqn = resolvedInfo.Name
 							} else {
-
 								fqn = resolvedInfo.ImportPath + "." + resolvedInfo.Name
-
 							}
-
 						} else {
-
-							// Fallback if resolution fails
-
 							fqn = underlyingTypeStr
-
 						}
-
 					}
-
 					w.localTypeNameToFQN[typeSpec.Name.Name] = fqn
-
-					slog.Debug("processFileDecls: Collected local type", "localName", typeSpec.Name.Name, "fqn", fqn)
-
+					slog.Debug("collectLocalTypeAliases: Collected local type", "localName", typeSpec.Name.Name, "fqn", fqn)
 				}
-
 			}
-
 		}
-
 	}
+}
 
-	// Pass 2: Find directive groups and process them.
-
-	slog.Debug("processFileDecls: Number of comment groups", "count", len(file.Comments))
-
+// processCommentDirectives scans all comment groups in a file and processes any
+// abgen directives found. This corresponds to Pass 2.
+func (w *PackageWalker) processCommentDirectives(file *goast.File) {
+	slog.Debug("processCommentDirectives: Number of comment groups", "count", len(file.Comments))
 	for _, commentGroup := range file.Comments {
-
-		slog.Debug("processFileDecls: Processing comment group", "commentGroup", commentGroup.Text())
-
 		var definingDirective string
-
 		var modifierDirectives []string
-
 		isPackagePair := false
-
 		isDirectiveGroup := false
 
 		for _, comment := range commentGroup.List {
-
 			line := comment.Text
-
-			slog.Debug("processFileDecls: Processing comment line", "line", line)
-
 			if !strings.HasPrefix(line, "//go:abgen:") {
-
 				continue
-
 			}
-
 			isDirectiveGroup = true
-
 			directive := strings.TrimPrefix(line, "//go:abgen:")
 
-			slog.Debug("processFileDecls: Detected abgen directive", "directive", directive)
-
 			if strings.HasPrefix(directive, "pair:packages=") {
-
 				definingDirective = line
-
 				isPackagePair = true
-
-				slog.Debug("processFileDecls: Detected package pair directive", "definingDirective", definingDirective)
-
 			} else if strings.HasPrefix(directive, "convert=") {
-
 				definingDirective = line
-
-				slog.Debug("processFileDecls: Detected convert directive", "definingDirective", definingDirective)
-
 			} else {
-
 				modifierDirectives = append(modifierDirectives, line)
-
-				slog.Debug("processFileDecls: Detected modifier directive", "modifierDirective", line)
-
 			}
-
 		}
 
 		if !isDirectiveGroup {
-			slog.Debug("processFileDecls: Not a directive group or no defining directive found", "isDirectiveGroup", isDirectiveGroup, "definingDirective", definingDirective)
-
 			continue
-
 		}
 
-		// This logic now handles any file-level directive group.
-		// It applies all found directives to the single, package-level config.
 		if isPackagePair || (definingDirective == "" && len(modifierDirectives) > 0) {
-			if definingDirective != "" {
-				w.parseAndApplyDirective(definingDirective, nil, map[string]*types.PackageConversionConfig{"pkg-pair": w.PackageConfigs[0]})
-			}
-			for _, mod := range modifierDirectives {
-				w.parseAndApplyDirective(mod, nil, map[string]*types.PackageConversionConfig{"pkg-pair": w.PackageConfigs[0]})
-			}
-		} else { // This is a type-level convert config
-
-			var associatedDecl *goast.GenDecl
-
-			for _, decl := range file.Decls {
-
-				genDecl, ok := decl.(*goast.GenDecl)
-
-				if !ok || genDecl.Tok != token.TYPE {
-
-					continue
-
-				}
-
-				doc := genDecl.Doc
-
-				if doc == nil && len(genDecl.Specs) > 0 {
-
-					if spec, ok := genDecl.Specs[0].(*goast.TypeSpec); ok {
-
-						doc = spec.Doc
-
-					}
-
-				}
-
-				if doc != nil && doc.Pos() == commentGroup.Pos() {
-
-					associatedDecl = genDecl
-
-					break
-
-				}
-
-			}
-
-			if associatedDecl == nil {
-
-				slog.Debug("processFileDecls: Type-level directive, but no associated declaration found")
-
-				continue
-
-			}
-
-			for _, spec := range associatedDecl.Specs {
-
-				typeSpec, ok := spec.(*goast.TypeSpec)
-
-				if !ok {
-
-					continue
-
-				}
-
-				// Here, we need to resolve the typeSpec's underlying type to get the FQN
-
-				sourceTypeInfo := w.resolveTargetType(w.exprToString(typeSpec.Type, w.currentPkg))
-
-				effectiveSourceType := sourceTypeInfo.ImportPath + "." + sourceTypeInfo.Name
-
-				typeCfg := &types.ConversionConfig{
-
-					Source: &types.EndpointConfig{Type: effectiveSourceType},
-
-					Target: &types.EndpointConfig{},
-
-					IgnoreFields: make(map[string]bool),
-
-					RemapFields: make(map[string]string),
-
-					TypeConversionRules: make([]types.TypeConversionRule, 0),
-				}
-
-				w.parseAndApplyDirective(definingDirective, typeCfg, nil)
-
-				for _, mod := range modifierDirectives {
-
-					w.parseAndApplyDirective(mod, typeCfg, nil)
-
-				}
-
-				if typeCfg.Target.Type != "" {
-
-					w.AddConversion(typeCfg)
-
-					slog.Debug("processFileDecls: Added type-level conversion config", "sourceType", typeCfg.Source.Type, "targetType", typeCfg.Target.Type)
-
-				} else {
-
-					slog.Debug("processFileDecls: Did not add type-level conversion config due to empty target type", "sourceType", typeCfg.Source.Type)
-
-				}
-
-			}
-
+			w.applyFileLevelDirectives(definingDirective, modifierDirectives)
+		} else {
+			w.applyTypeLevelDirectives(file, commentGroup, definingDirective, modifierDirectives)
 		}
+	}
+}
 
+// applyFileLevelDirectives applies directives that are not attached to a specific type.
+func (w *PackageWalker) applyFileLevelDirectives(definingDirective string, modifierDirectives []string) {
+	slog.Debug("applyFileLevelDirectives: Applying file-level directives")
+	if definingDirective != "" {
+		w.parseAndApplyDirective(definingDirective, nil, map[string]*types.PackageConversionConfig{"pkg-pair": w.PackageConfigs[0]})
+	}
+	for _, mod := range modifierDirectives {
+		w.parseAndApplyDirective(mod, nil, map[string]*types.PackageConversionConfig{"pkg-pair": w.PackageConfigs[0]})
+	}
+}
+
+// applyTypeLevelDirectives applies directives found in a comment group associated with a type declaration.
+func (w *PackageWalker) applyTypeLevelDirectives(file *goast.File, commentGroup *goast.CommentGroup, definingDirective string, modifierDirectives []string) {
+	slog.Debug("applyTypeLevelDirectives: Applying type-level directives")
+	var associatedDecl *goast.GenDecl
+	for _, decl := range file.Decls {
+		if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
+			doc := genDecl.Doc
+			if doc == nil && len(genDecl.Specs) > 0 {
+				if spec, ok := genDecl.Specs[0].(*goast.TypeSpec); ok {
+					doc = spec.Doc
+				}
+			}
+			if doc != nil && doc.Pos() == commentGroup.Pos() {
+				associatedDecl = genDecl
+				break
+			}
+		}
 	}
 
-	return nil
+	if associatedDecl == nil {
+		slog.Debug("applyTypeLevelDirectives: No associated declaration found for comment group")
+		return
+	}
 
+	for _, spec := range associatedDecl.Specs {
+		if typeSpec, ok := spec.(*goast.TypeSpec); ok {
+			sourceTypeInfo := w.resolveTargetType(w.exprToString(typeSpec.Type, w.currentPkg))
+			effectiveSourceType := sourceTypeInfo.ImportPath + "." + sourceTypeInfo.Name
+
+			typeCfg := &types.ConversionConfig{
+				Source:              &types.EndpointConfig{Type: effectiveSourceType},
+				Target:              &types.EndpointConfig{},
+				IgnoreFields:        make(map[string]bool),
+				RemapFields:         make(map[string]string),
+				TypeConversionRules: make([]types.TypeConversionRule, 0),
+			}
+
+			w.parseAndApplyDirective(definingDirective, typeCfg, nil)
+			for _, mod := range modifierDirectives {
+				w.parseAndApplyDirective(mod, typeCfg, nil)
+			}
+
+			if typeCfg.Target.Type != "" {
+				w.AddConversion(typeCfg)
+				slog.Debug("applyTypeLevelDirectives: Added type-level conversion config", "sourceType", typeCfg.Source.Type, "targetType", typeCfg.Target.Type)
+			} else {
+				slog.Debug("applyTypeLevelDirectives: Did not add type-level conversion config due to empty target type", "sourceType", typeCfg.Source.Type)
+			}
+		}
+	}
 }
 
 func (w *PackageWalker) parseAndApplyDirective(line string, typeCfg *types.ConversionConfig, pkgConfigs map[string]*types.PackageConversionConfig) {
