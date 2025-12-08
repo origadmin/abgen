@@ -64,7 +64,9 @@ func findPackage(pkgs []*packages.Package, pkgPath string) *packages.Package {
 	return nil
 }
 
-func TestWalker_P01BasicDirectives(t *testing.T) {
+// TestWalker_P01_EndToEnd performs an end-to-end integration test for the p01_basic use case.
+// It verifies that after a full walk, the final PackageConversionConfig is correctly generated.
+func TestWalker_P01_EndToEnd(t *testing.T) {
 	// Avoid setting global logger state in tests. Use t.Logf for debugging if needed.
 	// slog.SetLogLoggerLevel(slog.LevelDebug)
 
@@ -84,7 +86,7 @@ func TestWalker_P01BasicDirectives(t *testing.T) {
 		t.Fatalf("Walker.WalkPackage() failed: %v", err)
 	}
 
-	t.Run("PackagePairDirective", func(t *testing.T) {
+	t.Run("VerifyFinalPackageConfig", func(t *testing.T) {
 		if len(walker.PackageConfigs) != 1 {
 			t.Fatalf("Expected 1 PackageConversionConfig, got %d", len(walker.PackageConfigs))
 		}
@@ -143,24 +145,41 @@ func TestWalker_P01BasicDirectives(t *testing.T) {
 		}
 	})
 
-	t.Run("LocalTypeNameToFQN", func(t *testing.T) {
-		// This test is for the local aliases defined in directives.go
-		nameToFQN := walker.GetLocalTypeNameToFQN()
-		expected := map[string]string{
-			"User":   "github.com/origadmin/abgen/testdata/fixture/ent.User",
-			"UserPB": "github.com/origadmin/abgen/testdata/fixture/types.User",
-		}
+}
 
-		if len(nameToFQN) != len(expected) {
-			t.Errorf("Expected %d defined types, but got %d. Got: %v", len(expected), len(nameToFQN), nameToFQN)
-		}
+// TestWalker_P01_AnalysisPhase specifically tests the analysis phase of the walker.
+// It verifies that after processing the directive file, the internal state, such as
+// the mapping of local type aliases to their fully-qualified names (FQN), is correct.
+// This is crucial for all subsequent rule applications.
+func TestWalker_P01_AnalysisPhase(t *testing.T) {
+	// Load packages required for the test.
+	allPkgs, directivePkg := loadTestPackages(t,
+		"../../testdata/directives/p01_basic",
+		"github.com/origadmin/abgen/testdata/fixture/ent",
+		"github.com/origadmin/abgen/testdata/fixture/types",
+	)
 
-		for name, expectedFQN := range expected {
-			if fqn, ok := nameToFQN[name]; !ok {
-				t.Errorf("Expected local type %q to be defined, but it was not found.", name)
-			} else if fqn != expectedFQN {
-				t.Errorf("For local type %q, expected FQN %q, but got %q", name, expectedFQN, fqn)
-			}
+	// Initialize the walker and perform the walk.
+	graph := make(types.ConversionGraph)
+	walker := NewPackageWalker(graph)
+	walker.AddPackages(allPkgs...)
+	if err := walker.WalkPackage(directivePkg); err != nil {
+		t.Fatalf("Walker.WalkPackage() failed: %v", err)
+	}
+
+	// Define the expected mapping from local type aliases to their FQNs.
+	expectedAliasMap := map[string]string{
+		"User":   "github.com/origadmin/abgen/testdata/fixture/ent.User",
+		"UserPB": "github.com/origadmin/abgen/testdata/fixture/types.User",
+	}
+
+	// Retrieve the actual map from the walker.
+	actualAliasMap := walker.GetLocalTypeNameToFQN()
+
+	// Assert that the actual map matches the expected one.
+	t.Run("VerifyLocalAliasToFQNMapping", func(t *testing.T) {
+		if !reflect.DeepEqual(expectedAliasMap, actualAliasMap) {
+			t.Errorf("Mismatched local type alias to FQN map.\nExpected: %v\nGot:      %v", expectedAliasMap, actualAliasMap)
 		}
 	})
 }

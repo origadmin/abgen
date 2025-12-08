@@ -132,6 +132,61 @@ func (w *PackageWalker) Resolve(typeName string) (types.TypeInfo, error) {
 
 }
 
+// DiscoverPackages performs the first pass of analysis on a directive package.
+// Its sole purpose is to find `pair:packages` directives and return a list
+// of unique package paths that need to be loaded for the full analysis.
+func (w *PackageWalker) DiscoverPackages(pkg *packages.Package) ([]string, error) {
+	slog.Info("开始发现阶段", "包", pkg.PkgPath)
+	w.currentPkg = pkg
+
+	discoveredPaths := make(map[string]struct{})
+
+	for _, file := range pkg.Syntax {
+		filename := pkg.Fset.File(file.Pos()).Name()
+		if strings.HasSuffix(filepath.Base(filename), ".gen.go") {
+			slog.Debug("DiscoverPackages: Skipping generated file", "file", filename)
+			continue
+		}
+
+		for _, comment := range file.Comments {
+			for _, line := range comment.List {
+				if !strings.HasPrefix(line.Text, "//go:abgen:pair:packages=") {
+					continue
+				}
+
+				directive := strings.TrimPrefix(line.Text, "//go:abgen:")
+				parts := strings.SplitN(directive, "=", 2)
+				if len(parts) != 2 {
+					continue
+				}
+
+				valueStr := parts[1]
+				var value string
+				if strings.HasPrefix(valueStr, `"`) {
+					lastQuoteIndex := strings.LastIndex(valueStr, `"`)
+					if lastQuoteIndex > 0 {
+						value = valueStr[1:lastQuoteIndex]
+					}
+				}
+
+				if value != "" {
+					paths := strings.Split(value, ",")
+					for _, p := range paths {
+						discoveredPaths[strings.TrimSpace(p)] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+
+	pathList := make([]string, 0, len(discoveredPaths))
+	for p := range discoveredPaths {
+		pathList = append(pathList, p)
+	}
+	slog.Info("发现阶段完成", "发现的包", pathList)
+	return pathList, nil
+}
+
 // WalkPackage 遍历包内的类型定义
 
 func (w *PackageWalker) WalkPackage(pkg *packages.Package) error {
