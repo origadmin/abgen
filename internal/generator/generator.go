@@ -319,12 +319,17 @@ func (g *Generator) generateSliceToSliceFunc(sourceSlice, targetSlice, sourceEle
 	sourceTypeStr := g.getTypeName(sourceSlice)
 	targetTypeStr := g.getTypeName(targetSlice)
 
+	// NEW: Ensure slice parameters do not have an extra pointer, as slices are already reference types.
+	// This is a defensive measure in case TypeInfo.Name or getTypeName incorrectly includes a leading '*'.
+	sourceParam := strings.TrimPrefix(sourceTypeStr, "*")
+	targetReturn := strings.TrimPrefix(targetTypeStr, "*")
+
 	elemConvFuncName := g.getConversionFunctionName(sourceElem, targetElem)
 
-	g.buf.WriteString(fmt.Sprintf("// %s converts a %s to a %s.\n", funcName, sourceTypeStr, targetTypeStr))
-	g.buf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceTypeStr, targetTypeStr))
+	g.buf.WriteString(fmt.Sprintf("// %s converts a %s to a %s.\n", funcName, sourceTypeStr, targetTypeStr)) // Comment can still use original type strings
+	g.buf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceParam, targetReturn)) // Use trimmed parameters
 	g.buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n")
-	g.buf.WriteString(fmt.Sprintf("\tto := make(%s, len(from))\n", targetTypeStr))
+	g.buf.WriteString(fmt.Sprintf("\tto := make(%s, len(from))\n", targetReturn)) // Use trimmed targetReturn for make
 	g.buf.WriteString("\tfor i, item := range from {\n")
 	g.buf.WriteString(fmt.Sprintf("\t\tto[i] = %s(item)\n", elemConvFuncName))
 	g.buf.WriteString("\t}\n")
@@ -345,11 +350,16 @@ func (g *Generator) generateStructToStructFunc(source, target *types.TypeInfo) {
 	sourceParam := "*" + sourceTypeStr
 	targetReturn := "*" + targetTypeStr
 	if g.isSliceType(source) { // This check should now correctly identify slice aliases
-		sourceParam = sourceTypeStr
+		sourceParam = sourceTypeStr // If it's a slice, don't add '*'
 	}
 	if g.isSliceType(target) { // This check should now correctly identify slice aliases
-		targetReturn = targetTypeStr
+		targetReturn = targetTypeStr // If it's a slice, don't add '*'
 	}
+
+	// NEW: Ensure sourceParam and targetReturn do not have an extra pointer if they are slice types.
+	// This is a defensive measure.
+	sourceParam = strings.TrimPrefix(sourceParam, "*")
+	targetReturn = strings.TrimPrefix(targetReturn, "*")
 
 	g.buf.WriteString(fmt.Sprintf("// %s converts a %s to a %s.\n", funcName, sourceParam, targetReturn))
 	g.buf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceParam, targetReturn))
@@ -488,7 +498,22 @@ func (g *Generator) getConversionFunctionName(source, target *types.TypeInfo) st
 		_, targetElemInfo := g.getSliceElementType(target)
 
 		if sourceElemInfo != nil && targetElemInfo != nil {
-			return g.getConversionFunctionName(sourceElemInfo, targetElemInfo)
+			// Get the base name of the element types (singular)
+			// Pass empty prefix/suffix to get the raw base name for pluralization
+			sourceElemBaseName := g.getFuncNamePart(sourceElemInfo, "", "")
+			targetElemBaseName := g.getFuncNamePart(targetElemInfo, "", "")
+
+			// Manually pluralize for the slice conversion function name
+			pluralSourceElemName := sourceElemBaseName
+			if !strings.HasSuffix(pluralSourceElemName, "s") { // Simple pluralization heuristic
+				pluralSourceElemName += "s"
+			}
+			pluralTargetElemName := targetElemBaseName
+			if !strings.HasSuffix(pluralTargetElemName, "s") { // Simple pluralization heuristic
+				pluralTargetElemName += "s"
+			}
+
+			return "Convert" + capitalize(pluralSourceElemName) + "To" + capitalize(pluralTargetElemName)
 		}
 	}
 
@@ -700,22 +725,29 @@ func (g *Generator) getTypeName(typeInfo *types.TypeInfo) string {
 			// If suffix exists, use Name + "s" + Suffix
 			sliceAliasName := prefix + baseNameForPluralization + suffix
 
+			// NEW: Ensure sliceAliasName does not have a leading '*' if it's a slice type.
+			// Slices themselves are not pointers in function signatures.
+			sliceAliasName = strings.TrimPrefix(sliceAliasName, "*")
+
 			sliceFqn := typeInfo.ImportPath + "." + sliceAliasName
 			g.generatedAliases[sliceFqn] = sliceAliasName
 			return sliceAliasName
 		}
 		// Fallback if element info not found - return raw slice type
-		return typeInfo.Name
+		// NEW: Also trim prefix '*' here for raw slice type fallback.
+		return strings.TrimPrefix(typeInfo.Name, "*")
 	}
 
 	// For external types, add import and use package alias
 	if g.isExternalType(typeInfo) {
 		pkgAlias := g.imports.Add(typeInfo.ImportPath)
-		return pkgAlias + "." + typeInfo.Name
+		// NEW: Also trim prefix '*' here for external types if TypeInfo.Name incorrectly includes it.
+		return pkgAlias + "." + strings.TrimPrefix(typeInfo.Name, "*")
 	}
 
 	// For internal types or basic types, just use the name
-	return typeInfo.Name
+	// NEW: Also trim prefix '*' here for internal/basic types if TypeInfo.Name incorrectly includes it.
+	return strings.TrimPrefix(typeInfo.Name, "*")
 }
 
 func (g *Generator) findCustomRule(sourceType, targetType *types.TypeInfo) string {
