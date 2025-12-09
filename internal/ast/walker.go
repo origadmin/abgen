@@ -18,7 +18,8 @@ import (
 // PackageWalker walks the AST of a package, collects directives, and builds a configuration.
 type PackageWalker struct {
 	config             *types.ConversionConfig
-	pathAliases        map[string]string // Maps alias from `package:path` directive to full package path
+	userPathAliases    map[string]string // Maps alias from `package:path` directive to full package path
+	defaultPathAliases map[string]string // Maps built-in shorthand aliases to full package paths
 	currentPkg         *packages.Package
 	TypeCache          map[string]*types.TypeInfo
 	loadedPkgs         map[string]*packages.Package
@@ -31,7 +32,12 @@ type PackageWalker struct {
 func NewPackageWalker() *PackageWalker {
 	return &PackageWalker{
 		config:             types.NewDefaultConfig(),
-		pathAliases:        make(map[string]string),
+		userPathAliases:    make(map[string]string),
+		defaultPathAliases: map[string]string{
+			"time": "time",
+			"uuid": "github.com/google/uuid",
+			// Add other common packages here
+		},
 		TypeCache:          make(map[string]*types.TypeInfo),
 		loadedPkgs:         make(map[string]*packages.Package),
 		packageMode:        packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
@@ -93,7 +99,7 @@ func (w *PackageWalker) collectLocalTypeAliases(file *goast.File) {
 				if typeSpec, ok := spec.(*goast.TypeSpec); ok {
 					if typeSpec.Assign.IsValid() {
 						aliasName := typeSpec.Name.Name
-						fqn := w.exprToString(typeSpec.Type, w.currentPkg)
+						fqn := w.exprToString(typeSpec.Type, w.currentPkg, false) // Pass false for isPointer
 						w.localTypeNameToFQN[aliasName] = fqn
 						slog.Debug("Collected local type alias", "alias", aliasName, "fqn", fqn)
 					}
@@ -130,8 +136,8 @@ func (w *PackageWalker) parseAndApplyDirective(line string) {
 			if len(parts) == 2 && strings.HasPrefix(strings.TrimSpace(parts[1]), "alias=") {
 				path := strings.TrimSpace(parts[0])
 				alias := strings.TrimPrefix(strings.TrimSpace(parts[1]), "alias=")
-				w.pathAliases[alias] = path
-				slog.Debug("Registered package alias", "alias", alias, "path", path)
+				w.userPathAliases[alias] = path
+				slog.Debug("Registered user package alias", "alias", alias, "path", path)
 			}
 		}
 	case "pair":
@@ -221,9 +227,13 @@ func (w *PackageWalker) processPackagePairs() error {
 		return nil
 	}
 
+	// Resolve aliases and permanently update the config
+	w.config.Source.Package = w.resolveAlias(w.config.Source.Package)
+	w.config.Target.Package = w.resolveAlias(w.config.Target.Package)
+
 	slog.Info("Processing package pair", "source", w.config.Source.Package, "target", w.config.Target.Package)
-	sourcePkgPath := w.resolveAlias(w.config.Source.Package)
-	targetPkgPath := w.resolveAlias(w.config.Target.Package)
+	sourcePkgPath := w.config.Source.Package
+	targetPkgPath := w.config.Target.Package
 
 	sourcePkg, err := w.loadPackage(sourcePkgPath)
 	if err != nil {
@@ -272,6 +282,10 @@ func (w *PackageWalker) Resolve(typeName string) (*types.TypeInfo, error) {
 	}
 
 	pkgPath, typeNameOnly := splitFQN(fqn)
+
+	// Resolve package alias if the path part is an alias.
+	pkgPath = w.resolveAlias(pkgPath)
+
 	if pkgPath == "" {
 		pkgPath = w.currentPkg.PkgPath
 	}
@@ -323,12 +337,17 @@ func (w *PackageWalker) buildTypeInfo(spec *goast.TypeSpec, pkg *packages.Packag
 		Name:       spec.Name.Name,
 		ImportPath: pkg.PkgPath,
 	}
+	// Determine if the type itself is a pointer (e.g., `type MyPtr *SomeType`)
+	if _, ok := spec.Type.(*goast.StarExpr); ok {
+		info.IsPointer = true
+	}
+
 	if structType, ok := spec.Type.(*goast.StructType); ok {
 		for _, field := range structType.Fields.List {
 			if len(field.Names) > 0 && field.Names[0].IsExported() {
 				fieldInfo := types.StructField{
 					Name:      field.Names[0].Name,
-					Type:      w.exprToString(field.Type, pkg),
+					Type:      w.exprToString(field.Type, pkg, false), // Get base type name for field type
 					IsPointer: isPointer(field.Type),
 				}
 				if field.Tag != nil {
@@ -337,7 +356,23 @@ func (w *PackageWalker) buildTypeInfo(spec *goast.TypeSpec, pkg *packages.Packag
 				info.Fields = append(info.Fields, fieldInfo)
 			}
 		}
+	} else if ident, ok := spec.Type.(*goast.Ident); ok && ident.Obj != nil && ident.Obj.Kind == goast.Typ {
+		// Handle aliases like `type MyString string`
+		// The underlying type is ident.Name, but we need its FQN
+		underlyingType := w.exprToString(ident, pkg, false)
+		if underlyingType != info.Name { // It's an alias to another type
+			info.LocalAlias = info.Name // The alias name itself
+			info.Name = underlyingType  // The actual underlying type name
+		}
+	} else if selExpr, ok := spec.Type.(*goast.SelectorExpr); ok {
+		// Handle aliases like `type MyUser ent.User`
+		underlyingType := w.exprToString(selExpr, pkg, false)
+		if underlyingType != info.Name { // It's an alias to another type
+			info.LocalAlias = info.Name // The alias name itself
+			info.Name = underlyingType  // The actual underlying type name
+		}
 	}
+
 	return info
 }
 
@@ -375,7 +410,7 @@ func (w *PackageWalker) loadPackage(importPath string) (*packages.Package, error
 	if pkg, ok := w.loadedPkgs[importPath]; ok {
 		return pkg, nil
 	}
-	cfg := &packages.Config{Mode: w.packageMode, Dir: filepath.Dir(w.currentPkg.GoFiles[0])}
+	cfg := &packages.Config{Mode: w.packageMode}
 	pkgs, err := packages.Load(cfg, importPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load package %q: %w", importPath, err)
@@ -393,28 +428,74 @@ func (w *PackageWalker) loadPackage(importPath string) (*packages.Package, error
 }
 
 func (w *PackageWalker) resolveAlias(aliasOrPath string) string {
-	if path, ok := w.pathAliases[aliasOrPath]; ok {
+	// User-defined aliases take precedence
+	if path, ok := w.userPathAliases[aliasOrPath]; ok {
+		return path
+	}
+	// Fallback to default aliases
+	if path, ok := w.defaultPathAliases[aliasOrPath]; ok {
 		return path
 	}
 	return aliasOrPath
 }
 
-func (w *PackageWalker) exprToString(expr goast.Expr, pkg *packages.Package) string {
+// exprToString resolves an expression to its fully qualified type name, optionally including pointer/slice info.
+func (w *PackageWalker) exprToString(expr goast.Expr, pkg *packages.Package, includeModifiers bool) string {
 	if pkg == nil || pkg.TypesInfo == nil {
-		switch e := expr.(type) {
-		case *goast.Ident:
-			return e.Name
-		case *goast.SelectorExpr:
-			return fmt.Sprintf("%s.%s", w.exprToString(e.X, pkg), e.Sel.Name)
-		default:
-			return "unknown"
-		}
-	}
-	tv := pkg.TypesInfo.TypeOf(expr)
-	if tv == nil {
 		return "unknown"
 	}
-	return tv.String()
+
+	var typeStr string
+	switch e := expr.(type) {
+	case *goast.StarExpr: // Pointer type: *T
+		if includeModifiers {
+			typeStr = "*" + w.exprToString(e.X, pkg, includeModifiers)
+		} else {
+			typeStr = w.exprToString(e.X, pkg, includeModifiers)
+		}
+	case *goast.ArrayType: // Slice type: []T
+		if includeModifiers {
+			typeStr = "[]" + w.exprToString(e.Elt, pkg, includeModifiers)
+		} else {
+			typeStr = w.exprToString(e.Elt, pkg, includeModifiers)
+		}
+	case *goast.MapType: // Map type: map[K]V
+		if includeModifiers {
+			typeStr = "map[" + w.exprToString(e.Key, pkg, includeModifiers) + "]" + w.exprToString(e.Value, pkg, includeModifiers)
+		} else {
+			typeStr = w.exprToString(e.Value, pkg, includeModifiers) // For simplicity, just return value type for now
+		}
+	case *goast.Ident: // Identifier: T
+		obj := pkg.TypesInfo.ObjectOf(e)
+		if obj != nil && obj.Pkg() != nil {
+			typeStr = obj.Pkg().Path() + "." + obj.Name()
+		} else {
+			typeStr = e.Name // Built-in or unresolved
+		}
+	case *goast.SelectorExpr: // Selector: pkg.T
+		obj := pkg.TypesInfo.ObjectOf(e.Sel)
+		if obj != nil && obj.Pkg() != nil {
+			typeStr = obj.Pkg().Path() + "." + obj.Name()
+		} else {
+			typeStr = e.Sel.Name // Fallback
+		}
+	default:
+		tv := pkg.TypesInfo.TypeOf(expr)
+		if tv != nil {
+			typeStr = tv.String()
+		} else {
+			typeStr = "unknown"
+		}
+	}
+
+	// Clean up typeStr if it contains package aliases from go/types.TypeString
+	// e.g., "github.com/origadmin/abgen/testdata/fixture/ent".User -> github.com/origadmin/abgen/testdata/fixture/ent.User
+	if strings.Contains(typeStr, "\"") {
+		typeStr = strings.ReplaceAll(typeStr, "\"", "")
+		typeStr = strings.ReplaceAll(typeStr, " ", "")
+	}
+
+	return typeStr
 }
 
 func parseDirective(line string) (key, value string) {

@@ -13,8 +13,8 @@ import (
 // This maps to the original p01_basic test case.
 
 //go:abgen:pair:packages="ent,types"
-//go:abgen:convert="ent.User,pb.User"
-//go:abgen:convert="ent.Resource,pb.Resource"
+//go:abgen:convert="ent.User,types.User"
+//go:abgen:convert="ent.Resource,ResourceBilateral"
 //go:abgen:convert:direction="both"
 //go:abgen:convert:target:suffix="Bilateral"
 
