@@ -33,7 +33,7 @@ type Generator struct {
 	tasks            []conversionTask
 	generatedTasks   map[string]bool
 	customTasks      map[string]conversionTask // Tasks for custom.gen.go
-	localTypeAliases map[string]string // Added: Map of local type alias names to their FQNs
+	localTypeAliases map[string]string         // Added: Map of local type alias names to their FQNs
 }
 
 // NewGenerator creates a new Generator instance.
@@ -291,13 +291,34 @@ func (g *Generator) handleFieldAssignment(sourceField types.StructField, sourceI
 		sourceDeref = "*"
 	}
 
-	assignmentStr := fmt.Sprintf("%s(%sfrom.%s)", convFuncName, sourceDeref, sourceField.Name)
+	// Check if the source field is a slice
+	if strings.HasPrefix(sourceField.Type, "[]") {
+		// Handle slice conversion
+		sourceElemType := strings.TrimPrefix(sourceField.Type, "[]")
+		targetElemType := strings.TrimPrefix(targetField.Type, "[]")
 
-	if targetField.IsPointer && !isBasicType(targetFieldType) && !strings.HasPrefix(g.getConversionFunctionSignature(sourceFieldType, targetFieldType), "*") {
-		assignmentStr = "&" + assignmentStr
+		sourceElemInfo, _ := g.walker.Resolve(sourceElemType)
+		targetElemInfo, _ := g.walker.Resolve(targetElemType)
+
+		elemConvFuncName := g.getConversionFunctionName(sourceElemInfo, targetElemInfo)
+		targetElemTypeStr := g.getTypeName(targetElemInfo)
+
+		g.buf.WriteString(fmt.Sprintf("\tif from.%s != nil {\n", sourceField.Name))
+		g.buf.WriteString(fmt.Sprintf("\t\tto.%s = make([]*%s, len(from.%s))\n", targetFieldName, targetElemTypeStr, sourceField.Name))
+		g.buf.WriteString(fmt.Sprintf("\t\tfor i, item := range from.%s {\n", sourceField.Name)) // Corrected range source
+		g.buf.WriteString(fmt.Sprintf("\t\t\tto.%s[i] = %s(item)\n", targetFieldName, elemConvFuncName))
+		g.buf.WriteString("\t\t}\n")
+		g.buf.WriteString("\t}\n")
+	} else {
+		// Original logic for non-slice fields
+		assignmentStr := fmt.Sprintf("%s(%sfrom.%s)", convFuncName, sourceDeref, sourceField.Name)
+
+		if targetField.IsPointer && !isBasicType(targetFieldType) && !strings.HasPrefix(g.getConversionFunctionSignature(sourceFieldType, targetFieldType), "*") {
+			assignmentStr = "&" + assignmentStr
+		}
+
+		g.buf.WriteString(fmt.Sprintf("\tto.%s = %s\n", targetFieldName, assignmentStr))
 	}
-
-	g.buf.WriteString(fmt.Sprintf("\tto.%s = %s\n", targetFieldName, assignmentStr))
 }
 
 func (g *Generator) getConversionFunctionName(source, target *types.TypeInfo) string {
@@ -408,7 +429,7 @@ func (g *Generator) generateCustomStubs() {
 		g.customBuf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceTypeStr, targetTypeStr))
 		g.customBuf.WriteString(fmt.Sprintf("\t// TODO: Implement this custom conversion\n"))
 		g.customBuf.WriteString(fmt.Sprintf("\tpanic(\"custom conversion not implemented: %s\")\n", funcName))
-		g.buf.WriteString("}\n\n")
+		g.customBuf.WriteString("}\n\n") // Corrected: write to g.customBuf
 	}
 }
 
@@ -532,7 +553,7 @@ func (im *ImportManager) Add(importPath string) string {
 				alias = originalAlias + strconv.Itoa(counter)
 				counter++
 				break
-						}
+			}
 		}
 		if !isConflict {
 			break

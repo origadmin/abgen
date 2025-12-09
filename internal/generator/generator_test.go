@@ -41,6 +41,8 @@ func loadTestPackages(t *testing.T, testCaseDir string, dependencies ...string) 
 
 func TestGenerator_CodeGeneration(t *testing.T) {
 	// Base dependencies for most tests
+	// NOTE: These are now only used for tests that specifically rely on the global fixture.
+	// New tests should define their own local dependencies if they have specific fixture types.
 	baseDependencies := []string{
 		"github.com/origadmin/abgen/testdata/fixture/ent",
 		"github.com/origadmin/abgen/testdata/fixture/types",
@@ -88,8 +90,17 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 		// Note: simple_field_remap test is skipped - golden file not available
 
 		// === 06_complex_types: Complex Type Conversions ===
-		// Note: All complex type tests are skipped - golden files not available
-		// - slice_conversions
+		{
+			name:           "slice_conversions", // Added new test case for slice conversions
+			directivePath:  "../../testdata/08_slice_conversions/slice_conversion_test_case", // Corrected directivePath
+			goldenFileName: "expected.golden",
+			dependencies: []string{ // Corrected dependencies for slice_conversions
+				"github.com/origadmin/abgen/testdata/08_slice_conversions/slice_conversion_test_case/source",
+				"github.com/origadmin/abgen/testdata/08_slice_conversions/slice_conversion_test_case/target",
+			},
+			priority: "P0",
+			category: "complex_types",
+		},
 		// - enum_string_to_int
 		// - pointer_conversions
 		// - map_conversions
