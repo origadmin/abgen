@@ -18,13 +18,14 @@ import (
 // PackageWalker 包遍历器
 
 type PackageWalker struct {
-	imports map[string]string
+	imports     map[string]string
+	pathAliases map[string]string // Maps alias to full package path
 
 	rules map[string]*types.ConversionConfig // The global rule set, key: SourceFQN->TargetFQN
 
 	currentPkg *packages.Package
 
-	typeCache map[string]types.TypeInfo
+	typeCache map[string]*types.TypeInfo // Changed to pointer
 
 	loadedPkgs map[string]*packages.Package // 缓存已加载的包
 
@@ -68,6 +69,13 @@ func (w *PackageWalker) exprToString(expr goast.Expr, pkg *packages.Package) str
 	}
 
 	qualifier := func(p *gotypes.Package) string {
+		// First, check if there is a package path alias
+		for alias, path := range w.pathAliases {
+			if path == p.Path() {
+				return alias // Use the directive alias
+			}
+		}
+		// Then, check the regular imports
 		for _, knownPkg := range w.allKnownPkgs {
 			if knownPkg.Types.Path() == p.Path() {
 				return knownPkg.PkgPath
@@ -79,7 +87,7 @@ func (w *PackageWalker) exprToString(expr goast.Expr, pkg *packages.Package) str
 	return gotypes.TypeString(tv.Type, qualifier)
 }
 
-func (w *PackageWalker) GetTypeCache() map[string]types.TypeInfo {
+func (w *PackageWalker) GetTypeCache() map[string]*types.TypeInfo { // Changed return type
 
 	return w.typeCache
 
@@ -102,19 +110,20 @@ func NewPackageWalker() *PackageWalker { // Removed graph parameter
 	return &PackageWalker{
 		rules: make(map[string]*types.ConversionConfig), // NEW: Use rules map instead of graph
 
-		imports: make(map[string]string),
+		imports:     make(map[string]string),
+		pathAliases: make(map[string]string),
 
-		typeCache: make(map[string]types.TypeInfo),
+		typeCache: make(map[string]*types.TypeInfo), // Changed initialization
 
 		loadedPkgs: make(map[string]*packages.Package),
 
-		packageMode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
+		packageMode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
 
 		defaultConfig: &types.ConversionConfig{ // NEW: Initialize default config
-			Direction:    "both",
-			IgnoreFields: make(map[string]bool),
-			IgnoreTypes:  make(map[string]bool),
-			RemapFields:  make(map[string]string),
+			Direction:           "both",
+			IgnoreFields:        make(map[string]bool),
+			IgnoreTypes:         make(map[string]bool),
+			RemapFields:         make(map[string]string),
 			TypeConversionRules: make([]types.TypeConversionRule, 0),
 		},
 
@@ -124,19 +133,19 @@ func NewPackageWalker() *PackageWalker { // Removed graph parameter
 
 // Resolve is a public method, for resolving type information
 
-func (w *PackageWalker) Resolve(typeName string) (types.TypeInfo, error) {
+func (w *PackageWalker) Resolve(typeName string) (*types.TypeInfo, error) { // Changed return type to *types.TypeInfo
 
 	typeName = strings.TrimPrefix(typeName, "*")
 
 	info := w.resolveTargetType(typeName)
 
-	if info.Name == "" {
+	if info == nil || info.Name == "" { // Check for nil info
 
-		return types.TypeInfo{}, fmt.Errorf("type %q not found", typeName)
+		return nil, fmt.Errorf("type %q not found", typeName) // Return nil pointer
 
 	}
 
-	return info, nil
+	return info, nil // Return pointer
 
 }
 
@@ -158,29 +167,19 @@ func (w *PackageWalker) DiscoverPackages(pkg *packages.Package) ([]string, error
 
 		for _, comment := range file.Comments {
 			for _, line := range comment.List {
-				if !strings.HasPrefix(line.Text, "//go:abgen:pair:packages=") {
+				key, value := parseDirective(line.Text)
+				if key != "pair:packages" {
 					continue
-				}
-
-				directive := strings.TrimPrefix(line.Text, "//go:abgen:")
-				parts := strings.SplitN(directive, "=", 2)
-				if len(parts) != 2 {
-					continue
-				}
-
-				valueStr := parts[1]
-				var value string
-				if strings.HasPrefix(valueStr, `"`) {
-					lastQuoteIndex := strings.LastIndex(valueStr, `"`)
-					if lastQuoteIndex > 0 {
-						value = valueStr[1:lastQuoteIndex]
-					}
 				}
 
 				if value != "" {
 					paths := strings.Split(value, ",")
 					for _, p := range paths {
-						discoveredPaths[strings.TrimSpace(p)] = struct{}{}
+						path := strings.TrimSpace(p)
+						if resolvedPath, ok := w.pathAliases[path]; ok {
+							path = resolvedPath
+						}
+						discoveredPaths[path] = struct{}{}
 					}
 				}
 			}
@@ -195,73 +194,6 @@ func (w *PackageWalker) DiscoverPackages(pkg *packages.Package) ([]string, error
 	return pathList, nil
 }
 
-// Analyze performs the main analysis pass. It assumes all necessary packages
-// (the directive package and any discovered dependencies) have already been
-// added to the walker via AddPackages. It then processes all directives
-// and builds the conversion configurations.
-// This function replaces the monolithic WalkPackage.
-func (w *PackageWalker) WalkPackage(pkg *packages.Package) error {
-	slog.Info("开始遍历包", "包", pkg.PkgPath)
-
-	w.currentPkg = pkg
-
-	w.collectImports(pkg.Syntax) // Collect imports from all files in the package
-
-	slog.Debug("WalkPackage: collected imports", "imports", w.imports)
-
-	// Add the current package and all its imported packages to allKnownPkgs
-
-	w.AddPackages(pkg)
-
-	for _, impPkg := range pkg.Imports {
-
-		w.AddPackages(impPkg)
-
-	}
-
-	slog.Debug("WalkPackage: allKnownPkgs after adding imports", "allKnownPkgs", func() []string {
-
-		paths := make([]string, len(w.allKnownPkgs))
-
-		for i, p := range w.allKnownPkgs {
-
-			paths[i] = p.PkgPath
-
-		}
-
-		return paths
-
-	}())
-
-	slog.Debug("WalkPackage: Number of files in pkg.Syntax", "count", len(pkg.Syntax))
-
-	for _, file := range pkg.Syntax {
-
-		filename := pkg.Fset.File(file.Pos()).Name()
-
-		slog.Info("遍历文件", "文件", filename)
-
-		if strings.HasSuffix(filepath.Base(filename), ".gen.go") {
-
-			slog.Debug("WalkPackage: Skipping generated file", "file", filename)
-
-			continue
-
-		}
-
-		if err := w.processFileDecls(file); err != nil {
-
-			return err
-
-		}
-
-	}
-
-	slog.Debug("WalkPackage: Finished processing package", "pkgPath", pkg.PkgPath)
-
-	return nil
-
-}
 func (w *PackageWalker) Analyze(pkg *packages.Package) error {
 	slog.Info("开始分析阶段", "包", pkg.PkgPath)
 
@@ -295,6 +227,10 @@ func (w *PackageWalker) Analyze(pkg *packages.Package) error {
 			return err
 		}
 	}
+	// After processing all directives, we now process the package pairings.
+	if err := w.ProcessPackagePairs(); err != nil {
+		return fmt.Errorf("error processing package pairs: %w", err)
+	}
 
 	slog.Debug("Analyze: Finished processing package", "pkgPath", pkg.PkgPath)
 	return nil
@@ -318,31 +254,25 @@ func (w *PackageWalker) collectLocalTypeAliases(file *goast.File) {
 			for _, spec := range genDecl.Specs {
 				if typeSpec, ok := spec.(*goast.TypeSpec); ok {
 					var fqn string
-					if _, isStruct := typeSpec.Type.(*goast.StructType); isStruct {
-						fqn = w.currentPkg.PkgPath + "." + typeSpec.Name.Name
-					} else {
-						underlyingTypeStr := w.exprToString(typeSpec.Type, w.currentPkg)
-						resolvedInfo := w.resolveTargetType(underlyingTypeStr)
-						if resolvedInfo.Name != "" {
-							if resolvedInfo.ImportPath == "builtin" {
-								fqn = resolvedInfo.Name
-							} else {
-								fqn = resolvedInfo.ImportPath + "." + resolvedInfo.Name
-							}
+					// Resolve the TypeInfo for the actual underlying type
+					underlyingTypeInfo := w.buildTypeInfoFromTypeSpec(typeSpec.Type, w.currentPkg) // Changed here
+					if underlyingTypeInfo.Name != "" {
+						if underlyingTypeInfo.ImportPath == "builtin" {
+							fqn = underlyingTypeInfo.Name
 						} else {
-							fqn = underlyingTypeStr
+							fqn = underlyingTypeInfo.ImportPath + "." + underlyingTypeInfo.Name
 						}
+					} else {
+						fqn = w.exprToString(typeSpec.Type, w.currentPkg) // Fallback
 					}
+
 					w.localTypeNameToFQN[typeSpec.Name.Name] = fqn
 					// Create a TypeInfo entry for the local alias itself
-					w.typeCache[typeSpec.Name.Name] = types.TypeInfo{
-						Name:       typeSpec.Name.Name,
-						PkgName:    w.currentPkg.Name,
-						ImportPath: w.currentPkg.PkgPath,
-						LocalAlias: typeSpec.Name.Name, // It's its own local alias
-						IsAlias:    true,
-						AliasFor:   fqn, // The FQN of the underlying type
-					}
+					info := w.buildTypeInfoFromTypeSpec(typeSpec, w.currentPkg) // Get info for the alias itself
+					info.LocalAlias = typeSpec.Name.Name
+					info.IsAlias = true
+					info.AliasFor = fqn                     // The FQN of the underlying type
+					w.typeCache[typeSpec.Name.Name] = &info // Store pointer
 					slog.Debug("collectLocalTypeAliases: Collected local type", "localName", typeSpec.Name.Name, "fqn", fqn)
 				}
 			}
@@ -358,22 +288,18 @@ func (w *PackageWalker) processCommentDirectives(file *goast.File) {
 		var definingDirective string
 		var modifierDirectives []string
 		isDirectiveGroup := false
-		isConvertDirective := false // Flag for convert="A,B"
 
 		for _, comment := range commentGroup.List {
 			line := comment.Text
-			if !strings.HasPrefix(line, "//go:abgen:") {
+			key, _ := parseDirective(line)
+			if key == "" {
 				continue
 			}
-			isDirectiveGroup = true
-			directive := strings.TrimPrefix(line, "//go:abgen:")
 
-			if strings.HasPrefix(directive, "pair:packages=") {
+			isDirectiveGroup = true
+			if key == "pair:packages" || key == "convert" {
 				definingDirective = line
-			} else if strings.HasPrefix(directive, "convert=") {
-				definingDirective = line
-				isConvertDirective = true
-			} else { // This is for modifiers (like convert:direction, convert:remap)
+			} else {
 				modifierDirectives = append(modifierDirectives, line)
 			}
 		}
@@ -382,83 +308,26 @@ func (w *PackageWalker) processCommentDirectives(file *goast.File) {
 			continue
 		}
 
-		// Try to find an associated type declaration for this comment group
-		var associatedDecl *goast.GenDecl
-		for _, decl := range file.Decls {
-			if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
-				// Case 1: Comment is directly above the GenDecl (type declaration)
-				if genDecl.Doc != nil {
-					if genDecl.Doc.Pos() == commentGroup.Pos() {
-						associatedDecl = genDecl
-						break
-					}
-				}
+		// It's a file-level directive group, not attached to a type.
+		// These directives modify the defaultConfig or define package-level aliases.
+		// `convert="A,B"` at file-level creates a specific rule.
+		definingKey, _ := parseDirective(definingDirective)
+		isConvertDirective := definingKey == "convert"
 
-				// Case 2: Comment is associated with a TypeSpec within a GenDecl.
-				// This handles `type ( // Comment A int )`
-				if genDecl.Specs != nil { // Check if Specs is not nil
-					for _, spec := range genDecl.Specs {
-						if typeSpec, typeSpecOk := spec.(*goast.TypeSpec); typeSpecOk {
-							if typeSpec.Doc != nil {
-								if typeSpec.Doc.Pos() == commentGroup.Pos() {
-									associatedDecl = genDecl // The GenDecl is the "associated declaration" for its specs
-									break
-								}
-							}
-						}
-					}
-				}
-				if associatedDecl != nil { // Break outer loop if already found from specs
-					break
-				}
+		if isConvertDirective {
+			// Create a new specific conversion rule from this file-level directive
+			typeCfg := w.defaultConfig.Clone()
+			w.parseAndApplyDirective(definingDirective, typeCfg)
+			for _, mod := range modifierDirectives {
+				w.parseAndApplyDirective(mod, typeCfg)
 			}
-		}
-
-		if associatedDecl == nil { // If no associated type declaration
-			// It's a file-level directive.
-			// If it's a file-level convert="A,B" directive, we need to create a ConversionConfig for it.
-			if isConvertDirective {
-				typeCfg := w.defaultConfig.Clone() // NEW: Clone defaultConfig for this specific conversion
-				
-				// The source and target type names are directly in the value part of the definingDirective
-				parts := strings.Split(strings.TrimPrefix(definingDirective, "//go:abgen:convert="), ",")
-				if len(parts) == 2 {
-					sourceName := strings.TrimSpace(parts[0])
-					targetName := strings.TrimSpace(parts[1])
-
-					sourceInfo := w.resolveTargetType(sourceName)
-					if sourceInfo.Name != "" {
-						typeCfg.Source.Type = sourceInfo.ImportPath + "." + sourceInfo.Name
-						typeCfg.Source.LocalAlias = sourceInfo.LocalAlias
-					} else {
-						typeCfg.Source.Type = sourceName
-					}
-
-					targetInfo := w.resolveTargetType(targetName)
-					if targetInfo.Name != "" {
-						typeCfg.Target.Type = targetInfo.ImportPath + "." + targetInfo.Name
-						typeCfg.Target.LocalAlias = targetInfo.LocalAlias
-					} else {
-						typeCfg.Target.Type = targetName
-					}
-				}
-
-				// Apply any modifiers to this typeCfg
-				for _, mod := range modifierDirectives {
-					w.parseAndApplyDirective(mod, typeCfg) // pkgConfigs removed
-				}
-				if typeCfg.Source.Type != "" && typeCfg.Target.Type != "" { // Ensure both source and target are set
-					w.AddConversion(typeCfg)
-					slog.Debug("processCommentDirectives: Added file-level conversion config", "sourceType", typeCfg.Source.Type, "targetType", typeCfg.Target.Type)
-				} else {
-					slog.Debug("processCommentDirectives: Did not add file-level conversion config due to incomplete types", "definingDirective", definingDirective)
-				}
-			} else { // Other file-level directives (pair:packages, or modifiers without definingDirective)
-				// Apply file-level directives to the defaultConfig
-				w.applyFileLevelDirectives(definingDirective, modifierDirectives)
+			if typeCfg.Source != nil && typeCfg.Target != nil && typeCfg.Source.Type != "" && typeCfg.Target.Type != "" {
+				w.AddConversion(typeCfg)
+				slog.Debug("processCommentDirectives: Added file-level conversion config", "source", typeCfg.Source.Type, "target", typeCfg.Target.Type)
 			}
-		} else { // Type-level comment group (associated with a type declaration)
-			w.applyTypeLevelDirectives(file, commentGroup, definingDirective, modifierDirectives, associatedDecl)
+		} else {
+			// All other file-level directives apply to the defaultConfig
+			w.applyFileLevelDirectives(definingDirective, modifierDirectives)
 		}
 	}
 }
@@ -483,9 +352,15 @@ func (w *PackageWalker) applyTypeLevelDirectives(file *goast.File, commentGroup 
 		if typeSpec, ok := spec.(*goast.TypeSpec); ok {
 			// Resolve the source type from the type declaration this directive is attached to.
 			sourceTypeInfo := w.resolveTargetType(w.exprToString(typeSpec.Type, w.currentPkg))
-			effectiveSourceType := sourceTypeInfo.ImportPath + "." + sourceTypeInfo.Name
+			effectiveSourceType := ""
+			if sourceTypeInfo != nil {
+				effectiveSourceType = sourceTypeInfo.ImportPath + "." + sourceTypeInfo.Name
+			} else {
+				effectiveSourceType = w.exprToString(typeSpec.Type, w.currentPkg) // Fallback
+			}
+
 			localAliasForSource := ""
-			if sourceTypeInfo.LocalAlias != "" {
+			if sourceTypeInfo != nil && sourceTypeInfo.LocalAlias != "" {
 				localAliasForSource = sourceTypeInfo.LocalAlias
 			} else if alias, ok := w.localTypeNameToFQN[typeSpec.Name.Name]; ok && alias == effectiveSourceType {
 				localAliasForSource = typeSpec.Name.Name
@@ -513,30 +388,35 @@ func (w *PackageWalker) applyTypeLevelDirectives(file *goast.File, commentGroup 
 	}
 }
 
-// parseAndApplyDirective parses a directive line and applies its settings to the given ConversionConfig.
-// It no longer distinguishes between type-level and file-level processing via `typeCfg == nil`.
-func (w *PackageWalker) parseAndApplyDirective(line string, cfg *types.ConversionConfig) { // pkgConfigs removed
+// parseDirective is a centralized utility to parse a raw directive line.
+// It returns the full key (e.g., "convert:target:suffix") and the cleaned-up value.
+func parseDirective(line string) (key string, value string) {
+	if !strings.HasPrefix(line, "//go:abgen:") {
+		return "", ""
+	}
 	directive := strings.TrimPrefix(line, "//go:abgen:")
 
-	// Use SplitN to correctly handle '=' within the value part.
 	parts := strings.SplitN(directive, "=", 2)
-	keyStr := parts[0]
-	value := ""
+	key = parts[0]
 	if len(parts) > 1 {
 		valStr := parts[1]
-		// Correctly extract the value within quotes, ignoring trailing comments.
-		if strings.HasPrefix(valStr, `"`) {
-			// Find the closing quote.
-			lastQuoteIndex := strings.LastIndex(valStr, `"`)
-			if lastQuoteIndex > 0 { // Ensure it's not the opening quote
-				value = valStr[1:lastQuoteIndex]
-			}
-		} else {
-			// Handle cases where value is not quoted (if any)
-			value = valStr
+		// Strip trailing comments before trimming quotes and spaces
+		if commentIdx := strings.Index(valStr, "//"); commentIdx != -1 {
+			valStr = valStr[:commentIdx]
 		}
+		value = strings.Trim(strings.TrimSpace(valStr), `"`)
 	}
-	
+	return key, value
+}
+
+// parseAndApplyDirective parses a directive line and applies its settings to the given ConversionConfig.
+// It no longer distinguishes between type-level and file-level processing via `typeCfg == nil`.
+func (w *PackageWalker) parseAndApplyDirective(line string, cfg *types.ConversionConfig) {
+	keyStr, value := parseDirective(line)
+	if keyStr == "" {
+		return
+	}
+
 	keys := strings.Split(keyStr, ":")
 	verb := keys[0]
 	subject := ""
@@ -547,6 +427,20 @@ func (w *PackageWalker) parseAndApplyDirective(line string, cfg *types.Conversio
 	slog.Debug("parseAndApplyDirective: Processing directive", "line", line, "verb", verb, "subject", subject, "value", value)
 
 	switch verb {
+	case "package":
+		if subject == "path" {
+			// value will be "github.com/path,alias=ent"
+			parts := strings.Split(value, ",")
+			if len(parts) == 2 {
+				pathPart := strings.TrimSpace(parts[0])
+				aliasPart := strings.TrimSpace(parts[1])
+				if strings.HasPrefix(aliasPart, "alias=") {
+					alias := strings.TrimPrefix(aliasPart, "alias=")
+					w.pathAliases[alias] = pathPart
+					slog.Debug("parseAndApplyDirective: Registered package path alias", "alias", alias, "path", pathPart)
+				}
+			}
+		}
 	case "pair":
 		if subject == "packages" {
 			paths := strings.Split(value, ",")
@@ -561,13 +455,19 @@ func (w *PackageWalker) parseAndApplyDirective(line string, cfg *types.Conversio
 	case "convert":
 		switch len(keys) {
 		case 1: // convert="A,B"
+			if cfg.Source == nil {
+				cfg.Source = &types.EndpointConfig{}
+			}
+			if cfg.Target == nil {
+				cfg.Target = &types.EndpointConfig{}
+			}
 			parts := strings.Split(value, ",")
 			if len(parts) == 2 {
 				sourceName := strings.TrimSpace(parts[0])
 				targetName := strings.TrimSpace(parts[1])
 
 				sourceInfo := w.resolveTargetType(sourceName)
-				if sourceInfo.Name != "" {
+				if sourceInfo != nil && sourceInfo.Name != "" {
 					cfg.Source.Type = sourceInfo.ImportPath + "." + sourceInfo.Name
 					cfg.Source.LocalAlias = sourceInfo.LocalAlias
 				} else {
@@ -575,7 +475,7 @@ func (w *PackageWalker) parseAndApplyDirective(line string, cfg *types.Conversio
 				}
 
 				targetInfo := w.resolveTargetType(targetName)
-				if targetInfo.Name != "" {
+				if targetInfo != nil && targetInfo.Name != "" {
 					cfg.Target.Type = targetInfo.ImportPath + "." + targetInfo.Name
 					cfg.Target.LocalAlias = targetInfo.LocalAlias
 				} else {
@@ -640,6 +540,107 @@ func (w *PackageWalker) parseAndApplyDirective(line string, cfg *types.Conversio
 	}
 }
 
+// ProcessPackagePairs iterates through configs that have package pairs defined,
+// finds matching types, and creates explicit conversion rules for them.
+func (w *PackageWalker) ProcessPackagePairs() error {
+	slog.Info("开始处理包配对")
+	// Because w.rules can be modified during iteration, we create a snapshot of the keys first.
+	var configKeys []string
+	for k := range w.rules {
+		configKeys = append(configKeys, k)
+	}
+
+	pairedConfigs := make(map[string]*types.ConversionConfig)
+
+	// We only need to check the defaultConfig for the pair:packages directive.
+	if w.defaultConfig.SourcePackage != "" && w.defaultConfig.TargetPackage != "" {
+		key := w.defaultConfig.SourcePackage + "->" + w.defaultConfig.TargetPackage
+		pairedConfigs[key] = w.defaultConfig
+	}
+
+	for _, cfg := range w.rules {
+		if cfg.SourcePackage != "" && cfg.TargetPackage != "" {
+			key := cfg.SourcePackage + "->" + cfg.TargetPackage
+			// Store configs in a map to process each package pair only once.
+			// The last config for a given pair will overwrite previous ones, which is acceptable
+			// as they should ideally share the same package-level settings.
+			pairedConfigs[key] = cfg
+		}
+	}
+
+	for pairKey, baseCfg := range pairedConfigs {
+		slog.Debug("处理配对", "key", pairKey)
+		sourcePkgPath := baseCfg.SourcePackage
+		targetPkgPath := baseCfg.TargetPackage
+
+		// Resolve aliases
+		if resolvedPath, ok := w.pathAliases[sourcePkgPath]; ok {
+			sourcePkgPath = resolvedPath
+		}
+		if resolvedPath, ok := w.pathAliases[targetPkgPath]; ok {
+			targetPkgPath = resolvedPath
+		}
+
+		// Load packages using the walker's loading mechanism
+		sourcePkg, err := w.loadPackage(sourcePkgPath)
+		if err != nil {
+			return fmt.Errorf("failed to load source package %s for pairing: %w", sourcePkgPath, err)
+		}
+		targetPkg, err := w.loadPackage(targetPkgPath)
+		if err != nil {
+			return fmt.Errorf("failed to load target package %s for pairing: %w", targetPkgPath, err)
+		}
+		w.AddPackages(sourcePkg, targetPkg)
+
+		// Get all type names from both packages
+		sourceTypes := w.getPackageTypes(sourcePkg)
+		targetTypes := w.getPackageTypes(targetPkg)
+
+		// Find common type names
+		for typeName := range sourceTypes {
+			if _, exists := targetTypes[typeName]; exists {
+				// Found a matching type by name
+				sourceFQN := sourcePkg.PkgPath + "." + typeName
+				targetFQN := targetPkg.PkgPath + "." + typeName
+
+				// Check if a conversion rule already exists for this pair
+				if _, exists := w.rules[sourceFQN+"2"+targetFQN]; exists {
+					slog.Debug("已存在转换规则，跳过", "source", sourceFQN, "target", targetFQN)
+					continue
+				}
+
+				slog.Info("发现配对类型，添加新的转换配置", "source", sourceFQN, "target", targetFQN)
+				// Create a new specific conversion config, inheriting from the package-pair config
+				newCfg := baseCfg.Clone()
+				newCfg.Source = &types.EndpointConfig{Type: sourceFQN}
+				newCfg.Target = &types.EndpointConfig{Type: targetFQN}
+
+				w.AddConversion(newCfg)
+			}
+		}
+	}
+	slog.Info("包配对处理完成")
+	return nil
+}
+
+// getPackageTypes extracts all exported type names from a loaded package's scope.
+func (w *PackageWalker) getPackageTypes(pkg *packages.Package) map[string]bool {
+	types := make(map[string]bool)
+	if pkg == nil || pkg.Types == nil {
+		return types
+	}
+	scope := pkg.Types.Scope()
+	for _, name := range scope.Names() {
+		if obj := scope.Lookup(name); obj != nil && obj.Exported() {
+			// We only care about type names
+			if _, ok := obj.(*gotypes.TypeName); ok {
+				types[name] = true
+			}
+		}
+	}
+	return types
+}
+
 func parseRule(value string, walker *PackageWalker) types.TypeConversionRule {
 	var rule types.TypeConversionRule
 	ruleParts := strings.Split(value, ",")
@@ -684,13 +685,22 @@ func parseRule(value string, walker *PackageWalker) types.TypeConversionRule {
 }
 
 // resolveTargetType resolves the TypeInfo for a given type name, which may be in an external package.
-func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
+func (w *PackageWalker) resolveTargetType(targetType string) *types.TypeInfo { // Changed return type to *types.TypeInfo
 	slog.Debug("resolveTargetType: starting type resolution", "targetType", targetType)
-
+	// Handle alias prefix e.g. "ent.User"
+	parts := strings.Split(targetType, ".")
+	if len(parts) == 2 {
+		pkgAlias := parts[0]
+		typeName := parts[1]
+		if fullPath, ok := w.pathAliases[pkgAlias]; ok {
+			targetType = fullPath + "." + typeName // Resolve to full path
+			slog.Debug("resolveTargetType: resolved alias", "alias", pkgAlias, "fullType", targetType)
+		}
+	}
 	// 0. Handle built-in types (e.g., "string", "int", "bool")
 	// These types don't have an import path or package name in the same way as custom types.
 	if gotypes.Universe.Lookup(targetType) != nil { // Check if it's a Go built-in type
-		info := types.TypeInfo{
+		info := &types.TypeInfo{ // Store pointer
 			Name:       targetType,
 			PkgName:    "builtin",
 			ImportPath: "builtin", // A special placeholder for built-in types
@@ -708,7 +718,7 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 
 	// Immediately add a placeholder to the cache to prevent infinite recursion for cyclic type definitions
 	// The actual content will be updated later.
-	w.typeCache[targetType] = types.TypeInfo{Name: targetType}
+	w.typeCache[targetType] = &types.TypeInfo{Name: targetType} // Store pointer
 	slog.Debug("resolveTargetType: added placeholder to cache", "targetType", targetType)
 
 	// 2. Handle local aliases within all known packages
@@ -721,7 +731,7 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 						if typeSpec, ok := spec.(*goast.TypeSpec); ok {
 							if typeSpec.Name.Name == targetType { // THIS IS WHERE THE COMPARISON HAPPENS
 								slog.Debug("resolveTargetType: successfully found TypeSpec", "typeName", typeSpec.Name.Name, "pkgPath", pkg.PkgPath)
-								
+
 								// Call a unified helper, passing explicit package context
 								info := w.buildTypeInfoFromTypeSpec(typeSpec, pkg)
 
@@ -732,19 +742,18 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 									slog.Debug("resolveTargetType: type is an alias, recursively resolving", "alias", targetType, "underlyingType", underlyingTypeName)
 									// Resolve the underlying type.
 									resolvedUnderlyingInfo := w.resolveTargetType(underlyingTypeName)
-									if resolvedUnderlyingInfo.Name != "" {
+									if resolvedUnderlyingInfo != nil && resolvedUnderlyingInfo.Name != "" {
 										// Transfer resolved info, but keep local alias specific info
 										resolvedUnderlyingInfo.LocalAlias = info.LocalAlias
 										resolvedUnderlyingInfo.IsAlias = true
 										resolvedUnderlyingInfo.AliasFor = info.AliasFor
-										info = resolvedUnderlyingInfo
+										info = *resolvedUnderlyingInfo // Dereference for value copy
 									}
-									// If resolvedUnderlyingInfo.Name is empty, it means the underlying type could not be resolved.
 									// In this case, 'info' already contains minimal alias info from buildTypeInfoFromTypeSpec.
 								}
-								w.typeCache[targetType] = info // Cache the result with original targetType
+								w.typeCache[targetType] = &info // Store pointer
 								slog.Debug("resolveTargetType: returning TypeInfo", "typeName", info.Name, "pkgName", info.PkgName, "importPath", info.ImportPath)
-								return info
+								return &info // Return pointer
 							}
 						}
 					}
@@ -754,7 +763,7 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 	}
 
 	// 3. Handle qualified types (e.g., "ent.User" or "some/path/to/pkg.MyType")
-	parts := strings.Split(targetType, ".")
+	parts = strings.Split(targetType, ".")
 	if len(parts) > 1 {
 		pkgIdentifier := strings.Join(parts[:len(parts)-1], ".") // Handle full path like "a/b/c.Type"
 		typeName := parts[len(parts)-1]
@@ -809,11 +818,11 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 								slog.Debug("resolveTargetType: checking TypeSpec", "foundTypeSpecName", typeSpec.Name.Name, "lookingFor", typeName, "file", foundPkg.Fset.File(file.Pos()).Name())
 								if typeSpec.Name.Name == typeName { // THIS IS WHERE THE COMPARISON HAPPENS
 									slog.Debug("resolveTargetType: successfully found TypeSpec", "typeName", typeSpec.Name.Name, "pkgPath", foundPkg.PkgPath)
-									
+
 									info := w.buildTypeInfoFromTypeSpec(typeSpec, foundPkg)
-									w.typeCache[targetType] = info // Cache the result with original targetType
+									w.typeCache[targetType] = &info // Store pointer
 									slog.Debug("resolveTargetType: returning TypeInfo", "typeName", info.Name, "pkgName", info.PkgName, "importPath", info.ImportPath)
-									return info
+									return &info // Return pointer
 								}
 							}
 						}
@@ -838,9 +847,9 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 									if typeSpec, ok := spec.(*goast.TypeSpec); ok && typeSpec.Name.Name == typeName {
 										slog.Debug("resolveTargetType: found type in dynamically loaded package", "typeName", typeName)
 										info := w.buildTypeInfoFromTypeSpec(typeSpec, foundPkg)
-										w.typeCache[targetType] = info
+										w.typeCache[targetType] = &info
 										slog.Debug("resolveTargetType: returning TypeInfo from dynamically loaded package", "typeName", info.Name, "pkgName", info.PkgName, "importPath", info.ImportPath)
-										return info
+										return &info
 									}
 								}
 							}
@@ -856,7 +865,7 @@ func (w *PackageWalker) resolveTargetType(targetType string) types.TypeInfo {
 	// If we reach here, the type was not found. Return an empty TypeInfo.
 	slog.Debug("resolveTargetType: type not found, returning empty TypeInfo", "targetType", targetType)
 	delete(w.typeCache, targetType) // Remove the placeholder
-	return types.TypeInfo{}
+	return nil                      // Return nil for not found
 }
 
 // findAliasForPath finds the alias used for a given import path in the current context.
@@ -882,63 +891,139 @@ func (w *PackageWalker) findAliasForPath(importPath string) string {
 	return parts[len(parts)-1]
 }
 
-// buildTypeInfoFromTypeSpec parses a given go/ast.TypeSpec and returns a types.TypeInfo.
-// It handles both struct and non-struct type specifications.
-func (w *PackageWalker) buildTypeInfoFromTypeSpec(typeSpec *goast.TypeSpec, pkg *packages.Package) types.TypeInfo {
+// buildTypeInfoFromTypeSpec parses a given go/ast.TypeSpec or goast.Expr and returns a types.TypeInfo.
+// It handles struct, pointer, slice, map, and basic type specifications.
+func (w *PackageWalker) buildTypeInfoFromTypeSpec(spec interface{}, pkg *packages.Package) types.TypeInfo {
+	var typeName string
+	var expr goast.Expr
+
+	switch s := spec.(type) {
+	case *goast.TypeSpec:
+		typeName = s.Name.Name
+		expr = s.Type
+	case goast.Expr:
+		// This path is taken when resolving element types of slices/maps, or base type of pointers
+		expr = s
+		// Try to resolve a name for the expression if it's a simple identifier or selector
+		if ident, ok := expr.(*goast.Ident); ok {
+			typeName = ident.Name
+		} else if sel, ok := expr.(*goast.SelectorExpr); ok {
+			typeName = w.exprToString(sel, pkg) // Use exprToString to get qualified name
+			if parts := strings.Split(typeName, "."); len(parts) > 1 {
+				typeName = parts[len(parts)-1] // Just the base name
+			}
+		} else {
+			typeName = w.exprToString(expr, pkg) // Fallback for complex expressions
+		}
+	default:
+		return types.TypeInfo{} // Should not happen
+	}
+
 	info := types.TypeInfo{
-		Name:        typeSpec.Name.Name,
+		Name:        typeName,
 		PkgName:     pkg.Name,
 		ImportPath:  pkg.PkgPath,
 		ImportAlias: w.findAliasForPath(pkg.PkgPath),
 	}
 
-	if structType, ok := typeSpec.Type.(*goast.StructType); ok {
-		// It's a struct, parse its fields
+	// Handle pointer types
+	if starExpr, ok := expr.(*goast.StarExpr); ok {
+		info.IsPointer = true
+		// Recursively resolve the element type
+		elemTypeInfo := w.buildTypeInfoFromTypeSpec(starExpr.X, pkg)
+		info.ElemType = &elemTypeInfo
+		return info
+	}
+
+	// Handle slice types
+	if arrayType, ok := expr.(*goast.ArrayType); ok {
+		info.IsSlice = true
+		// Recursively resolve the element type
+		elemTypeInfo := w.buildTypeInfoFromTypeSpec(arrayType.Elt, pkg)
+		info.ElemType = &elemTypeInfo
+		return info
+	}
+
+	// Handle map types
+	if mapType, ok := expr.(*goast.MapType); ok {
+		info.IsMap = true
+		// Recursively resolve key and value types
+		keyTypeInfo := w.buildTypeInfoFromTypeSpec(mapType.Key, pkg)
+		info.KeyType = &keyTypeInfo
+		valueTypeInfo := w.buildTypeInfoFromTypeSpec(mapType.Value, pkg)
+		info.ValueType = &valueTypeInfo
+		return info
+	}
+
+	if structType, ok := expr.(*goast.StructType); ok {
 		info.Kind = types.TypeKindStruct
 		for _, field := range structType.Fields.List {
 			if len(field.Names) == 0 { // Embedded field
-				var embeddedTypeExpr goast.Expr
-				if ident, ok := field.Type.(*goast.Ident); ok {
-					embeddedTypeExpr = ident
-				} else if selExpr, ok := field.Type.(*goast.SelectorExpr); ok {
-					embeddedTypeExpr = selExpr
-				}
-				if embeddedTypeExpr != nil {
-					embeddedTypeName := w.exprToString(embeddedTypeExpr, pkg)
-					embeddedInfo := w.resolveTargetType(embeddedTypeName)
-					info.Fields = append(info.Fields, embeddedInfo.Fields...)
-				}
+				// Recursively resolve embedded field's type and add its fields
+				embeddedTypeInfo := w.buildTypeInfoFromTypeSpec(field.Type, pkg)
+				info.Fields = append(info.Fields, embeddedTypeInfo.Fields...)
 				continue
 			}
 
 			fieldName := field.Names[0].Name
 			if goast.IsExported(fieldName) {
-				info.Fields = append(info.Fields, types.StructField{
+				fieldInfo := types.StructField{
 					Name:     fieldName,
 					Type:     w.exprToString(field.Type, pkg),
 					Exported: true,
-				})
+				}
+				// Check if the field itself is a pointer
+				if _, ok := field.Type.(*goast.StarExpr); ok {
+					fieldInfo.IsPointer = true
+				}
+				info.Fields = append(info.Fields, fieldInfo)
 			}
 		}
 	} else {
 		// It's a named type but not a struct (e.g., `type Status string`), or an alias to another type.
-		// Check if it's an alias to a non-struct type.
-		// If typeSpec.Type is an Ident or SelectorExpr, it's an alias.
-		if ident, ok := typeSpec.Type.(*goast.Ident); ok {
-			underlyingTypeName := w.exprToString(ident, pkg) // Use pkg context for exprToString
-			if underlyingTypeName != typeSpec.Name.Name && !types.IsPrimitiveType(underlyingTypeName) {
+		// If expr is an Ident or SelectorExpr, it's an alias or a basic type.
+		if ident, ok := expr.(*goast.Ident); ok {
+			underlyingTypeName := w.exprToString(ident, pkg)
+			if underlyingTypeName != info.Name && !types.IsPrimitiveType(underlyingTypeName) {
+				// This info is for the alias itself, not the underlying type's structure
 				info.IsAlias = true
 				info.AliasFor = underlyingTypeName
+				// The Kind of the alias is the Kind of its underlying type
+				underlyingInfo := w.resolveTargetType(underlyingTypeName)
+				if underlyingInfo != nil {
+					info.Kind = underlyingInfo.Kind
+					info.IsPointer = underlyingInfo.IsPointer
+					info.IsSlice = underlyingInfo.IsSlice
+					info.IsMap = underlyingInfo.IsMap
+					info.ElemType = underlyingInfo.ElemType
+					info.KeyType = underlyingInfo.KeyType
+					info.ValueType = underlyingInfo.ValueType
+				}
+			} else {
+				info.Kind = types.TypeKindBasic
 			}
-		} else if selExpr, ok := typeSpec.Type.(*goast.SelectorExpr); ok {
-			underlyingTypeName := w.exprToString(selExpr, pkg) // Use pkg context for exprToString
-			if underlyingTypeName != typeSpec.Name.Name && !types.IsPrimitiveType(underlyingTypeName) {
+		} else if selExpr, ok := expr.(*goast.SelectorExpr); ok {
+			underlyingTypeName := w.exprToString(selExpr, pkg)
+			if underlyingTypeName != info.Name && !types.IsPrimitiveType(underlyingTypeName) {
 				info.IsAlias = true
 				info.AliasFor = underlyingTypeName
+				// The Kind of the alias is the Kind of its underlying type
+				underlyingInfo := w.resolveTargetType(underlyingTypeName)
+				if underlyingInfo != nil {
+					info.Kind = underlyingInfo.Kind
+					info.IsPointer = underlyingInfo.IsPointer
+					info.IsSlice = underlyingInfo.IsSlice
+					info.IsMap = underlyingInfo.IsMap
+					info.ElemType = underlyingInfo.ElemType
+					info.KeyType = underlyingInfo.KeyType
+					info.ValueType = underlyingInfo.ValueType
+				}
+			} else {
+				info.Kind = types.TypeKindBasic
 			}
+		} else {
+			info.Kind = types.TypeKindBasic // Default for other expressions
 		}
-		// Determine TypeKind for non-structs if needed
-		// For now, assume if not a struct, it's basic or complex based on underlyingTypeStr
 	}
 	return info
 }
@@ -950,12 +1035,12 @@ func (w *PackageWalker) IsStructOrStructAlias(typeSpec *goast.TypeSpec) bool {
 	}
 	if ident, ok := typeSpec.Type.(*goast.Ident); ok {
 		targetInfo := w.resolveTargetType(ident.Name)
-		return len(targetInfo.Fields) > 0
+		return targetInfo != nil && targetInfo.Kind == types.TypeKindStruct
 	}
 	if selector, ok := typeSpec.Type.(*goast.SelectorExpr); ok {
 		typeName := w.exprToString(selector, w.currentPkg)
 		targetInfo := w.resolveTargetType(typeName)
-		return len(targetInfo.Fields) > 0
+		return targetInfo != nil && targetInfo.Kind == types.TypeKindStruct
 	}
 	return false
 }
@@ -973,7 +1058,11 @@ func (w *PackageWalker) loadPackage(importPath string) (*packages.Package, error
 	if len(pkgs) == 0 {
 		return nil, fmt.Errorf("no package found for import path %s", importPath)
 	}
+	if packages.PrintErrors(pkgs) > 0 {
+		return nil, fmt.Errorf("errors while loading package %s", importPath)
+	}
 	w.loadedPkgs[importPath] = pkgs[0]
+	w.AddPackages(pkgs[0])
 	return pkgs[0], nil
 }
 
@@ -998,7 +1087,7 @@ func (w *PackageWalker) collectImports(files []*goast.File) {
 }
 
 // GetKnownTypes returns the cache of known types.
-func (w *PackageWalker) GetKnownTypes() map[string]types.TypeInfo {
+func (w *PackageWalker) GetKnownTypes() map[string]*types.TypeInfo { // Changed return type
 	return w.typeCache
 }
 
@@ -1021,10 +1110,13 @@ func (w *PackageWalker) AddConversion(cfg *types.ConversionConfig) {
 		// Swap source and target
 		reverseCfg.Source = cfg.Target.Clone()
 		reverseCfg.Target = cfg.Source.Clone()
-		// Set direction for the reverse config
+		// Swap prefixes/suffixes for the reverse conversion as well
+		reverseCfg.SourcePrefix = cfg.TargetPrefix
+		reverseCfg.SourceSuffix = cfg.TargetSuffix
+		reverseCfg.TargetPrefix = cfg.SourcePrefix
+		reverseCfg.TargetSuffix = cfg.SourceSuffix
 		reverseCfg.Direction = "to" // The reverse is always a simple "to"
-		
-		reverseKey := reverseCfg.Source.Type + "2" + reverseCfg.Target.Type
-		w.rules[reverseKey] = reverseCfg
+
+		w.AddConversion(reverseCfg)
 	}
 }

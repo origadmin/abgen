@@ -51,6 +51,7 @@ type StructField struct {
 	Name     string
 	Type     string
 	Exported bool
+	IsPointer bool // Added for remap and nil checks
 }
 
 // Import represents a single Go import statement.

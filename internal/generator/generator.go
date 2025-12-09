@@ -124,7 +124,7 @@ func (g *Generator) Generate() ([]byte, error) {
 	return format.Source(g.buf.Bytes())
 }
 
-func (g *Generator) findFieldCaseInsensitive(fields []types.StructField, name string) (types.StructField, bool) {
+func (g *Generator) findField(fields []types.StructField, name string) (types.StructField, bool) {
 	for _, field := range fields {
 		if strings.EqualFold(field.Name, name) {
 			return field, true
@@ -134,53 +134,41 @@ func (g *Generator) findFieldCaseInsensitive(fields []types.StructField, name st
 }
 
 // generateSingleConversionFunc generates a single struct-to-struct conversion function.
-func (g *Generator) generateSingleConversionFunc(cfg *types.ConversionConfig, fromType, toType types.TypeInfo) { // Signature changed
-	// Determine the actual type string for generated code, following the priority:
-	// 1. LocalAlias (if present)
-	// 2. Derived Alias (Prefix + Name + Suffix, if configured)
-	// 3. Package Alias + Type Name (default fallback)
+func (g *Generator) generateSingleConversionFunc(cfg *types.ConversionConfig, fromType, toType types.TypeInfo) {
+	// --- Determine final Source and Target Type Strings for generated code ---
+	// Follows 01_directives.md naming rules (1.2.1 Naming Rules: Source Type Name, Target Type Name)
 
-	// For Source Type
-	var finalFromTypeStr string
-	if fromType.LocalAlias != "" { // Priority 1: Local Alias from TypeInfo
-		finalFromTypeStr = fromType.LocalAlias
-	} else if cfg.SourcePrefix != "" || cfg.SourceSuffix != "" { // Priority 2: Derived Alias (from ConversionConfig)
-		derivedName := cfg.SourcePrefix + fromType.Name + cfg.SourceSuffix
-		if derivedName != fromType.Name { // If any prefix/suffix was applied
-			finalFromTypeStr = derivedName
-		} else { // Fallback if derived name is same as base name
-			fromAlias := g.imports.Add(fromType.ImportPath)
-			finalFromTypeStr = fromAlias + "." + fromType.Name
-		}
-	} else { // Priority 3: Package Alias + Type Name
-		fromAlias := g.imports.Add(fromType.ImportPath)
-		finalFromTypeStr = fromAlias + "." + fromType.Name
+	// Source Type Name
+	sourceTypeName := fromType.Name
+	if fromType.LocalAlias != "" {
+		sourceTypeName = fromType.LocalAlias
+	} else if cfg.SourcePrefix != "" || cfg.SourceSuffix != "" {
+		sourceTypeName = cfg.SourcePrefix + fromType.Name + cfg.SourceSuffix
+	} else if fromType.Name == toType.Name { // Default suffix rule
+		sourceTypeName += "Source"
+	}
+	finalFromTypeStr := sourceTypeName
+	if fromType.ImportPath != "" && fromType.ImportPath != "builtin" && fromType.ImportPath != g.walker.GetCurrentPackage().PkgPath {
+		finalFromTypeStr = g.imports.Add(fromType.ImportPath) + "." + sourceTypeName
 	}
 
-	// For Target Type
-	var finalToTypeStr string
-	if toType.LocalAlias != "" { // Priority 1: Local Alias from TypeInfo
-		finalToTypeStr = toType.LocalAlias
-	} else if cfg.TargetPrefix != "" || cfg.TargetSuffix != "" { // Priority 2: Derived Alias (from ConversionConfig)
-		derivedName := cfg.TargetPrefix + toType.Name + cfg.TargetSuffix
-		if derivedName != toType.Name { // If any prefix/suffix was applied
-			finalToTypeStr = derivedName
-		} else { // Fallback if derived name is same as base name
-			toAlias := g.imports.Add(toType.ImportPath)
-			finalToTypeStr = toAlias + "." + toType.Name
-		}
-	} else { // Priority 3: Package Alias + Type Name
-		toAlias := g.imports.Add(toType.ImportPath)
-		finalToTypeStr = toAlias + "." + toType.Name
+	// Target Type Name
+	targetTypeName := toType.Name
+	if toType.LocalAlias != "" {
+		targetTypeName = toType.LocalAlias
+	} else if cfg.TargetPrefix != "" || cfg.TargetSuffix != "" {
+		targetTypeName = cfg.TargetPrefix + toType.Name + cfg.TargetSuffix
+	} else if fromType.Name == toType.Name { // Default suffix rule
+		targetTypeName += "Target"
+	}
+	finalToTypeStr := targetTypeName
+	if toType.ImportPath != "" && toType.ImportPath != "builtin" && toType.ImportPath != g.walker.GetCurrentPackage().PkgPath {
+		finalToTypeStr = g.imports.Add(toType.ImportPath) + "." + targetTypeName
 	}
 
-	// Function Name Generation: This should also follow the alias pattern
-	// For function name, let's use the final display strings, but without package prefixes.
-	// This ensures consistency if the types themselves are local aliases or derived.
-	fromFuncNamePart := strings.TrimPrefix(finalFromTypeStr, strings.Split(finalFromTypeStr, ".")[0]+".")
-	toFuncNamePart := strings.TrimPrefix(finalToTypeStr, strings.Split(finalToTypeStr, ".")[0]+".")
-
-	funcName := "Convert" + fromFuncNamePart + "To" + toFuncNamePart
+	// --- Function Name Generation ---
+	// Follows 01_directives.md naming rules (1.2.1 Naming Rules: Struct Conversion Function)
+	funcName := "Convert" + sourceTypeName + "To" + targetTypeName
 
 	g.buf.WriteString(fmt.Sprintf("// %s converts a *%s to a *%s.\n", funcName, finalFromTypeStr, finalToTypeStr))
 	g.buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, finalFromTypeStr, finalToTypeStr))
@@ -189,54 +177,95 @@ func (g *Generator) generateSingleConversionFunc(cfg *types.ConversionConfig, fr
 	g.buf.WriteString("\t}\n")
 	g.buf.WriteString(fmt.Sprintf("\tto := &%s{}\n\n", finalToTypeStr))
 
-	// Create a map for target fields for case-insensitive lookup
-	targetFieldMap := make(map[string]types.StructField)
-	for _, f := range toType.Fields {
-		targetFieldMap[strings.ToLower(f.Name)] = f
-	}
-
 	for _, sourceField := range fromType.Fields {
-		sourceFieldFQN := fromType.ImportPath + "." + fromType.Name + "#" + sourceField.Name
+		ruleKeyPrefix := fromType.ImportPath + "." + fromType.Name
+		if fromType.LocalAlias != "" {
+			ruleKeyPrefix = fromType.LocalAlias
+		}
+		sourceFieldFQN := ruleKeyPrefix + "#" + sourceField.Name
 
-		// Check if field is ignored by global/package rules, then by specific conversion rules
+		// 1. Check for ignores (Priority 3 in 01_directives.md)
 		if _, ignored := cfg.IgnoreFields[sourceFieldFQN]; ignored {
-			continue
-		}
-        if _, ignored := cfg.IgnoreTypes[fromType.ImportPath+"."+fromType.Name]; ignored { // Check type-level ignore from cfg
-            continue
-        }
-
-
-		var finalTargetFieldName string
-		var matchedTargetField types.StructField
-		var targetFieldFound bool
-
-		if remapName, ok := cfg.RemapFields[sourceFieldFQN]; ok {
-			// Explicit remap takes precedence
-			finalTargetFieldName = remapName
-			matchedTargetField, targetFieldFound = g.findFieldCaseInsensitive(toType.Fields, finalTargetFieldName)
-		} else {
-			// Automatic case-insensitive matching
-			matchedTargetField, targetFieldFound = g.findFieldCaseInsensitive(toType.Fields, sourceField.Name)
-			if targetFieldFound {
-				finalTargetFieldName = matchedTargetField.Name // Use the actual casing from the target struct
-			}
-		}
-
-		if !targetFieldFound {
+			g.buf.WriteString(fmt.Sprintf("\t// Ignored field: %s\n", sourceField.Name))
 			continue
 		}
 
-		// A simple and effective compatibility check for now.
-		sourceTypeClean := strings.TrimPrefix(sourceField.Type, "builtin.")
-		targetTypeClean := strings.TrimPrefix(matchedTargetField.Type, "builtin.")
-		if sourceTypeClean == targetTypeClean {
-			g.buf.WriteString(fmt.Sprintf("\tto.%s = from.%s\n", finalTargetFieldName, sourceField.Name))
+		// 2. Check for remaps (Priority 2 in 01_directives.md)
+		if targetPath, ok := cfg.RemapFields[sourceFieldFQN]; ok {
+			g.buf.WriteString(fmt.Sprintf("\t// Remap: %s -> %s\n", sourceField.Name, targetPath))
+			g.handleFieldAssignment(sourceField, targetPath, &toType)
+			continue
+		}
+
+		// 3. Default: case-insensitive name matching
+		if targetField, ok := g.findField(toType.Fields, sourceField.Name); ok {
+			g.handleFieldAssignment(sourceField, targetField.Name, &toType)
 		}
 	}
 
 	g.buf.WriteString("\n\treturn to\n")
 	g.buf.WriteString("}\n")
+}
+
+func (g *Generator) handleFieldAssignment(sourceField types.StructField, targetPath string, toType *types.TypeInfo) {
+	targetPathParts := strings.Split(targetPath, ".")
+
+	currentPath := "to"
+	currentTypeInfo := toType
+
+	// Handle nil checks for nested structs
+	for _, part := range targetPathParts[:len(targetPathParts)-1] {
+		field, ok := g.findField(currentTypeInfo.Fields, part)
+		if !ok {
+			g.buf.WriteString(fmt.Sprintf("\t// WARNING: Intermediate field '%s' in remap path not found in %s.\n", part, currentTypeInfo.Name))
+			return // Cannot proceed
+		}
+
+		fieldTypeInfo, err := g.walker.Resolve(field.Type)
+		if err != nil {
+			g.buf.WriteString(fmt.Sprintf("\t// WARNING: Could not resolve type for intermediate field '%s'.\n", field.Name))
+			return
+		}
+
+		if fieldTypeInfo.IsPointer {
+			g.buf.WriteString(fmt.Sprintf("\tif %s.%s == nil {\n", currentPath, field.Name))
+			// Get type name without pointer for initialization
+			// Example: *types.Edges -> types.Edges
+			initType := strings.TrimPrefix(fieldTypeInfo.Name, "*")
+			// Need to ensure the package alias is used if it's an external type
+			if fieldTypeInfo.ImportPath != "" && fieldTypeInfo.ImportPath != "builtin" && fieldTypeInfo.ImportPath != g.walker.GetCurrentPackage().PkgPath {
+				initType = g.imports.Add(fieldTypeInfo.ImportPath) + "." + initType
+			}
+			g.buf.WriteString(fmt.Sprintf("\t\t%s.%s = &%s{}\n", currentPath, field.Name, initType))
+			g.buf.WriteString("\t}\n")
+		}
+		currentPath += "." + field.Name
+
+		// Resolve the type of the intermediate field for the next iteration
+		currentTypeInfo = fieldTypeInfo
+	}
+
+	finalTargetPath := "to." + targetPath // This should be 'currentPath' if intermediate path is built
+	finalTargetFieldName := targetPathParts[len(targetPathParts)-1]
+
+	// Find the final target field to get its type.
+	targetField, ok := g.findField(currentTypeInfo.Fields, finalTargetFieldName)
+	if !ok {
+		g.buf.WriteString(fmt.Sprintf("\t// WARNING: Final target field '%s' for remap path not found in %s.\n", finalTargetFieldName, currentTypeInfo.Name))
+		return
+	}
+
+	sourceTypeClean := strings.TrimPrefix(sourceField.Type, "builtin.")
+	targetTypeClean := strings.TrimPrefix(targetField.Type, "builtin.")
+
+	if sourceTypeClean == targetTypeClean {
+		g.buf.WriteString(fmt.Sprintf("\t%s = from.%s\n", finalTargetPath, sourceField.Name))
+	} else {
+		// This is where function promotion will happen. For now, call a placeholder.
+		conversionFuncName := "Convert" + strings.Title(sourceField.Name) + "To" + strings.Title(targetField.Name)
+		g.buf.WriteString(fmt.Sprintf("\t%s = %s(from.%s)\n", finalTargetPath, conversionFuncName, sourceField.Name))
+		// TODO: Register this conversion function to be generated.
+	}
 }
 
 func (g *Generator) generateConversionFunctions() {
@@ -267,8 +296,8 @@ func (g *Generator) generateConversionFunctions() {
 		}
 
 		// Generate forward conversion
-		g.generateSingleConversionFunc(cfg, sourceTypeInfo, targetTypeInfo) // Pass cfg directly
-		g.buf.WriteString("\n") // Add a newline between functions
+		g.generateSingleConversionFunc(cfg, *sourceTypeInfo, *targetTypeInfo) // Pass cfg directly // Dereference
+		g.buf.WriteString("\n")                                               // Add a newline between functions
 
 		// Generate reverse conversion if direction is "both"
 		if cfg.Direction == "both" {
@@ -285,9 +314,9 @@ func (g *Generator) generateConversionFunctions() {
 			reverseCfg.Direction = "to" // The reverse is always a simple "to"
 
 			g.generateSingleConversionFunc(
-				reverseCfg,     // Pass the reversed config
-				targetTypeInfo, // Pass target as new source
-				sourceTypeInfo, // Pass source as new target
+				reverseCfg,      // Pass the reversed config
+				*targetTypeInfo, // Pass target as new source // Dereference
+				*sourceTypeInfo, // Pass source as new target // Dereference
 			)
 			g.buf.WriteString("\n") // Add a newline between functions
 		}

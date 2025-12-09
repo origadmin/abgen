@@ -102,6 +102,15 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			},
 		},
 		{
+			name:          "example_trilateral", // Complete trilateral conversion example
+			directivePath: "../../testdata/directives/example_trilateral",
+			goldenFileName: "example_trilateral.golden",
+			dependencies:  []string{
+				"github.com/origadmin/abgen/testdata/fixture/ent",
+				"github.com/origadmin/abgen/testdata/fixture/types",
+			},
+		},
+		{
 			name:          "bug_fix_001", // This is a specific bug fix test case
 			directivePath: "../../testdata/directives/bug_fix_001",
 			goldenFileName: "bug_fix_001.golden",

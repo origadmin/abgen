@@ -11,9 +11,9 @@ import (
 
 // TypeResolver defines the interface for resolving type information.
 type TypeResolver interface {
-	Resolve(typeName string) (types.TypeInfo, error)
+	Resolve(typeName string) (*types.TypeInfo, error) // Changed return type
 	UpdateFromWalker(walker *PackageWalker) error
-	GetKnownTypes() map[string]types.TypeInfo
+	GetKnownTypes() map[string]*types.TypeInfo // Changed return type
 	AddPackages(pkgs ...*packages.Package)
 	GetLocalTypeNameToFQN() map[string]string
 }
@@ -22,7 +22,7 @@ type TypeResolver interface {
 type TypeResolverImpl struct {
 	Pkgs      []*packages.Package
 	walker    *PackageWalker
-	typeCache map[string]types.TypeInfo
+	// typeCache map[string]types.TypeInfo // This field is now redundant as we delegate to walker
 	imports   map[string]string
 }
 
@@ -45,18 +45,18 @@ func (r *TypeResolverImpl) AddPackages(newPkgs ...*packages.Package) {
 func NewResolver(pkgs []*packages.Package) TypeResolver {
 	return &TypeResolverImpl{
 		Pkgs:      pkgs,
-		typeCache: make(map[string]types.TypeInfo),
+		// typeCache: make(map[string]types.TypeInfo), // Removed
 		imports:   make(map[string]string),
 	}
 }
 
 // Resolve resolves a type name to its TypeInfo.
-func (r *TypeResolverImpl) Resolve(typeName string) (types.TypeInfo, error) {
+func (r *TypeResolverImpl) Resolve(typeName string) (*types.TypeInfo, error) { // Changed return type
 	if r.walker == nil {
-		return types.TypeInfo{}, fmt.Errorf("resolver has not been updated with a walker")
+		return nil, fmt.Errorf("resolver has not been updated with a walker") // Return nil pointer
 	}
 	info, err := r.walker.Resolve(typeName)
-	if err == nil {
+	if err == nil && info != nil { // Check for nil info
 		slog.Debug("Resolve: 成功解析类型", "输入", typeName, "输出名", info.Name, "包名", info.PkgName)
 	}
 	return info, err
@@ -71,9 +71,9 @@ func (r *TypeResolverImpl) UpdateFromWalker(walker *PackageWalker) error {
 }
 
 // GetKnownTypes returns the cache of known types.
-func (r *TypeResolverImpl) GetKnownTypes() map[string]types.TypeInfo {
+func (r *TypeResolverImpl) GetKnownTypes() map[string]*types.TypeInfo { // Changed return type
 	if r.walker == nil {
-		return make(map[string]types.TypeInfo)
+		return make(map[string]*types.TypeInfo) // Return map of pointers
 	}
 	return r.walker.GetTypeCache()
 }
