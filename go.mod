@@ -1,6 +1,6 @@
 module github.com/origadmin/abgen
 
-go 1.24.0
+go 1.25.5
 
 require (
 	github.com/caarlos0/go-version v0.2.2
