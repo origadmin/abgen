@@ -400,11 +400,15 @@ func (g *Generator) handleFieldAssignment(sourceField types.StructField, sourceI
 		assignmentStr = "&" + assignmentStr
 	}
 
-	g.buf.WriteString(fmt.Sprintf("\tto.%s = %s\n", targetFieldName, assignmentStr))
+	// Use targetField.Name to ensure correct capitalization for the target field
+	g.buf.WriteString(fmt.Sprintf("\tto.%s = %s\n", targetField.Name, assignmentStr))
 }
 
 func (g *Generator) getConversionFunctionName(source, target *types.TypeInfo) string {
-	if source.ImportPath == target.ImportPath && source.Name == target.Name {
+	// If types are identical (including pointer status), it's a direct assignment.
+	if source.ImportPath == target.ImportPath &&
+		source.Name == target.Name &&
+		source.IsPointer == target.IsPointer {
 		return "" // Direct assignment
 	}
 
