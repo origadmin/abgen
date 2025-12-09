@@ -201,28 +201,6 @@ func (g *Generator) generateTypeAliases() {
 				aliasesToGenerate[fqn] = fmt.Sprintf("\t%s = %s.%s\n", aliasName, pkgAlias, info.Name)
 				g.generatedAliases[fqn] = aliasName
 			}
-
-			// Also generate slice aliases for struct types
-			if len(info.Fields) > 0 && !g.isSliceType(info) {
-				// The base name for pluralization is the original type name from info
-				baseNameForPluralization := info.Name // e.g., "Resource" for types.Resource
-
-				// If suffix exists, use Name + "s" + Suffix
-				sliceAliasName := prefix + baseNameForPluralization + "s" + suffix
-
-				// Check if this slice alias name conflicts with a locally defined alias
-				if _, exists := g.localTypeAliases[sliceAliasName]; exists {
-					// If a local alias with the same name exists, skip generating this slice alias
-					continue
-				}
-
-				sliceFqn := info.ImportPath + "." + info.Name + "Slice"
-				sliceAliasDef := fmt.Sprintf("\t%s = []*%s  // Array/slice alias\n", sliceAliasName, aliasName)
-				if _, exists := aliasesToGenerate[sliceFqn]; !exists {
-					aliasesToGenerate[sliceFqn] = sliceAliasDef
-					g.generatedAliases[sliceFqn] = sliceAliasName
-				}
-			}
 		}
 	}
 
@@ -254,19 +232,51 @@ func (g *Generator) generateAllConversionFunctions() {
 	}
 }
 
-// isSliceType checks if a TypeInfo represents a slice type.
+// isSliceType checks if a TypeInfo represents a slice type, including type aliases that are slices.
 func (g *Generator) isSliceType(info *types.TypeInfo) bool {
-	return strings.HasPrefix(info.Name, "[]")
+	if info == nil {
+		return false
+	}
+	// Direct check for slice type (e.g., "[]int", "[]*MyStruct")
+	if strings.HasPrefix(info.Name, "[]") {
+		return true
+	}
+
+	// If it's a type alias, resolve its underlying type and check if it's a slice.
+	// We need to resolve the *actual* type definition of 'info.Name'
+	// For example, if info.Name is "Resources" (alias for []*Resource),
+	// we need to resolve "Resources" to get its underlying type.
+	resolvedUnderlyingType, err := g.walker.Resolve(info.Name)
+	if err == nil && resolvedUnderlyingType != nil {
+		// Check if the resolved underlying type's name starts with "[]"
+		return strings.HasPrefix(resolvedUnderlyingType.Name, "[]")
+	}
+
+	return false
 }
 
 // getSliceElementType extracts the element type string and TypeInfo from a slice TypeInfo.
 func (g *Generator) getSliceElementType(info *types.TypeInfo) (string, *types.TypeInfo) {
-	if !g.isSliceType(info) {
+	if !g.isSliceType(info) { // This will now correctly identify aliases as slices
 		return "", nil
 	}
-	elemTypeStr := strings.TrimPrefix(info.Name, "[]")
-	elemInfo, _ := g.walker.Resolve(elemTypeStr)
-	return elemTypeStr, elemInfo
+
+	// If it's a direct slice type (e.g., "[]int")
+	if strings.HasPrefix(info.Name, "[]") {
+		elemTypeStr := strings.TrimPrefix(info.Name, "[]")
+		elemInfo, _ := g.walker.Resolve(elemTypeStr)
+		return elemTypeStr, elemInfo
+	}
+
+	// If it's a type alias that resolves to a slice
+	resolvedUnderlyingType, err := g.walker.Resolve(info.Name)
+	if err == nil && resolvedUnderlyingType != nil && strings.HasPrefix(resolvedUnderlyingType.Name, "[]") {
+		elemTypeStr := strings.TrimPrefix(resolvedUnderlyingType.Name, "[]")
+		elemInfo, _ := g.walker.Resolve(elemTypeStr)
+		return elemTypeStr, elemInfo
+	}
+
+	return "", nil
 }
 
 func (g *Generator) generateSingleConversionFunc(source, target *types.TypeInfo) {
@@ -334,17 +344,17 @@ func (g *Generator) generateStructToStructFunc(source, target *types.TypeInfo) {
 	// Determine if we need pointers for function signature
 	sourceParam := "*" + sourceTypeStr
 	targetReturn := "*" + targetTypeStr
-	if g.isSliceType(source) {
+	if g.isSliceType(source) { // This check should now correctly identify slice aliases
 		sourceParam = sourceTypeStr
 	}
-	if g.isSliceType(target) {
+	if g.isSliceType(target) { // This check should now correctly identify slice aliases
 		targetReturn = targetTypeStr
 	}
 
 	g.buf.WriteString(fmt.Sprintf("// %s converts a %s to a %s.\n", funcName, sourceParam, targetReturn))
 	g.buf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceParam, targetReturn))
 
-	if g.isSliceType(source) {
+	if g.isSliceType(source) { // This check should now correctly identify slice aliases
 		g.buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n")
 		g.buf.WriteString(fmt.Sprintf("\tto := make(%s, len(from))\n", targetReturn))
 		g.buf.WriteString("\tfor i, item := range from {\n")
@@ -389,11 +399,17 @@ func (g *Generator) handleFieldAssignment(sourceField types.StructField, sourceI
 	// Determine the assignment string
 	var assignmentStr string
 	if convFuncName == "" {
-		// Direct assignment, no function call, no extra parentheses
+		// Case 1: Types are identical (including underlying types and pointer status).
+		// This is the only case where convFuncName should be empty.
 		assignmentStr = fmt.Sprintf("%sfrom.%s", sourceDeref, sourceField.Name)
 	} else {
-		// Function call, wrap in parentheses if needed (e.g., for pointer conversion)
-		assignmentStr = fmt.Sprintf("%s(%sfrom.%s)", convFuncName, sourceDeref, sourceField.Name)
+		// Case 2: Need a conversion. Check if it's a direct cast.
+		if g.canDirectCast(sourceFieldType, targetFieldType) {
+			assignmentStr = fmt.Sprintf("%s(%sfrom.%s)", targetFieldType.Name, sourceDeref, sourceField.Name)
+		} else {
+			// Case 3: Need a full conversion function call.
+			assignmentStr = fmt.Sprintf("%s(%sfrom.%s)", convFuncName, sourceDeref, sourceField.Name)
+		}
 	}
 
 	if targetField.IsPointer && !isBasicType(targetFieldType) && !strings.HasPrefix(g.getConversionFunctionSignature(sourceFieldType, targetFieldType), "*") {
@@ -404,11 +420,65 @@ func (g *Generator) handleFieldAssignment(sourceField types.StructField, sourceI
 	g.buf.WriteString(fmt.Sprintf("\tto.%s = %s\n", targetField.Name, assignmentStr))
 }
 
+// getUnderlyingTypeInfo resolves the ultimate underlying type of a TypeInfo, handling aliases.
+func (g *Generator) getUnderlyingTypeInfo(info *types.TypeInfo) *types.TypeInfo {
+	if info == nil {
+		return nil
+	}
+
+	currentInfo := info
+	// Use a map to detect cycles and prevent infinite recursion.
+	visited := make(map[string]bool)
+
+	for {
+		if currentInfo == nil {
+			return nil
+		}
+
+		// If we've already visited this type name in the current resolution chain, it's a cycle.
+		// Return the currentInfo to break the loop.
+		if visited[currentInfo.Name] {
+			return currentInfo
+		}
+		visited[currentInfo.Name] = true
+
+		// If it's a basic type, it's its own underlying type.
+		if isBasicType(currentInfo) {
+			return currentInfo
+		}
+
+		// Try to resolve the current type's name.
+		// If currentInfo.Name is "Gender", we want to resolve what "Gender" *is*.
+		// If "Gender" is "type Gender string", then resolvedInfo.Name should be "string".
+		resolvedInfo, err := g.walker.Resolve(currentInfo.Name)
+
+		// If resolution fails, or we get back the same info (meaning it's not an alias, or a self-referencing alias),
+		// then currentInfo is the ultimate underlying type we can find.
+		if err != nil || resolvedInfo == nil || resolvedInfo.Name == currentInfo.Name {
+			return currentInfo
+		}
+
+		// Move to the resolved info for the next iteration.
+		currentInfo = resolvedInfo
+	}
+}
+
+// canDirectCast checks if a direct type cast is possible between two non-pointer basic number types.
+func (g *Generator) canDirectCast(source, target *types.TypeInfo) bool {
+	return !source.IsPointer && !target.IsPointer &&
+		isBasicType(source) && isBasicType(target) &&
+		types.IsNumberType(source.Name) && types.IsNumberType(target.Name)
+}
+
 func (g *Generator) getConversionFunctionName(source, target *types.TypeInfo) string {
-	// If types are identical (including pointer status), it's a direct assignment.
-	if source.ImportPath == target.ImportPath &&
-		source.Name == target.Name &&
-		source.IsPointer == target.IsPointer {
+	// Resolve underlying types for comparison
+	underlyingSource := g.getUnderlyingTypeInfo(source)
+	underlyingTarget := g.getUnderlyingTypeInfo(target)
+
+	// If underlying types are identical (including pointer status), it's a direct assignment.
+	if underlyingSource.ImportPath == underlyingTarget.ImportPath &&
+		underlyingSource.Name == underlyingTarget.Name &&
+		underlyingSource.IsPointer == underlyingTarget.IsPointer {
 		return "" // Direct assignment
 	}
 
@@ -452,6 +522,12 @@ func (g *Generator) canAutoConvert(source, target *types.TypeInfo) bool {
 	if s == "string" && types.IsNumberType(t) {
 		return true
 	}
+	// RE-ADD: Number to number conversion (direct cast) for standalone functions.
+	if !source.IsPointer && !target.IsPointer &&
+		isBasicType(source) && isBasicType(target) &&
+		types.IsNumberType(source.Name) && types.IsNumberType(target.Name) {
+		return true
+	}
 	return false
 }
 
@@ -477,6 +553,11 @@ func (g *Generator) generateAutoConversionFunc(source, target *types.TypeInfo) {
 	case types.IsNumberType(source.Name) && target.Name == "string":
 		g.imports.Add("strconv")
 		g.buf.WriteString("\treturn strconv.Itoa(int(from))\n")
+	// RE-ADD: Number to number conversion
+	case !source.IsPointer && !target.IsPointer &&
+		isBasicType(source) && isBasicType(target) &&
+		types.IsNumberType(source.Name) && types.IsNumberType(target.Name):
+		g.buf.WriteString(fmt.Sprintf("\treturn %s(from)\n", target.Name)) // Direct cast
 	}
 
 	g.buf.WriteString("}\n\n")
@@ -527,7 +608,7 @@ func (g *Generator) generateCustomStubs() {
 		targetTypeStr := g.getTypeName(task.Target)
 
 		g.customBuf.WriteString(fmt.Sprintf("// %s converts %s to %s.\n", funcName, sourceTypeStr, targetTypeStr))
-		g.customBuf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceTypeStr, targetTypeStr))
+		g.customBuf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceTypeStr, targetTypeStr)) // Corrected: write to g.customBuf
 		g.customBuf.WriteString(fmt.Sprintf("\t// TODO: Implement this custom conversion\n"))
 		g.customBuf.WriteString(fmt.Sprintf("\tpanic(\"custom conversion not implemented: %s\")\n", funcName))
 		g.customBuf.WriteString("}\n\n")
@@ -646,18 +727,18 @@ func (g *Generator) findCustomRule(sourceType, targetType *types.TypeInfo) strin
 	return ""
 }
 
-func (g *Generator) isExternalType(info *types.TypeInfo) bool {
-	return info.ImportPath != "" && info.ImportPath != "builtin" && info.ImportPath != g.config.ContextPackagePath
+func (g *Generator) isExternalType(typeInfo *types.TypeInfo) bool {
+	return typeInfo.ImportPath != "" && typeInfo.ImportPath != "builtin" && typeInfo.ImportPath != g.config.ContextPackagePath
 }
 
-func isBasicType(info *types.TypeInfo) bool {
-	if info == nil {
+func isBasicType(typeInfo *types.TypeInfo) bool {
+	if typeInfo == nil {
 		return false
 	}
-	if types.IsPrimitiveType(info.Name) && info.ImportPath == "builtin" {
+	if types.IsPrimitiveType(typeInfo.Name) && typeInfo.ImportPath == "builtin" {
 		return true
 	}
-	if info.ImportPath == "time" && info.Name == "Time" {
+	if typeInfo.ImportPath == "time" && typeInfo.Name == "Time" {
 		return true
 	}
 	return false
