@@ -23,9 +23,9 @@ type PackageWalker struct {
 	currentPkg         *packages.Package
 	TypeCache          map[string]*types.TypeInfo
 	loadedPkgs         map[string]*packages.Package
-	packageMode        packages.LoadMode
+	packageMode        packages.LoadMode // Corrected: Type should be packages.LoadMode
 	allKnownPkgs       []*packages.Package
-	localTypeNameToFQN map[string]string
+	localTypeNameToFQN map[string]string // Maps local alias name to its FQN (e.g., "Resource" -> "github.com/origadmin/abgen/testdata/fixture/ent.Resource")
 }
 
 // NewPackageWalker creates a new PackageWalker.
@@ -40,7 +40,7 @@ func NewPackageWalker() *PackageWalker {
 		},
 		TypeCache:          make(map[string]*types.TypeInfo),
 		loadedPkgs:         make(map[string]*packages.Package),
-		packageMode:        packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
+		packageMode:        packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps, // Corrected: Value assigned here
 		localTypeNameToFQN: make(map[string]string),
 	}
 }
@@ -253,8 +253,27 @@ func (w *PackageWalker) processPackagePairs() error {
 				Source: &types.TypeEndpoint{Type: sourcePkg.PkgPath + "." + typeName},
 				Target: &types.TypeEndpoint{Type: targetPkg.PkgPath + "." + typeName},
 			}
+
+			// Check if source type has a local alias in directives.go
+			sourceFQN := sourcePkg.PkgPath + "." + typeName
+			for aliasName, fqn := range w.localTypeNameToFQN {
+				if fqn == sourceFQN {
+					pair.Source.AliasType = aliasName
+					break
+				}
+			}
+
+			// Check if target type has a local alias in directives.go
+			targetFQN := targetPkg.PkgPath + "." + typeName
+			for aliasName, fqn := range w.localTypeNameToFQN {
+				if fqn == targetFQN {
+					pair.Target.AliasType = aliasName
+					break
+				}
+			}
+
 			w.config.Pairs = append(w.config.Pairs, pair)
-			slog.Debug("Added paired type", "source", pair.Source.Type, "target", pair.Target.Type)
+			slog.Debug("Added paired type", "source", pair.Source.Type, "sourceAlias", pair.Source.AliasType, "target", pair.Target.Type, "targetAlias", pair.Target.AliasType)
 		}
 	}
 	return nil

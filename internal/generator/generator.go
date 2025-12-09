@@ -32,12 +32,14 @@ type Generator struct {
 	tasks            []conversionTask
 	generatedTasks   map[string]bool
 	customTasks      map[string]conversionTask // Tasks for custom.gen.go
+	localTypeAliases map[string]string // Added: Map of local type alias names to their FQNs
 }
 
 // NewGenerator creates a new Generator instance.
 func NewGenerator(walker *ast.PackageWalker) *Generator {
 	return &Generator{
-		walker: walker,
+		walker:           walker,
+		localTypeAliases: walker.GetLocalTypeNameToFQN(), // Added: Initialize localTypeAliases
 	}
 }
 
@@ -93,6 +95,14 @@ func (g *Generator) addInitialTasks() {
 		sourceInfo, _ := g.walker.Resolve(pair.Source.Type)
 		targetInfo, _ := g.walker.Resolve(pair.Target.Type)
 		if sourceInfo != nil && targetInfo != nil {
+			// Assign LocalAlias if available from the TypeEndpoint
+			if pair.Source.AliasType != "" {
+				sourceInfo.LocalAlias = pair.Source.AliasType
+			}
+			if pair.Target.AliasType != "" {
+				targetInfo.LocalAlias = pair.Target.AliasType
+			}
+
 			g.addTask(sourceInfo, targetInfo)
 			if g.config.Direction == "both" {
 				g.addTask(targetInfo, sourceInfo)
@@ -178,6 +188,13 @@ func (g *Generator) generateTypeAliases() {
 			prefix, suffix := g.getPrefixSuffix(info)
 			aliasName := g.getFuncNamePart(info, prefix, suffix)
 			fqn := info.ImportPath + "." + info.Name
+
+			// Check if this alias is already defined in the directives.go file
+			if existingFQN, ok := g.localTypeAliases[aliasName]; ok && existingFQN == fqn {
+				// If the alias name and its FQN match a locally defined alias, skip generating it
+				continue
+			}
+
 			if _, exists := aliasesToGenerate[fqn]; !exists {
 				pkgAlias := g.imports.Add(info.ImportPath)
 				aliasesToGenerate[fqn] = fmt.Sprintf("\t%s = %s.%s\n", aliasName, pkgAlias, info.Name)
@@ -259,7 +276,7 @@ func (g *Generator) handleFieldAssignment(sourceField types.StructField, sourceI
 		targetFieldName = remap
 	}
 	targetField, ok := findField(targetInfo.Fields, targetFieldName)
-	if !ok {
+	if !ok { // Corrected: if target field is NOT found, then return
 		return
 	}
 
@@ -514,7 +531,7 @@ func (im *ImportManager) Add(importPath string) string {
 				alias = originalAlias + strconv.Itoa(counter)
 				counter++
 				break
-			}
+						}
 		}
 		if !isConflict {
 			break

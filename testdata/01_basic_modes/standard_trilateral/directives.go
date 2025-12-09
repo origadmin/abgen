@@ -1,8 +1,8 @@
 package directives
 
 import (
-	_ "github.com/origadmin/abgen/testdata/fixture/ent"
-	_ "github.com/origadmin/abgen/testdata/fixture/types"
+	"github.com/origadmin/abgen/testdata/fixture/ent"
+	"github.com/origadmin/abgen/testdata/fixture/types"
 )
 
 //go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/ent,alias=ent
@@ -19,3 +19,7 @@ import (
 // Expected: classic three-way conversion pattern:
 // Source Package (ent) → Current Package (directives) → Target Package (types)
 // Following the abgen architecture of source → intermediate → target
+type (
+	Resource           = ent.Resource
+	ResourceTrilateral = types.Resource
+)
