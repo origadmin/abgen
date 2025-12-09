@@ -8,7 +8,6 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	"github.com/origadmin/abgen/internal/ast"
-
 )
 
 // loadTestPackages is a helper function from the ast package's tests.
@@ -48,41 +47,41 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 	}
 
 	testCases := []struct {
-		name          string
-		directivePath string
+		name           string
+		directivePath  string
 		goldenFileName string
-		dependencies  []string
-		priority      string // P0, P1, P2 for prioritization
-		category      string // Test category for organization
+		dependencies   []string
+		priority       string // P0, P1, P2 for prioritization
+		category       string // Test category for organization
 	}{
 		// === 01_basic_modes: Basic Conversion Patterns ===
 		{
-			name:          "simple_bilateral",
-			directivePath: "../../testdata/directives/01_basic_modes/simple_bilateral",
-			goldenFileName: "simple_bilateral.golden",
-			dependencies:  baseDependencies,
-			priority:      "P0",
-			category:      "basic_modes",
+			name:           "simple_bilateral",
+			directivePath:  "../../testdata/01_basic_modes/simple_bilateral",
+			goldenFileName: "expected.golden",
+			dependencies:   baseDependencies,
+			priority:       "P0",
+			category:       "basic_modes",
 		},
 		{
-			name:          "standard_trilateral",
-			directivePath: "../../testdata/directives/01_basic_modes/standard_trilateral",
-			goldenFileName: "standard_trilateral.golden",
-			dependencies:  baseDependencies,
-			priority:      "P0",
-			category:      "basic_modes",
+			name:           "standard_trilateral",
+			directivePath:  "../../testdata/01_basic_modes/standard_trilateral",
+			goldenFileName: "expected.golden",
+			dependencies:   baseDependencies,
+			priority:       "P0",
+			category:       "basic_modes",
 		},
 		// Note: multi_source test is skipped - definition does not match current implementation requirements
 		// Note: multi_target test is skipped - golden file not available and definition needs refinement
 
 		// === 04_type_aliases: Type Alias Handling ===
 		{
-			name:          "auto_generate_aliases",
-			directivePath: "../../testdata/directives/04_type_aliases/auto_generate_aliases",
-			goldenFileName: "auto_generate_aliases.golden",
-			dependencies:  baseDependencies,
-			priority:      "P0",
-			category:      "type_aliases",
+			name:           "auto_generate_aliases",
+			directivePath:  "../../testdata/04_type_aliases/auto_generate_aliases",
+			goldenFileName: "expected.golden",
+			dependencies:   baseDependencies,
+			priority:       "P0",
+			category:       "type_aliases",
 		},
 
 		// === 05_field_mapping: Field Mapping ===
@@ -101,23 +100,23 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 
 		// === Legacy and Special Cases ===
 		{
-			name:          "bug_fix_001", // Specific bug fix test case
-			directivePath: "../../testdata/directives/bug_fix_001",
-			goldenFileName: "bug_fix_001.golden",
-			dependencies:  baseDependencies,
-			priority:      "P0",
-			category:      "legacy",
+			name:           "bug_fix_001", // Specific bug fix test case
+			directivePath:  "../../testdata/bug_fix_001",
+			goldenFileName: "expected.golden",
+			dependencies:   baseDependencies,
+			priority:       "P0",
+			category:       "legacy",
 		},
 	}
 
 	// Sort test cases by priority and category for consistent execution order
 	sortedTestCases := make([]struct {
-		name          string
-		directivePath string
+		name           string
+		directivePath  string
 		goldenFileName string
-		dependencies  []string
-		priority      string
-		category      string
+		dependencies   []string
+		priority       string
+		category       string
 	}, len(testCases))
 	copy(sortedTestCases, testCases)
 
@@ -156,7 +155,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			}
 
 			// Step 3: Snapshot testing - compare against a "golden" file.
-			goldenFile := filepath.Join("../../testdata/golden", tc.goldenFileName)
+			goldenFile := filepath.Join(tc.directivePath, tc.goldenFileName)
 			if os.Getenv("UPDATE_GOLDEN_FILES") != "" {
 				os.WriteFile(goldenFile, generatedCode, 0644)
 				t.Logf("Updated golden file: %s", goldenFile)

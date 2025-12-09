@@ -1,4 +1,4 @@
-package directives
+package simple_bilateral
 
 import (
 	_ "github.com/origadmin/abgen/testdata/fixture/ent"
