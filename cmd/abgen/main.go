@@ -25,17 +25,32 @@ var (
 	debug     = flag.Bool("debug", false, "Enable debug logging")
 	output    = flag.String("output", "", "Output file name for the main generated code. Defaults to <package_name>.gen.go.")
 	customOutput = flag.String("custom-output", "custom.gen.go", "Output file name for custom conversion stubs.")
+	logFile   = flag.String("log-file", "", "Path to a file where logs should be written. If empty, logs go to stderr.") // Added log-file flag
 )
 
 func main() {
 	flag.Parse()
 
-	logLevel := slog.LevelInfo
+	// Configure log output
+	var logWriter *os.File
+	if *logFile != "" {
+		var err error
+		logWriter, err = os.OpenFile(*logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			slog.Error("Failed to open log file", "file", *logFile, "error", err)
+			os.Exit(1)
+		}
+		defer logWriter.Close()
+	} else {
+		logWriter = os.Stderr
+	}
+
+	logLevel := slog.LevelWarn // Changed default log level to Warn
 	if *debug {
 		logLevel = slog.LevelDebug
 	}
 
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	slog.SetDefault(slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		Level: logLevel,
 	})))
 

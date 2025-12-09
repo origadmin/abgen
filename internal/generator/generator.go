@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"log/slog" // Added slog import
 	"path"
 	"sort" // Added sort import
 	"strconv"
@@ -84,7 +85,7 @@ func (g *Generator) CustomStubs() []byte {
 	formatted, err := format.Source(g.customBuf.Bytes())
 	if err != nil {
 		// Log the error but return unformatted bytes to allow inspection
-		fmt.Printf("Error formatting custom stubs: %v\n", err)
+		slog.Error("Error formatting custom stubs", "error", err) // Changed to slog.Error
 		return g.customBuf.Bytes()
 	}
 	return formatted
@@ -407,7 +408,7 @@ func (g *Generator) generateCustomStubs() {
 		g.customBuf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceTypeStr, targetTypeStr))
 		g.customBuf.WriteString(fmt.Sprintf("\t// TODO: Implement this custom conversion\n"))
 		g.customBuf.WriteString(fmt.Sprintf("\tpanic(\"custom conversion not implemented: %s\")\n", funcName))
-		g.customBuf.WriteString("}\n\n")
+		g.buf.WriteString("}\n\n")
 	}
 }
 
