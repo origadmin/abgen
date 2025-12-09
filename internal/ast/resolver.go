@@ -57,7 +57,7 @@ func (r *TypeResolverImpl) Resolve(typeName string) (*types.TypeInfo, error) { /
 	}
 	info, err := r.walker.Resolve(typeName)
 	if err == nil && info != nil { // Check for nil info
-		slog.Debug("Resolve: 成功解析类型", "输入", typeName, "输出名", info.Name, "包名", info.PkgName)
+		slog.Debug("Resolve: 成功解析类型", "输入", typeName, "输出名", info.Name, "包路径", info.ImportPath)
 	}
 	return info, err
 }
