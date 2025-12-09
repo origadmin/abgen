@@ -301,15 +301,18 @@ func (w *PackageWalker) Resolve(typeName string) (*types.TypeInfo, error) {
 	}
 
 	pkgPath, typeNameOnly := splitFQN(fqn)
+	fmt.Printf("DEBUG: Resolving type original=%s fqn=%s pkgPath=%s typeNameOnly=%s\n", typeName, fqn, pkgPath, typeNameOnly)
 
 	// Resolve package alias if the path part is an alias.
 	pkgPath = w.resolveAlias(pkgPath)
+	fmt.Printf("DEBUG: After resolveAlias pkgPath=%s\n", pkgPath)
 
 	if pkgPath == "" {
 		pkgPath = w.currentPkg.PkgPath
 	}
 
 	pkg := w.findPackage(pkgPath)
+	fmt.Printf("DEBUG: Found package %v for pkgPath %s\n", pkg != nil, pkgPath)
 	if pkg == nil {
 		var err error
 		pkg, err = w.loadPackage(pkgPath)
@@ -318,18 +321,24 @@ func (w *PackageWalker) Resolve(typeName string) (*types.TypeInfo, error) {
 		}
 	}
 
+	fmt.Printf("DEBUG: Package %s has %d files\n", pkg.PkgPath, len(pkg.Syntax))
 	for _, file := range pkg.Syntax {
+		fmt.Printf("DEBUG: Checking file %s\n", pkg.Fset.File(file.Pos()).Name())
 		for _, decl := range file.Decls {
 			if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
 				for _, spec := range genDecl.Specs {
-					if typeSpec, ok := spec.(*goast.TypeSpec); ok && typeSpec.Name.Name == typeNameOnly {
-						info := w.buildTypeInfo(typeSpec, pkg)
-						info.IsPointer = isPtr
-						if isLocalAlias {
-							info.LocalAlias = typeName
+					if typeSpec, ok := spec.(*goast.TypeSpec); ok {
+						fmt.Printf("DEBUG: Found type spec: %s\n", typeSpec.Name.Name)
+						if typeSpec.Name.Name == typeNameOnly {
+							fmt.Printf("DEBUG: Found matching type!\n")
+							info := w.buildTypeInfo(typeSpec, pkg)
+							info.IsPointer = isPtr
+							if isLocalAlias {
+								info.LocalAlias = typeName
+							}
+							w.TypeCache[typeName] = info
+							return info, nil
 						}
-						w.TypeCache[typeName] = info
-						return info, nil
 					}
 				}
 			}

@@ -109,6 +109,19 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 		// === 07_custom_rules: Custom Rules ===
 		// Note: custom_function_rules test is skipped - golden file not available
 
+		// === 09_array_slice_fix: Array/Slice Conversion Fixes ===
+		{
+			name:           "array_slice_test",
+			directivePath:  "../../testdata/09_array_slice_fix/array_slice_test",
+			goldenFileName: "expected.golden",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/09_array_slice_fix/array_slice_test/source",
+				"github.com/origadmin/abgen/testdata/09_array_slice_fix/array_slice_test/target",
+			},
+			priority: "P0",
+			category: "array_slice_fix",
+		},
+
 		// === Legacy and Special Cases ===
 		{
 			name:           "bug_fix_001", // Specific bug fix test case

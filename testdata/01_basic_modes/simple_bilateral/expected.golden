@@ -5,20 +5,24 @@ package simple_bilateral
 import (
 	ent "github.com/origadmin/abgen/testdata/fixture/ent"
 	types "github.com/origadmin/abgen/testdata/fixture/types"
+	strconv "strconv"
 	time "time"
 )
 
 // Local type aliases for external types.
 type (
-	Gender            = ent.Gender
-	GenderBilateral   = types.Gender
-	Resource          = ent.Resource
-	ResourceBilateral = types.Resource
-	Role              = ent.Role
-	RoleBilateral     = types.Role
-	Time              = time.Time
-	User              = ent.User
-	UserBilateral     = types.User
+	Gender             = ent.Gender
+	GenderBilateral    = types.Gender
+	Resource           = ent.Resource
+	ResourceBilateral  = types.Resource
+	ResourcesBilateral = []*ResourceBilateral
+	Role               = ent.Role
+	RoleBilateral      = types.Role
+	RolesBilateral     = []*RoleBilateral
+	Time               = time.Time
+	User               = ent.User
+	UserBilateral      = types.User
+	UsersBilateral     = []*UserBilateral
 )
 
 // ConvertInt32ToString converts int32 to string.
@@ -48,7 +52,6 @@ func ConvertResourceToResourceBilateral(from *Resource) *ResourceBilateral {
 	to.ID = (from.ID)
 	to.Name = (from.Name)
 	to.ParentID = (from.ParentID)
-
 	return to
 }
 
@@ -61,7 +64,6 @@ func ConvertRoleToRoleBilateral(from *Role) *RoleBilateral {
 
 	to.ID = (from.ID)
 	to.Name = (from.Name)
-
 	return to
 }
 
@@ -78,7 +80,6 @@ func ConvertUserToUserBilateral(from *User) *UserBilateral {
 	to.Gender = ConvertGenderToGenderBilateral(from.Gender)
 	to.CreatedAt = ConvertTimeToString(from.CreatedAt)
 	to.Status = ConvertStringToInt32(from.Status)
-
 	return to
 }
 
@@ -92,7 +93,6 @@ func ConvertResourceBilateralToResource(from *ResourceBilateral) *Resource {
 	to.Id = (from.Id)
 	to.Name = (from.Name)
 	to.ParentId = (from.ParentId)
-
 	return to
 }
 
@@ -105,7 +105,6 @@ func ConvertRoleBilateralToRole(from *RoleBilateral) *Role {
 
 	to.Id = (from.Id)
 	to.Name = (from.Name)
-
 	return to
 }
 
@@ -122,7 +121,6 @@ func ConvertUserBilateralToUser(from *UserBilateral) *User {
 	to.Gender = ConvertGenderBilateralToGender(from.Gender)
 	to.Status = ConvertInt32ToString(from.Status)
 	to.CreatedAt = ConvertStringToTime(from.CreatedAt)
-
 	return to
 }
 

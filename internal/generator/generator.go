@@ -6,9 +6,9 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
-	"log/slog" // Added slog import
+	"log/slog"
 	"path"
-	"sort" // Added sort import
+	"sort"
 	"strconv"
 	"strings"
 
@@ -85,7 +85,7 @@ func (g *Generator) CustomStubs() []byte {
 	formatted, err := format.Source(g.customBuf.Bytes())
 	if err != nil {
 		// Log the error but return unformatted bytes to allow inspection
-		slog.Error("Error formatting custom stubs", "error", err) // Changed to slog.Error
+		slog.Error("Error formatting custom stubs", "error", err)
 		return g.customBuf.Bytes()
 	}
 	return formatted
@@ -165,7 +165,7 @@ func (g *Generator) collectAndWriteImports() {
 	for p := range g.imports.imports {
 		paths = append(paths, p)
 	}
-	sort.Strings(paths) // Re-added manual sort
+	sort.Strings(paths)
 
 	g.buf.WriteString("import (\n")
 	for _, p := range paths {
@@ -187,7 +187,7 @@ func (g *Generator) generateTypeAliases() {
 	for _, info := range allInfos {
 		if g.isExternalType(info) {
 			prefix, suffix := g.getPrefixSuffix(info)
-			aliasName := g.getFuncNamePart(info, prefix, suffix)
+			aliasName := g.getFuncNamePart(info, prefix, suffix) // e.g., "RoleBilateral" for types.Role
 			fqn := info.ImportPath + "." + info.Name
 
 			// Check if this alias is already defined in the directives.go file
@@ -200,6 +200,28 @@ func (g *Generator) generateTypeAliases() {
 				pkgAlias := g.imports.Add(info.ImportPath)
 				aliasesToGenerate[fqn] = fmt.Sprintf("\t%s = %s.%s\n", aliasName, pkgAlias, info.Name)
 				g.generatedAliases[fqn] = aliasName
+			}
+
+			// Also generate slice aliases for struct types
+			if len(info.Fields) > 0 && !g.isSliceType(info) {
+				// The base name for pluralization is the original type name from info
+				baseNameForPluralization := info.Name // e.g., "Resource" for types.Resource
+
+				// If suffix exists, use Name + "s" + Suffix
+				sliceAliasName := prefix + baseNameForPluralization + "s" + suffix
+
+				// Check if this slice alias name conflicts with a locally defined alias
+				if _, exists := g.localTypeAliases[sliceAliasName]; exists {
+					// If a local alias with the same name exists, skip generating this slice alias
+					continue
+				}
+
+				sliceFqn := info.ImportPath + "." + info.Name + "Slice"
+				sliceAliasDef := fmt.Sprintf("\t%s = []*%s  // Array/slice alias\n", sliceAliasName, aliasName)
+				if _, exists := aliasesToGenerate[sliceFqn]; !exists {
+					aliasesToGenerate[sliceFqn] = sliceAliasDef
+					g.generatedAliases[sliceFqn] = sliceAliasName
+				}
 			}
 		}
 	}
@@ -214,7 +236,7 @@ func (g *Generator) generateTypeAliases() {
 	for _, aliasDef := range aliasesToGenerate {
 		sortedAliases = append(sortedAliases, aliasDef)
 	}
-	sort.Strings(sortedAliases) // Re-added manual sort
+	sort.Strings(sortedAliases)
 	for _, aliasDef := range sortedAliases {
 		g.buf.WriteString(aliasDef)
 	}
@@ -224,7 +246,7 @@ func (g *Generator) generateTypeAliases() {
 func (g *Generator) generateAllConversionFunctions() {
 	// Sort tasks for consistent function generation order
 	sort.Slice(g.tasks, func(i, j int) bool {
-		return g.getTaskKey(g.tasks[i].Source, g.tasks[i].Target) < g.getTaskKey(g.tasks[j].Source, g.tasks[j].Target)
+		return g.getTaskKey(g.tasks[i].Source, g.tasks[j].Target) < g.getTaskKey(g.tasks[j].Source, g.tasks[j].Target)
 	})
 
 	for _, task := range g.tasks {
@@ -232,7 +254,37 @@ func (g *Generator) generateAllConversionFunctions() {
 	}
 }
 
+// isSliceType checks if a TypeInfo represents a slice type.
+func (g *Generator) isSliceType(info *types.TypeInfo) bool {
+	return strings.HasPrefix(info.Name, "[]")
+}
+
+// getSliceElementType extracts the element type string and TypeInfo from a slice TypeInfo.
+func (g *Generator) getSliceElementType(info *types.TypeInfo) (string, *types.TypeInfo) {
+	if !g.isSliceType(info) {
+		return "", nil
+	}
+	elemTypeStr := strings.TrimPrefix(info.Name, "[]")
+	elemInfo, _ := g.walker.Resolve(elemTypeStr)
+	return elemTypeStr, elemInfo
+}
+
 func (g *Generator) generateSingleConversionFunc(source, target *types.TypeInfo) {
+	isSourceSlice := g.isSliceType(source)
+	isTargetSlice := g.isSliceType(target)
+
+	if isSourceSlice && isTargetSlice {
+		_, sourceElemInfo := g.getSliceElementType(source)
+		_, targetElemInfo := g.getSliceElementType(target)
+
+		// Only generate slice-to-slice conversion if element types are structs
+		// and they are not basic types (e.g., []int to []string should be handled by auto-conversion or custom)
+		if sourceElemInfo != nil && targetElemInfo != nil && len(sourceElemInfo.Fields) > 0 && len(targetElemInfo.Fields) > 0 {
+			g.generateSliceToSliceFunc(source, target, sourceElemInfo, targetElemInfo)
+			return
+		}
+	}
+
 	isSourceStruct := len(source.Fields) > 0
 	isTargetStruct := len(target.Fields) > 0
 
@@ -246,6 +298,29 @@ func (g *Generator) generateSingleConversionFunc(source, target *types.TypeInfo)
 	}
 }
 
+func (g *Generator) generateSliceToSliceFunc(sourceSlice, targetSlice, sourceElem, targetElem *types.TypeInfo) {
+	sourcePrefix, sourceSuffix := g.getPrefixSuffix(sourceSlice)
+	targetPrefix, targetSuffix := g.getPrefixSuffix(targetSlice)
+	sourceNamePart := g.getFuncNamePart(sourceSlice, sourcePrefix, sourceSuffix)
+	targetNamePart := g.getFuncNamePart(targetSlice, targetPrefix, targetSuffix)
+	funcName := "Convert" + capitalize(sourceNamePart) + "To" + capitalize(targetNamePart)
+
+	// Use the full type string for the function signature
+	sourceTypeStr := g.getTypeName(sourceSlice)
+	targetTypeStr := g.getTypeName(targetSlice)
+
+	elemConvFuncName := g.getConversionFunctionName(sourceElem, targetElem)
+
+	g.buf.WriteString(fmt.Sprintf("// %s converts a %s to a %s.\n", funcName, sourceTypeStr, targetTypeStr))
+	g.buf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceTypeStr, targetTypeStr))
+	g.buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n")
+	g.buf.WriteString(fmt.Sprintf("\tto := make(%s, len(from))\n", targetTypeStr))
+	g.buf.WriteString("\tfor i, item := range from {\n")
+	g.buf.WriteString(fmt.Sprintf("\t\tto[i] = %s(item)\n", elemConvFuncName))
+	g.buf.WriteString("\t}\n")
+	g.buf.WriteString("\treturn to\n}\n\n")
+}
+
 func (g *Generator) generateStructToStructFunc(source, target *types.TypeInfo) {
 	sourcePrefix, sourceSuffix := g.getPrefixSuffix(source)
 	targetPrefix, targetSuffix := g.getPrefixSuffix(target)
@@ -256,15 +331,35 @@ func (g *Generator) generateStructToStructFunc(source, target *types.TypeInfo) {
 	sourceTypeStr := g.getTypeName(source)
 	targetTypeStr := g.getTypeName(target)
 
-	g.buf.WriteString(fmt.Sprintf("// %s converts a *%s to a *%s.\n", funcName, sourceTypeStr, targetTypeStr))
-	g.buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, sourceTypeStr, targetTypeStr))
-	g.buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n")
-	g.buf.WriteString(fmt.Sprintf("\tto := &%s{}\n\n", targetTypeStr))
-
-	for _, field := range source.Fields {
-		g.handleFieldAssignment(field, source, target)
+	// Determine if we need pointers for function signature
+	sourceParam := "*" + sourceTypeStr
+	targetReturn := "*" + targetTypeStr
+	if g.isSliceType(source) {
+		sourceParam = sourceTypeStr
 	}
-	g.buf.WriteString("\n\treturn to\n}\n\n")
+	if g.isSliceType(target) {
+		targetReturn = targetTypeStr
+	}
+
+	g.buf.WriteString(fmt.Sprintf("// %s converts a %s to a %s.\n", funcName, sourceParam, targetReturn))
+	g.buf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceParam, targetReturn))
+
+	if g.isSliceType(source) {
+		g.buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n")
+		g.buf.WriteString(fmt.Sprintf("\tto := make(%s, len(from))\n", targetReturn))
+		g.buf.WriteString("\tfor i, item := range from {\n")
+		elemConvFuncName := g.getConversionFunctionName(source, target)
+		g.buf.WriteString(fmt.Sprintf("\t\tto[i] = %s(item)\n", elemConvFuncName))
+		g.buf.WriteString("\t}\n")
+	} else {
+		g.buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n")
+		g.buf.WriteString(fmt.Sprintf("\tto := &%s{}\n\n", targetTypeStr))
+		for _, field := range source.Fields {
+			g.handleFieldAssignment(field, source, target)
+		}
+	}
+
+	g.buf.WriteString("\treturn to\n}\n\n")
 }
 
 func (g *Generator) handleFieldAssignment(sourceField types.StructField, sourceInfo, targetInfo *types.TypeInfo) {
@@ -291,39 +386,36 @@ func (g *Generator) handleFieldAssignment(sourceField types.StructField, sourceI
 		sourceDeref = "*"
 	}
 
-	// Check if the source field is a slice
-	if strings.HasPrefix(sourceField.Type, "[]") {
-		// Handle slice conversion
-		sourceElemType := strings.TrimPrefix(sourceField.Type, "[]")
-		targetElemType := strings.TrimPrefix(targetField.Type, "[]")
-
-		sourceElemInfo, _ := g.walker.Resolve(sourceElemType)
-		targetElemInfo, _ := g.walker.Resolve(targetElemType)
-
-		elemConvFuncName := g.getConversionFunctionName(sourceElemInfo, targetElemInfo)
-		targetElemTypeStr := g.getTypeName(targetElemInfo)
-
-		g.buf.WriteString(fmt.Sprintf("\tif from.%s != nil {\n", sourceField.Name))
-		g.buf.WriteString(fmt.Sprintf("\t\tto.%s = make([]*%s, len(from.%s))\n", targetFieldName, targetElemTypeStr, sourceField.Name))
-		g.buf.WriteString(fmt.Sprintf("\t\tfor i, item := range from.%s {\n", sourceField.Name)) // Corrected range source
-		g.buf.WriteString(fmt.Sprintf("\t\t\tto.%s[i] = %s(item)\n", targetFieldName, elemConvFuncName))
-		g.buf.WriteString("\t\t}\n")
-		g.buf.WriteString("\t}\n")
+	// Determine the assignment string
+	var assignmentStr string
+	if convFuncName == "" {
+		// Direct assignment, no function call, no extra parentheses
+		assignmentStr = fmt.Sprintf("%sfrom.%s", sourceDeref, sourceField.Name)
 	} else {
-		// Original logic for non-slice fields
-		assignmentStr := fmt.Sprintf("%s(%sfrom.%s)", convFuncName, sourceDeref, sourceField.Name)
-
-		if targetField.IsPointer && !isBasicType(targetFieldType) && !strings.HasPrefix(g.getConversionFunctionSignature(sourceFieldType, targetFieldType), "*") {
-			assignmentStr = "&" + assignmentStr
-		}
-
-		g.buf.WriteString(fmt.Sprintf("\tto.%s = %s\n", targetFieldName, assignmentStr))
+		// Function call, wrap in parentheses if needed (e.g., for pointer conversion)
+		assignmentStr = fmt.Sprintf("%s(%sfrom.%s)", convFuncName, sourceDeref, sourceField.Name)
 	}
+
+	if targetField.IsPointer && !isBasicType(targetFieldType) && !strings.HasPrefix(g.getConversionFunctionSignature(sourceFieldType, targetFieldType), "*") {
+		assignmentStr = "&" + assignmentStr
+	}
+
+	g.buf.WriteString(fmt.Sprintf("\tto.%s = %s\n", targetFieldName, assignmentStr))
 }
 
 func (g *Generator) getConversionFunctionName(source, target *types.TypeInfo) string {
 	if source.ImportPath == target.ImportPath && source.Name == target.Name {
 		return "" // Direct assignment
+	}
+
+	// If both are slice types, get the conversion function for their elements
+	if g.isSliceType(source) && g.isSliceType(target) {
+		_, sourceElemInfo := g.getSliceElementType(source)
+		_, targetElemInfo := g.getSliceElementType(target)
+
+		if sourceElemInfo != nil && targetElemInfo != nil {
+			return g.getConversionFunctionName(sourceElemInfo, targetElemInfo)
+		}
 	}
 
 	sourcePrefix, sourceSuffix := g.getPrefixSuffix(source)
@@ -398,8 +490,13 @@ func (g *Generator) generateCustomStubs() {
 	// Collect imports for custom stubs
 	customImports := NewImportManager()
 	for _, task := range g.customTasks {
-		g.addImportFromInfo(task.Source)
-		g.addImportFromInfo(task.Target)
+		// Correctly add imports from task.Source and task.Target to customImports
+		if task.Source != nil && task.Source.ImportPath != "" && task.Source.ImportPath != "builtin" && task.Source.ImportPath != g.config.ContextPackagePath {
+			customImports.Add(task.Source.ImportPath)
+		}
+		if task.Target != nil && task.Target.ImportPath != "" && task.Target.ImportPath != "builtin" && task.Target.ImportPath != g.config.ContextPackagePath {
+			customImports.Add(task.Target.ImportPath)
+		}
 	}
 
 	if len(customImports.imports) > 0 {
@@ -407,7 +504,7 @@ func (g *Generator) generateCustomStubs() {
 		for p := range customImports.imports {
 			paths = append(paths, p)
 		}
-		sort.Strings(paths) // Re-added manual sort
+		sort.Strings(paths)
 
 		g.customBuf.WriteString("import (\n")
 		for _, p := range paths {
@@ -429,7 +526,7 @@ func (g *Generator) generateCustomStubs() {
 		g.customBuf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceTypeStr, targetTypeStr))
 		g.customBuf.WriteString(fmt.Sprintf("\t// TODO: Implement this custom conversion\n"))
 		g.customBuf.WriteString(fmt.Sprintf("\tpanic(\"custom conversion not implemented: %s\")\n", funcName))
-		g.customBuf.WriteString("}\n\n") // Corrected: write to g.customBuf
+		g.customBuf.WriteString("}\n\n")
 	}
 }
 
@@ -453,30 +550,86 @@ func (g *Generator) getPrefixSuffix(info *types.TypeInfo) (prefix, suffix string
 }
 
 func (g *Generator) getFuncNamePart(typeInfo *types.TypeInfo, prefix, suffix string) string {
+	name := typeInfo.Name
+
+	// If it's a slice type, get the element name first
+	if strings.HasPrefix(name, "[]") {
+		name = strings.TrimPrefix(name, "[]")
+	}
+	if strings.HasPrefix(name, "*") {
+		name = strings.TrimPrefix(name, "*")
+	}
+
+	// If LocalAlias exists and it's not a basic type, we should apply prefix/suffix
+	// if they are configured for the target package
 	if typeInfo.LocalAlias != "" {
+		if !isBasicType(typeInfo) && (prefix != "" || suffix != "") {
+			// Check if this type belongs to the target package and needs suffix
+			if typeInfo.ImportPath == g.config.Target.Package {
+				return typeInfo.LocalAlias
+			}
+			// For source types with alias, we might need to apply prefix/suffix
+			baseAlias := typeInfo.LocalAlias
+			if strings.HasPrefix(baseAlias, prefix) && strings.HasSuffix(baseAlias, suffix) {
+				return baseAlias // Already has the prefix/suffix
+			}
+			// Remove any existing prefix/suffix from the local alias and apply new ones
+			cleanName := strings.TrimPrefix(baseAlias, prefix)
+			cleanName = strings.TrimSuffix(cleanName, suffix)
+			return prefix + cleanName + suffix
+		}
 		return typeInfo.LocalAlias
 	}
+
 	if isBasicType(typeInfo) {
-		return typeInfo.Name
+		return name
 	}
 	if prefix != "" || suffix != "" {
-		return prefix + typeInfo.Name + suffix
+		return prefix + name + suffix
 	}
-	return typeInfo.Name
+	return name
 }
 
 func (g *Generator) getTypeName(typeInfo *types.TypeInfo) string {
+	// If it's a local alias (defined in the directive file), use it directly
+	if typeInfo.LocalAlias != "" {
+		return typeInfo.LocalAlias
+	}
+
+	// If a generated alias exists for the FQN, use it
 	fqn := typeInfo.ImportPath + "." + typeInfo.Name
 	if alias, ok := g.generatedAliases[fqn]; ok {
 		return alias
 	}
-	if typeInfo.LocalAlias != "" {
-		return typeInfo.LocalAlias
+
+	// Handle slice types: recursively get the element type name
+	if g.isSliceType(typeInfo) {
+		_, elemInfo := g.getSliceElementType(typeInfo)
+		if elemInfo != nil {
+			// Get prefix and suffix for the element info
+			prefix, suffix := g.getPrefixSuffix(elemInfo)
+
+			// The base name for pluralization is the original element type name (e.g., "Role" from "types.Role")
+			baseNameForPluralization := elemInfo.Name
+
+			// If suffix exists, use Name + "s" + Suffix
+			sliceAliasName := prefix + baseNameForPluralization + suffix
+
+			sliceFqn := typeInfo.ImportPath + "." + sliceAliasName
+			g.generatedAliases[sliceFqn] = sliceAliasName
+			return sliceAliasName
+		}
+		// Fallback if element info not found - return raw slice type
+		return typeInfo.Name
 	}
+
+	// For external types, add import and use package alias
 	if g.isExternalType(typeInfo) {
 		pkgAlias := g.imports.Add(typeInfo.ImportPath)
 		return pkgAlias + "." + typeInfo.Name
 	}
+
+	// For internal types or basic types, just use the name
 	return typeInfo.Name
 }
 
