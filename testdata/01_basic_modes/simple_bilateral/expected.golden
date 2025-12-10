@@ -22,13 +22,13 @@ type (
 	UserBilateral      = UserBilateral
 )
 
-// ConvertGenderToGender converts Gender to GenderBilateral
-func ConvertGenderToGender(from Gender) GenderBilateral {
+// ConvertGenderToGenderBilateral converts Gender to GenderBilateral
+func ConvertGenderToGenderBilateral(from Gender) GenderBilateral {
 	return GenderBilateral(from)
 }
 
-// ConvertRoleToRole converts Role to RoleBilateral
-func ConvertRoleToRole(from Role) RoleBilateral {
+// ConvertRoleToRoleBilateral converts Role to RoleBilateral
+func ConvertRoleToRoleBilateral(from Role) RoleBilateral {
 	to := &RoleBilateral{}
 
 	to.Id = from.ID
@@ -36,26 +36,26 @@ func ConvertRoleToRole(from Role) RoleBilateral {
 	return to
 }
 
-// ConvertUserToUser converts User to UserBilateral
-func ConvertUserToUser(from User) UserBilateral {
+// ConvertUserToUserBilateral converts User to UserBilateral
+func ConvertUserToUserBilateral(from User) UserBilateral {
 	to := &UserBilateral{}
 
 	to.Id = from.ID
 	to.Username = from.Username
 	to.Age = from.Age
-	to.Gender = ConvertGenderToGender(from.Gender)
+	to.Gender = ConvertGenderToGenderBilateral(from.Gender)
 	to.CreatedAt = ConvertTimeToString(from.CreatedAt)
 	to.Status = ConvertStringToInt32(from.Status)
 	return to
 }
 
-// ConvertGenderToGender converts GenderBilateral to Gender
-func ConvertGenderToGender(from GenderBilateral) Gender {
+// ConvertGenderBilateralToGender converts GenderBilateral to Gender
+func ConvertGenderBilateralToGender(from GenderBilateral) Gender {
 	return Gender(from)
 }
 
-// ConvertResourceToResource converts ResourceBilateral1 to ResourceBilateral
-func ConvertResourceToResource(from ResourceBilateral1) ResourceBilateral {
+// ConvertResourceBilateral1ToResourceBilateral converts ResourceBilateral1 to ResourceBilateral
+func ConvertResourceBilateral1ToResourceBilateral(from ResourceBilateral1) ResourceBilateral {
 	to := &ResourceBilateral{}
 
 	to.ID = from.Id
@@ -64,8 +64,8 @@ func ConvertResourceToResource(from ResourceBilateral1) ResourceBilateral {
 	return to
 }
 
-// ConvertRoleToRole converts RoleBilateral to Role
-func ConvertRoleToRole(from RoleBilateral) Role {
+// ConvertRoleBilateralToRole converts RoleBilateral to Role
+func ConvertRoleBilateralToRole(from RoleBilateral) Role {
 	to := &Role{}
 
 	to.ID = from.Id
@@ -73,14 +73,14 @@ func ConvertRoleToRole(from RoleBilateral) Role {
 	return to
 }
 
-// ConvertUserToUser converts UserBilateral to User
-func ConvertUserToUser(from UserBilateral) User {
+// ConvertUserBilateralToUser converts UserBilateral to User
+func ConvertUserBilateralToUser(from UserBilateral) User {
 	to := &User{}
 
 	to.ID = from.Id
 	to.Username = from.Username
 	to.Age = from.Age
-	to.Gender = ConvertGenderToGender(from.Gender)
+	to.Gender = ConvertGenderBilateralToGender(from.Gender)
 	to.Status = ConvertInt32ToString(from.Status)
 	to.CreatedAt = ConvertStringToTime(from.CreatedAt)
 	return to

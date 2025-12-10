@@ -29,22 +29,29 @@ func (n *Namer) GetTypeName(info *analyzer.TypeInfo) string {
 	
 	baseName := info.Name
 	
-	// Apply source package naming rules
-	prefix, suffix := n.getSourceNamingRules(info.ImportPath)
-	result := strings.TrimPrefix(baseName, prefix)
-	result = strings.TrimSuffix(result, suffix)
+	// Check if this is a source package
+	sourcePrefix, sourceSuffix := n.getSourceNamingRules(info.ImportPath)
+	if sourcePrefix != "" || sourceSuffix != "" {
+		// This is a source type, apply source naming rules
+		return sourcePrefix + baseName + sourceSuffix
+	}
 	
-	// Apply target package naming rules
+	// Check if this is a target package
 	targetPrefix, targetSuffix := n.getTargetNamingRules(info.ImportPath)
-	result = targetPrefix + result + targetSuffix
+	if targetPrefix != "" || targetSuffix != "" {
+		// This is a target type, apply target naming rules
+		return targetPrefix + baseName + targetSuffix
+	}
 	
-	return result
+	// No specific naming rules, use original name
+	return baseName
 }
 
 // GetFunctionName returns the function name for converting between two types.
 func (n *Namer) GetFunctionName(sourceType, targetType *model.Type) string {
-	sourceName := n.getSimpleTypeName(sourceType)
-	targetName := n.getSimpleTypeName(targetType)
+	// For function names, we need to use the effective names with naming rules applied
+	sourceName := n.getTypeDisplayName(sourceType)
+	targetName := n.getTypeDisplayName(targetType)
 	return "Convert" + strings.Title(sourceName) + "To" + strings.Title(targetName)
 }
 
@@ -64,8 +71,12 @@ func (n *Namer) getSourceNamingRules(pkgPath string) (string, string) {
 
 // getTargetNamingRules returns the naming rules for the target package.
 func (n *Namer) getTargetNamingRules(pkgPath string) (string, string) {
-	// This is more complex and depends on conversion direction
-	// For now, return empty strings
+	// Check if this is the target package in any pair
+	for _, targetPkg := range n.ruleSet.PackagePairs {
+		if pkgPath == targetPkg {
+			return n.ruleSet.NamingRules.TargetPrefix, n.ruleSet.NamingRules.TargetSuffix
+		}
+	}
 	return "", ""
 }
 
@@ -75,6 +86,7 @@ func (n *Namer) getSimpleTypeName(t *model.Type) string {
 		return ""
 	}
 	
+	// Use base name
 	name := t.Name
 	if t.IsPointer {
 		name = strings.TrimPrefix(name, "*")
@@ -82,6 +94,43 @@ func (n *Namer) getSimpleTypeName(t *model.Type) string {
 	if t.Kind == model.TypeKindSlice {
 		name = strings.TrimPrefix(name, "[]")
 	}
+	return name
+}
+
+// getTypeDisplayName returns the display name for a type, applying naming rules if applicable.
+// This is used for function naming to ensure the names reflect the actual type names used in the generated code.
+func (n *Namer) getTypeDisplayName(t *model.Type) string {
+	if t == nil {
+		return ""
+	}
+	
+	name := t.Name
+	
+	// Apply naming rules based on package path
+	if t.ImportPath != "" {
+		// Check if this is a source package
+		sourcePrefix, sourceSuffix := n.getSourceNamingRules(t.ImportPath)
+		if sourcePrefix != "" || sourceSuffix != "" {
+			// This is a source type, apply source naming rules
+			name = sourcePrefix + name + sourceSuffix
+		} else {
+			// Check if this is a target package
+			targetPrefix, targetSuffix := n.getTargetNamingRules(t.ImportPath)
+			if targetPrefix != "" || targetSuffix != "" {
+				// This is a target type, apply target naming rules
+				name = targetPrefix + name + targetSuffix
+			}
+		}
+	}
+	
+	// Remove pointer and slice prefixes for display name
+	if t.IsPointer {
+		name = strings.TrimPrefix(name, "*")
+	}
+	if t.Kind == model.TypeKindSlice {
+		name = strings.TrimPrefix(name, "[]")
+	}
+	
 	return name
 }
 

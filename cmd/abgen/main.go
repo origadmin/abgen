@@ -11,9 +11,9 @@ import (
 	goversion "github.com/caarlos0/go-version"
 	"golang.org/x/tools/go/packages"
 
-	"github.com/origadmin/abgen/internal/ast"
+	"github.com/origadmin/abgen/internal/analyzer"
+	"github.com/origadmin/abgen/internal/config"
 	"github.com/origadmin/abgen/internal/generator"
-	"github.com/origadmin/abgen/internal/types"
 )
 
 var (
@@ -65,41 +65,92 @@ func main() {
 	sourceDir := flag.Arg(0)
 	slog.Info("Starting abgen", "sourceDir", sourceDir)
 
-	// --- 1. Load the directive package ---
-	slog.Debug("Loading directive package...")
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedImports | packages.NeedDeps | packages.NeedTypes | packages.NeedTypesInfo,
+	// --- 1. Load the initial package to find directives ---
+	slog.Debug("Loading initial package...")
+	directiveParser := config.NewDirectiveParser()
+	
+	initialLoaderCfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedSyntax | packages.NeedFiles,
 		Dir:  sourceDir,
-		// Allow parsing packages with type errors since abgen may generate the missing types.
-		// We will log these errors but not fail immediately.
-		// AllowErrors: true, // Removed as it's not a valid field
+		Tests: false,
 	}
-	pkgs, err := packages.Load(cfg, ".")
+	initialPkgs, err := packages.Load(initialLoaderCfg, ".")
 	if err != nil {
-		slog.Error("Failed to load directive package", "error", err)
+		slog.Error("Failed to load initial package for directives", "error", err)
+		os.Exit(1)
+	}
+	if packages.PrintErrors(initialPkgs) > 0 {
+		slog.Error("Initial package for directives contains errors")
+		os.Exit(1)
+	}
+	if len(initialPkgs) == 0 {
+		slog.Error("No initial package found at path", "sourceDir", sourceDir)
+		os.Exit(1)
+	}
+	initialPkg := initialPkgs[0]
+
+	// --- 2. Discover and parse directives ---
+	slog.Debug("Discovering directives...")
+	directives, err := directiveParser.DiscoverDirectives(initialPkg)
+	if err != nil {
+		slog.Error("Failed to discover directives", "error", err)
+		os.Exit(1)
+	}
+	
+	ruleParser := config.NewRuleParser()
+	if err := ruleParser.ParseDirectives(directives, initialPkg); err != nil {
+		slog.Error("Failed to parse directives", "error", err)
+		os.Exit(1)
+	}
+	ruleSet := ruleParser.GetRuleSet()
+
+	// --- 3. Load the full package graph using the RuleSet ---
+	slog.Debug("Loading full package graph...")
+	walker := analyzer.NewPackageWalker()
+	
+	dependencyPaths := make([]string, 0)
+	seenPaths := make(map[string]bool)
+	seenPaths[initialPkg.PkgPath] = true // The initial package is always needed
+
+	for sourcePkg, targetPkg := range ruleSet.PackagePairs {
+		if !seenPaths[sourcePkg] {
+			dependencyPaths = append(dependencyPaths, sourcePkg)
+			seenPaths[sourcePkg] = true
+		}
+		if !seenPaths[targetPkg] {
+			dependencyPaths = append(dependencyPaths, targetPkg)
+			seenPaths[targetPkg] = true
+		}
+	}
+	// Add package paths from TypePairs as dependencies
+	for fqn := range ruleSet.TypePairs {
+		pkgPath := fqn[:strings.LastIndex(fqn, ".")]
+		if !seenPaths[pkgPath] {
+			dependencyPaths = append(dependencyPaths, pkgPath)
+			seenPaths[pkgPath] = true
+		}
+	}
+    // Add package paths from PackageAliases as dependencies
+    for _, path := range ruleSet.PackageAliases {
+        if !seenPaths[path] {
+            dependencyPaths = append(dependencyPaths, path)
+            seenPaths[path] = true
+        }
+    }
+
+	pkgs, err := walker.LoadFullGraph(initialPkg.PkgPath, dependencyPaths...)
+	if err != nil {
+		slog.Error("Failed to load full package graph", "error", err)
 		os.Exit(1)
 	}
 	if packages.PrintErrors(pkgs) > 0 {
-		slog.Warn("Type errors found in directive package (may be expected for types that abgen will generate)")
-	}
-	if len(pkgs) == 0 {
-		slog.Error("No packages found in source directory", "sourceDir", sourceDir)
+		slog.Error("Full package graph contains errors")
 		os.Exit(1)
 	}
-	directivePkg := pkgs[0]
 
-	// --- 2. Create and Run Walker ---
-	slog.Debug("Initializing walker and analysis...")
-	walker := ast.NewPackageWalker()
-	if err := walker.Analyze(directivePkg); err != nil {
-		slog.Error("Analysis failed", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("Analysis complete.")
-
-	// --- 3. Generate Code ---
+	// --- 4. Generate Code ---
 	slog.Debug("Generating code...")
-	gen := generator.NewGenerator(walker)
+	gen := generator.NewGenerator(walker, ruleSet)
 	mainGeneratedCode, err := gen.Generate()
 	if err != nil {
 		slog.Error("Code generation failed", "error", err)
@@ -110,7 +161,7 @@ func main() {
 	mainOutputFile := *output
 	if mainOutputFile == "" {
 		// Default to <package_name>.gen.go
-		mainOutputFile = filepath.Join(sourceDir, strings.ToLower(directivePkg.Name)+".gen.go")
+		mainOutputFile = filepath.Join(sourceDir, strings.ToLower(initialPkg.Name)+".gen.go")
 	}
 	slog.Info("Writing main generated code", "file", mainOutputFile)
 	err = os.WriteFile(mainOutputFile, mainGeneratedCode, 0644)
@@ -120,7 +171,7 @@ func main() {
 	}
 
 	// --- 5. Write Custom Stubs Output (if any) ---
-	customGeneratedCode := gen.CustomStubs() // Assuming CustomStubs() method exists on Generator
+	customGeneratedCode := gen.CustomStubs()
 	if len(customGeneratedCode) > 0 {
 		customOutputFile := *customOutput
 		if !filepath.IsAbs(customOutputFile) {
@@ -139,9 +190,9 @@ func main() {
 
 func buildVersion(version, commit, date, builtBy, treeState string) goversion.Info {
 	return goversion.GetVersionInfo(
-		goversion.WithAppDetails(types.Application, types.Description, types.WebSite),
+		goversion.WithAppDetails(config.Application, config.Description, config.WebSite),
 		func(i *goversion.Info) {
-			i.ASCIIName = types.UI
+			i.ASCIIName = config.UI
 			if commit != "" {
 				i.GitCommit = commit
 			}

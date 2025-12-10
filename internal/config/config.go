@@ -1,5 +1,13 @@
 package config
 
+// Application constants
+const (
+	Application = "abgen"
+	Description = "Auto generate conversion code between structs"
+	WebSite     = "https://github.com/origadmin/abgen"
+	UI          = "abgen"
+)
+
 // ConversionConfig holds the overall configuration for the conversion process.
 type ConversionConfig struct {
 	// SourcePackages holds the source package configurations.
