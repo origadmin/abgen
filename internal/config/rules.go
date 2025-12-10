@@ -15,40 +15,89 @@ type RuleSet struct {
 	// Context holds information about the package where code is being generated.
 	Context GenerationContext
 
-	// PackagePairs maps source package paths to target package paths.
-	PackagePairs map[string]string
+			// PackagePairs maps source package paths to target package paths.
 
-	// NamingRules defines how to name types and functions.
-	NamingRules NamingRuleSet
+			PackagePairs map[string]string
 
-	// BehaviorRules defines conversion behaviors.
-	BehaviorRules BehaviorRuleSet
+		
 
-	// FieldRules defines field-specific rules.
-	FieldRules FieldRuleSet
-}
+			// TypePairs maps a source type FQN to a target type name.
 
-// NewRuleSet creates a new empty RuleSet.
-func NewRuleSet() *RuleSet {
-	return &RuleSet{
-		Context:      GenerationContext{},
-		PackagePairs: make(map[string]string),
-		NamingRules: NamingRuleSet{
-			SourcePrefix: "",
-			SourceSuffix: "",
-			TargetPrefix: "",
-			TargetSuffix: "",
-		},
-		BehaviorRules: BehaviorRuleSet{
-			GenerateAlias: false,
-			Direction:     make(map[string]string),
-		},
-		FieldRules: FieldRuleSet{
-			Ignore: make(map[string]map[string]struct{}),
-			Remap:  make(map[string]map[string]string),
-		},
-	}
-}
+			TypePairs map[string]string
+
+		
+
+			// PackageAliases maps a package alias to its full import path.
+
+			PackageAliases map[string]string
+
+		
+
+			// NamingRules defines how to name types and functions.
+
+			NamingRules NamingRuleSet
+
+		
+
+			// BehaviorRules defines conversion behaviors.
+
+			BehaviorRules BehaviorRuleSet
+
+		
+
+			// FieldRules defines field-specific rules.
+
+			FieldRules FieldRuleSet
+
+		}
+
+		
+
+		// NewRuleSet creates a new empty RuleSet.
+
+		func NewRuleSet() *RuleSet {
+
+			return &RuleSet{
+
+				Context:        GenerationContext{},
+
+				PackagePairs:   make(map[string]string),
+
+				TypePairs:      make(map[string]string),
+
+				PackageAliases: make(map[string]string),
+
+				NamingRules: NamingRuleSet{
+
+					SourcePrefix: "",
+
+					SourceSuffix: "",
+
+					TargetPrefix: "",
+
+					TargetSuffix: "",
+
+				},
+
+				BehaviorRules: BehaviorRuleSet{
+
+					GenerateAlias: false,
+
+					Direction:     make(map[string]string),
+
+				},
+
+				FieldRules: FieldRuleSet{
+
+					Ignore: make(map[string]map[string]struct{}),
+
+					Remap:  make(map[string]map[string]string),
+
+				},
+
+			}
+
+		}
 
 // NamingRuleSet defines naming conventions for generated types and functions.
 type NamingRuleSet struct {

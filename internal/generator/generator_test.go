@@ -96,12 +96,12 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 
 		// === Legacy and Special Cases ===
 		{
-			name:           "bug_fix_001", // Specific bug fix test case
-			directivePath:  "../../testdata/bug_fix_001",
+			name:           "alias-gen", // Specific bug fix test case
+			directivePath:  "../../testdata/10_bug_fix_issue/alias-gen",
 			goldenFileName: "expected.golden",
 			dependencies:   baseDependencies,
 			priority:       "P0",
-			category:       "legacy",
+			category:       "alias-gen",
 		},
 	}
 

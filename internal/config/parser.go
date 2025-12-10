@@ -57,145 +57,318 @@ func (dp *DirectiveParser) ExtractDependencies(directives []string) []string {
 }
 
 // RuleParser holds the state for the parsing process of abgen rules.
+
 type RuleParser struct {
-	ruleSet        *RuleSet
-	packageAliases map[string]string // Maps alias to full package path
+
+	ruleSet *RuleSet
+
 }
+
+
 
 // NewRuleParser creates a new RuleParser instance.
+
 func NewRuleParser() *RuleParser {
+
 	return &RuleParser{
-		ruleSet:        NewRuleSet(),
-		packageAliases: make(map[string]string),
+
+		ruleSet: NewRuleSet(),
+
 	}
+
 }
+
+
 
 // Parse parses a single directive string and updates the ruleset.
+
 func (rp *RuleParser) Parse(directive string) error {
+
 	// Remove the //go:abgen: prefix if present
+
 	if strings.HasPrefix(directive, "//go:abgen:") {
+
 		directive = strings.TrimPrefix(directive, "//go:abgen:")
+
 	}
+
+
 
 	parts := strings.SplitN(directive, "=", 2) // Use SplitN for robustness
+
 	key := parts[0]
+
 	var value string
+
 	if len(parts) > 1 {
+
 		value = strings.Trim(parts[1], `"`)
+
 	}
+
+
 
 	// Parse based on the exact key
+
 	switch key {
+
 	case "package:path":
+
 		rp.parsePackagePath(value)
+
 	case "pair:packages":
+
 		rp.parsePackagePairs(value)
+
 	case "convert:source:suffix":
+
 		rp.ruleSet.NamingRules.SourceSuffix = value
+
 	case "convert:target:suffix":
+
 		rp.ruleSet.NamingRules.TargetSuffix = value
+
 	case "convert:source:prefix":
+
 		rp.ruleSet.NamingRules.SourcePrefix = value
+
 	case "convert:target:prefix":
+
 		rp.ruleSet.NamingRules.TargetPrefix = value
+
 	case "convert:direction":
+
 		// This requires type context, simplified for now
+
 		rp.ruleSet.BehaviorRules.Direction["*"] = value
+
 	case "convert:alias:generate":
+
 		rp.ruleSet.BehaviorRules.GenerateAlias = (value == "true")
+
 	case "convert:ignore":
+
 		rp.parseIgnoreRule(value)
+
 	case "convert:remap":
+
 		rp.parseRemapRule(value)
+
 	case "convert":
-		// This directive is currently unhandled. It seems to be a remnant of a
-		// previous design. The current logic relies on package pairs and automatic
-		// type discovery. We will ignore it for now.
+
+		rp.parseConvertRule(value)
+
 	}
 
+
+
 	return nil
+
 }
+
+
 
 // ParseDirectives parses multiple directives and sets the generation context.
+
 func (rp *RuleParser) ParseDirectives(directives []string, pkg *packages.Package) error {
+
 	if pkg == nil {
+
 		return fmt.Errorf("package context cannot be nil")
+
 	}
+
 	rp.ruleSet.Context.PackageName = pkg.Name
+
 	rp.ruleSet.Context.PackagePath = pkg.ID
 
+
+
 	for _, directive := range directives {
+
 		if err := rp.Parse(directive); err != nil {
+
 			return err
+
 		}
+
 	}
+
 	return nil
+
 }
+
+
 
 // GetRuleSet returns the final, consolidated RuleSet.
+
 func (rp *RuleParser) GetRuleSet() *RuleSet {
+
 	return rp.ruleSet
+
 }
+
+
 
 // parsePackagePath parses package path directives.
+
 func (rp *RuleParser) parsePackagePath(value string) {
+
 	pathAliasParts := strings.Split(value, ",")
+
 	path := pathAliasParts[0]
+
 	alias := ""
+
 	if len(pathAliasParts) > 1 && strings.HasPrefix(pathAliasParts[1], "alias=") {
+
 		alias = strings.TrimPrefix(pathAliasParts[1], "alias=")
+
 	} else {
+
 		alias = path[strings.LastIndex(path, "/")+1:]
+
 	}
-	rp.packageAliases[alias] = path
+
+	rp.ruleSet.PackageAliases[alias] = path
+
 }
+
+
 
 // parsePackagePairs parses package pairing directives.
+
 func (rp *RuleParser) parsePackagePairs(value string) {
+
 	pair := strings.Split(value, ",")
+
 	if len(pair) == 2 {
+
 		sourceAlias, targetAlias := pair[0], pair[1]
-		if sourcePath, ok := rp.packageAliases[sourceAlias]; ok {
-			if targetPath, ok := rp.packageAliases[targetAlias]; ok {
+
+		if sourcePath, ok := rp.ruleSet.PackageAliases[sourceAlias]; ok {
+
+			if targetPath, ok := rp.ruleSet.PackageAliases[targetAlias]; ok {
+
 				rp.ruleSet.PackagePairs[sourcePath] = targetPath
+
 			}
+
 		}
+
 	}
+
 }
+
+
 
 // parseIgnoreRule parses field ignore rules.
+
 func (rp *RuleParser) parseIgnoreRule(value string) {
+
 	parts := strings.Split(value, "#")
+
 	if len(parts) != 2 {
+
 		return
+
 	}
+
 	typeName, fieldStr := parts[0], parts[1]
+
 	fields := strings.Split(fieldStr, ",")
 
+
+
 	if _, ok := rp.ruleSet.FieldRules.Ignore[typeName]; !ok {
+
 		rp.ruleSet.FieldRules.Ignore[typeName] = make(map[string]struct{})
+
 	}
+
 	for _, field := range fields {
+
 		rp.ruleSet.FieldRules.Ignore[typeName][field] = struct{}{}
+
 	}
+
 }
+
+
 
 // parseRemapRule parses field remap rules.
+
 func (rp *RuleParser) parseRemapRule(value string) {
+
 	parts := strings.Split(value, "#")
+
 	if len(parts) != 2 {
+
 		return
+
 	}
+
 	typeName, remapStr := parts[0], parts[1]
 
+
+
 	remapParts := strings.Split(remapStr, ":")
+
 	if len(remapParts) != 2 {
+
 		return
+
 	}
+
 	sourceField, targetField := remapParts[0], remapParts[1]
 
+
+
 	if _, ok := rp.ruleSet.FieldRules.Remap[typeName]; !ok {
+
 		rp.ruleSet.FieldRules.Remap[typeName] = make(map[string]string)
+
 	}
+
 	rp.ruleSet.FieldRules.Remap[typeName][sourceField] = targetField
+
 }
+
+
+
+// parseConvertRule parses explicit type conversion directives.
+
+func (rp *RuleParser) parseConvertRule(value string) {
+
+	pair := strings.Split(value, ",")
+
+	if len(pair) != 2 {
+
+		return
+
+	}
+
+	sourceType, targetType := strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1])
+
+
+
+	// Resolve the FQN of the source type. It might have an alias.
+
+	parts := strings.Split(sourceType, ".")
+
+	if len(parts) == 2 {
+
+		alias, typeName := parts[0], parts[1]
+
+		if sourcePath, ok := rp.ruleSet.PackageAliases[alias]; ok {
+
+			fqn := sourcePath + "." + typeName
+
+			rp.ruleSet.TypePairs[fqn] = targetType
+
+		}
+
+	}
+
+}
+

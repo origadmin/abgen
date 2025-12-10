@@ -36,6 +36,7 @@ func (c *TypeConverter) ConvertToModel(info *analyzer.TypeInfo) *model.Type {
 		IsPointer:  info.Kind == analyzer.Pointer,
 		Fields:     make([]*model.Field, 0),
 	}
+
 	
 	// IMPORTANT: Add to cache immediately to prevent infinite recursion for self-referencing types
 	c.cache[info] = modelType 

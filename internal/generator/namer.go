@@ -84,3 +84,22 @@ func (n *Namer) getSimpleTypeName(t *model.Type) string {
 	}
 	return name
 }
+
+// GetAliasName returns the alias name for a given model.Type, applying target naming rules.
+func (n *Namer) GetAliasName(t *model.Type) string {
+	if t == nil {
+		return ""
+	}
+	baseName := t.Name // Use the base name from the model.Type
+
+	// Apply target package naming rules from the RuleSet
+	// This assumes the alias is being generated for a 'target' type.
+	result := baseName
+	if n.ruleSet.NamingRules.TargetPrefix != "" {
+		result = n.ruleSet.NamingRules.TargetPrefix + result
+	}
+	if n.ruleSet.NamingRules.TargetSuffix != "" {
+		result = result + n.ruleSet.NamingRules.TargetSuffix
+	}
+	return result
+}

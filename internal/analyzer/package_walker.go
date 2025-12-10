@@ -36,7 +36,7 @@ func NewPackageWalker() *PackageWalker {
 // in order to discover directives. It does not perform full type checking.
 func (w *PackageWalker) LoadInitialPackage(path string) (*packages.Package, error) {
 	cfg := &packages.Config{
-		Mode:       packages.NeedSyntax | packages.NeedFiles,
+		Mode:       packages.NeedName | packages.NeedSyntax | packages.NeedFiles,
 		Dir:        path,
 		Tests:      false,
 		BuildFlags: []string{"-tags=abgen"},

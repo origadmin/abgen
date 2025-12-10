@@ -5,7 +5,6 @@ package simple_bilateral
 import (
 	ent "github.com/origadmin/abgen/testdata/fixture/ent"
 	types "github.com/origadmin/abgen/testdata/fixture/types"
-	strconv "strconv"
 	time "time"
 )
 
@@ -13,118 +12,76 @@ import (
 type (
 	Gender             = ent.Gender
 	GenderBilateral    = types.Gender
-	Resource           = ent.Resource
 	ResourceBilateral  = types.Resource
-	ResourcesBilateral = []*ResourceBilateral
+	ResourceBilateral1 = ent.Resource
+	ResourceEdges      = ent.ResourceEdges
 	Role               = ent.Role
 	RoleBilateral      = types.Role
-	RolesBilateral     = []*RoleBilateral
-	Time               = time.Time
+	TimeBilateral      = time.Time
 	User               = ent.User
 	UserBilateral      = types.User
-	UsersBilateral     = []*UserBilateral
 )
 
-// ConvertInt32ToString converts int32 to string.
-func ConvertInt32ToString(from int32) string {
-	return strconv.Itoa(int(from))
+// ConvertGenderToGender converts Gender to GenderBilateral
+func ConvertGenderToGender(from Gender) GenderBilateral {
+	return GenderBilateral(from)
 }
 
-// ConvertStringToInt32 converts string to int32.
-func ConvertStringToInt32(from string) int32 {
-	i, _ := strconv.Atoi(from)
-	return int32(i)
-}
-
-// ConvertStringToTime converts string to Time.
-func ConvertStringToTime(from string) Time {
-	t, _ := time.Parse(time.RFC3339, from)
-	return t
-}
-
-// ConvertResourceToResourceBilateral converts a *Resource to a *ResourceBilateral.
-func ConvertResourceToResourceBilateral(from *Resource) *ResourceBilateral {
-	if from == nil {
-		return nil
-	}
-	to := &ResourceBilateral{}
-
-	to.ID = (from.ID)
-	to.Name = (from.Name)
-	to.ParentID = (from.ParentID)
-	return to
-}
-
-// ConvertRoleToRoleBilateral converts a *Role to a *RoleBilateral.
-func ConvertRoleToRoleBilateral(from *Role) *RoleBilateral {
-	if from == nil {
-		return nil
-	}
+// ConvertRoleToRole converts Role to RoleBilateral
+func ConvertRoleToRole(from Role) RoleBilateral {
 	to := &RoleBilateral{}
 
-	to.ID = (from.ID)
-	to.Name = (from.Name)
+	to.Id = from.ID
+	to.Name = from.Name
 	return to
 }
 
-// ConvertUserToUserBilateral converts a *User to a *UserBilateral.
-func ConvertUserToUserBilateral(from *User) *UserBilateral {
-	if from == nil {
-		return nil
-	}
+// ConvertUserToUser converts User to UserBilateral
+func ConvertUserToUser(from User) UserBilateral {
 	to := &UserBilateral{}
 
-	to.ID = (from.ID)
-	to.Username = (from.Username)
-	to.Age = (from.Age)
-	to.Gender = ConvertGenderToGenderBilateral(from.Gender)
+	to.Id = from.ID
+	to.Username = from.Username
+	to.Age = from.Age
+	to.Gender = ConvertGenderToGender(from.Gender)
 	to.CreatedAt = ConvertTimeToString(from.CreatedAt)
 	to.Status = ConvertStringToInt32(from.Status)
 	return to
 }
 
-// ConvertResourceBilateralToResource converts a *ResourceBilateral to a *Resource.
-func ConvertResourceBilateralToResource(from *ResourceBilateral) *Resource {
-	if from == nil {
-		return nil
-	}
-	to := &Resource{}
+// ConvertGenderToGender converts GenderBilateral to Gender
+func ConvertGenderToGender(from GenderBilateral) Gender {
+	return Gender(from)
+}
 
-	to.Id = (from.Id)
-	to.Name = (from.Name)
-	to.ParentId = (from.ParentId)
+// ConvertResourceToResource converts ResourceBilateral to ResourceBilateral1
+func ConvertResourceToResource(from ResourceBilateral) ResourceBilateral1 {
+	to := &ResourceBilateral1{}
+
+	to.ID = from.Id
+	to.Name = from.Name
+	to.ParentID = from.ParentId
 	return to
 }
 
-// ConvertRoleBilateralToRole converts a *RoleBilateral to a *Role.
-func ConvertRoleBilateralToRole(from *RoleBilateral) *Role {
-	if from == nil {
-		return nil
-	}
+// ConvertRoleToRole converts RoleBilateral to Role
+func ConvertRoleToRole(from RoleBilateral) Role {
 	to := &Role{}
 
-	to.Id = (from.Id)
-	to.Name = (from.Name)
+	to.ID = from.Id
+	to.Name = from.Name
 	return to
 }
 
-// ConvertUserBilateralToUser converts a *UserBilateral to a *User.
-func ConvertUserBilateralToUser(from *UserBilateral) *User {
-	if from == nil {
-		return nil
-	}
+// ConvertUserToUser converts UserBilateral to User
+func ConvertUserToUser(from UserBilateral) User {
 	to := &User{}
 
-	to.Id = (from.Id)
-	to.Username = (from.Username)
-	to.Age = (from.Age)
-	to.Gender = ConvertGenderBilateralToGender(from.Gender)
+	to.ID = from.Id
+	to.Username = from.Username
+	to.Age = from.Age
+	to.Gender = ConvertGenderToGender(from.Gender)
 	to.Status = ConvertInt32ToString(from.Status)
 	to.CreatedAt = ConvertStringToTime(from.CreatedAt)
 	return to
-}
-
-// ConvertTimeToString converts Time to string.
-func ConvertTimeToString(from Time) string {
-	return from.Format(time.RFC3339)
 }

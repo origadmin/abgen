@@ -20,6 +20,14 @@ type Type struct {
 	Fields []*Field
 }
 
+// GetFQN returns the fully qualified name of the type.
+func (t *Type) GetFQN() string {
+	if t.ImportPath != "" {
+		return t.ImportPath + "." + t.Name
+	}
+	return t.Name
+}
+
 // Field represents a field in a struct.
 type Field struct {
 	// Name is the field name.
