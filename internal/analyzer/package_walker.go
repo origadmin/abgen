@@ -272,6 +272,9 @@ func (w *PackageWalker) resolveType(typ types.Type) *TypeInfo {
 
 	info := &TypeInfo{}
 
+	// IMPORTANT: Add to cache immediately to prevent infinite recursion for self-referencing types
+	w.typeCache[typ] = info 
+	
 	slog.Debug("resolveType (new)", "typ", typ.String())
 
 	switch t := typ.(type) {
@@ -478,10 +481,7 @@ func (w *PackageWalker) resolveType(typ types.Type) *TypeInfo {
 
 	}
 
-	// Insert into cache only after info is fully populated
-
-	w.typeCache[typ] = info
-
+	// No need to insert into cache again here, it's already there
 	return info
 
 }

@@ -307,6 +307,7 @@ func (g *Generator) DiscoverTasks() error {
 
 	// 1. Get package pairing rules
 	packagePairs := g.ruleSet.PackagePairs
+	slog.Debug("RuleSet PackagePairs", "pairs", packagePairs) // Added log
 	if len(packagePairs) == 0 {
 		slog.Warn("No package pairing rules found. No conversion tasks will be generated.")
 		return nil
@@ -317,6 +318,7 @@ func (g *Generator) DiscoverTasks() error {
 		// We only care about packages that are part of a pairing rule (as a source package)
 		targetPkgPath, isSourcePkg := packagePairs[pkg.PkgPath]
 		if !isSourcePkg {
+			slog.Debug("Skipping package, not a source in any pairing rule", "pkgPath", pkg.PkgPath) // Added log
 			continue
 		}
 
@@ -326,11 +328,13 @@ func (g *Generator) DiscoverTasks() error {
 		for _, typeName := range pkg.Types.Scope().Names() {
 			obj := pkg.Types.Scope().Lookup(typeName)
 			if obj == nil || !obj.Exported() {
+				slog.Debug("Skipping unexported or non-existent object", "typeName", typeName, "pkgPath", pkg.PkgPath) // Added log
 				continue // Skip unexported or non-existent objects
 			}
 
 			// Only process actual types (not functions, variables, etc.)
 			if _, ok := obj.(*types.TypeName); !ok {
+				slog.Debug("Skipping non-type object", "typeName", typeName, "pkgPath", pkg.PkgPath) // Added log
 				continue
 			}
 
@@ -349,7 +353,10 @@ func (g *Generator) DiscoverTasks() error {
 			}
 
 			// Predict target type name based on naming rules
+			slog.Debug("Applying naming rules", "sourceName", sourceTypeInfo.Name, "SourcePrefix", g.ruleSet.NamingRules.SourcePrefix, "SourceSuffix", g.ruleSet.NamingRules.SourceSuffix, "TargetPrefix", g.ruleSet.NamingRules.TargetPrefix, "TargetSuffix", g.ruleSet.NamingRules.TargetSuffix) // Added log
 			predictedTargetTypeName := g.applyNamingRules(sourceTypeInfo.Name)
+			slog.Debug("Predicted target type name", "sourceName", sourceTypeInfo.Name, "predictedName", predictedTargetTypeName) // Added log
+
 			targetFQN := targetPkgPath + "." + predictedTargetTypeName
 
 			targetTypeInfo, err := g.walker.FindTypeByFQN(targetFQN)

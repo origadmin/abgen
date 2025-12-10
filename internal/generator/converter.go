@@ -37,6 +37,9 @@ func (c *TypeConverter) ConvertToModel(info *analyzer.TypeInfo) *model.Type {
 		Fields:     make([]*model.Field, 0),
 	}
 	
+	// IMPORTANT: Add to cache immediately to prevent infinite recursion for self-referencing types
+	c.cache[info] = modelType 
+	
 	// Convert kind
 	switch info.Kind {
 	case analyzer.Struct:
@@ -76,7 +79,6 @@ func (c *TypeConverter) ConvertToModel(info *analyzer.TypeInfo) *model.Type {
 		modelType.Fields = append(modelType.Fields, modelField)
 	}
 	
-	// Cache the result
-	c.cache[info] = modelType
+	// No need to insert into cache again here, it's already there
 	return modelType
 }
