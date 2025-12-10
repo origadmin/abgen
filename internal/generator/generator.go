@@ -99,29 +99,37 @@ func (g *Generator) writeAliases() {
 	g.buf.WriteString("type (\n")
 	// To ensure consistent output, sort the aliases by alias name
 	type aliasPair struct {
-		alias    string
-		fqn      string
-		typeName string
+		aliasName string // The local alias name, e.g., "DepartmentPB"
+		typeModel *model.Type // The model.Type representing the actual type
 	}
 	aliases := make([]aliasPair, 0, len(g.aliasMap))
 	for fqn, alias := range g.aliasMap {
-		typeInfo, err := g.walker.FindTypeByFQN(fqn)
+		typeInfo, err := g.walker.FindTypeByFQN(fqn) // Get the analyzer.TypeInfo for the FQN
 		if err != nil {
-			continue // Should not happen
+			// This case should ideally not happen if populateAliases is robust
+			slog.Error("Failed to find TypeInfo for FQN during alias writing", "fqn", fqn, "error", err)
+			continue
+		}
+		typeModel := g.converter.ConvertToModel(typeInfo) // Convert to model.Type
+		if typeModel == nil {
+			slog.Error("Failed to convert TypeInfo to ModelType during alias writing", "fqn", fqn)
+			continue
 		}
 		aliases = append(aliases, aliasPair{
-			alias:    alias,
-			fqn:      fqn,
-			typeName: g.getOriginalTypeName(typeInfo),
+			aliasName: alias,
+			typeModel: typeModel,
 		})
 	}
 
 	sort.Slice(aliases, func(i, j int) bool {
-		return aliases[i].alias < aliases[j].alias
+		return aliases[i].aliasName < aliases[j].aliasName
 	})
 
 	for _, item := range aliases {
-		g.buf.WriteString(fmt.Sprintf("\t%s = %s\n", item.alias, item.typeName))
+		// The right-hand side of the alias should be the fully qualified original type,
+		// using the ImportManager's aliases for its package.
+		originalTypeName := g.getTypeString(item.typeModel) // Use the new getTypeString
+		g.buf.WriteString(fmt.Sprintf("\t%s = %s\n", item.aliasName, originalTypeName))
 	}
 	g.buf.WriteString(")\n\n")
 }
@@ -150,7 +158,8 @@ func (g *Generator) populateAliases() {
 	}
 
 	// 2. Gather all unique types that need aliasing
-	uniqueTypes := make(map[string]*model.Type)
+
+uniqueTypes := make(map[string]*model.Type)
 	for _, task := range g.tasks {
 		g.collectTypes(task.SourceType, uniqueTypes)
 		g.collectTypes(task.TargetType, uniqueTypes)
@@ -159,7 +168,7 @@ func (g *Generator) populateAliases() {
 	// 3. Create an alias for each unique type
 	for _, t := range uniqueTypes {
 		_, isSourcePkg := sourcePackages[t.ImportPath]
-		
+
 		// Check if an explicit alias was already defined for this type by a `convert` rule.
 		var forcedAliasName string
 		for _, task := range g.tasks {
@@ -195,6 +204,7 @@ func (g *Generator) collectTypes(t *model.Type, collection map[string]*model.Typ
 	}
 }
 
+
 // addAliasForType adds an alias for a single type if it doesn't have one already.
 func (g *Generator) addAliasForType(t *model.Type, isSourcePkg bool, forcedAliasName string) {
 	if t == nil || t.ImportPath == "" || t.ImportPath == "builtin" || g.isCurrentPackage(t.ImportPath) {
@@ -226,6 +236,7 @@ func (g *Generator) addAliasForType(t *model.Type, isSourcePkg bool, forcedAlias
 	g.aliasMap[fqn] = finalAlias
 }
 
+
 func (g *Generator) isAliasInUse(alias string) bool {
 	for _, existingAlias := range g.aliasMap {
 		if existingAlias == alias {
@@ -247,7 +258,7 @@ func (g *Generator) generateConversionFunction(task *model.ConversionTask) {
 	g.buf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceParam, targetParam))
 
 	if sourceType.IsPointer {
-		g.buf.WriteString("\tif from == nil {\n\t	return nil\n\t}\n")
+		g.buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n")
 	}
 
 	switch {
@@ -263,7 +274,7 @@ func (g *Generator) generateConversionFunction(task *model.ConversionTask) {
 }
 
 func (g *Generator) generateStructToStructConversion(source, target *model.Type) {
-	targetTypeName := g.getTypeName(target)
+	targetTypeName := g.getTypeString(target)
 	g.buf.WriteString(fmt.Sprintf("\tto := &%s{}\n\n", targetTypeName))
 
 	for _, sourceField := range source.Fields {
@@ -284,16 +295,16 @@ func (g *Generator) generateStructToStructConversion(source, target *model.Type)
 
 func (g *Generator) generateSliceToSliceConversion(source, target *model.Type) {
 	targetTypeName := g.getTypeString(target)
-	g.buf.WriteString(fmt.Sprintf("\tif from == nil {\n\t	return nil\n\t}\n"))
+	g.buf.WriteString(fmt.Sprintf("\tif from == nil {\n\t\treturn nil\n\t}\n"))
 	g.buf.WriteString(fmt.Sprintf("\tto := make(%s, len(from))\n", targetTypeName))
 	g.buf.WriteString("\tfor i, item := range from {\n")
 	elemFuncName := g.getFunctionName(source.ElementType, target.ElementType)
-	g.buf.WriteString(fmt.Sprintf("\t	to[i] = %s(item)\n", elemFuncName))
+	g.buf.WriteString(fmt.Sprintf("\t\to[i] = %s(item)\n", elemFuncName))
 	g.buf.WriteString("\t}\n\treturn to\n")
 }
 
 func (g *Generator) generateBasicConversion(source, target *model.Type) {
-	targetTypeName := g.getTypeName(target)
+	targetTypeName := g.getTypeString(target)
 	if g.canDirectConvert(source, target) {
 		g.buf.WriteString(fmt.Sprintf("\treturn %s(from)\n", targetTypeName))
 	} else {
@@ -305,17 +316,29 @@ func (g *Generator) generateBasicConversion(source, target *model.Type) {
 func (g *Generator) generateFieldAssignment(sourceField, targetField *model.Field) {
 	sourceAccess := fmt.Sprintf("from.%s", sourceField.Name)
 	targetAccess := fmt.Sprintf("to.%s", targetField.Name)
+	sourceType := sourceField.Type
+	targetType := targetField.Type
 
-	if g.isSameType(sourceField.Type, targetField.Type) {
+	if g.isSameType(sourceType, targetType) {
 		g.buf.WriteString(fmt.Sprintf("\t%s = %s\n", targetAccess, sourceAccess))
 		return
 	}
 
-	convFuncName := g.getFunctionName(sourceField.Type, targetField.Type)
+	// Handle slice conversions for fields
+	if sourceType.Kind == model.TypeKindSlice && targetType.Kind == model.TypeKindSlice {
+		// Ensure a top-level slice conversion function will be generated for this type pair
+		g.AddTask(sourceType, targetType, false, "")
+		sliceConvFunc := g.getFunctionName(sourceType, targetType)
+		g.buf.WriteString(fmt.Sprintf("\t%s = %s(%s)\n", targetAccess, sliceConvFunc, sourceAccess))
+		return
+	}
+
+
+	convFuncName := g.getFunctionName(sourceType, targetType)
 	if convFuncName != "" {
 		g.buf.WriteString(fmt.Sprintf("\t%s = %s(%s)\n", targetAccess, convFuncName, sourceAccess))
 	} else {
-		g.buf.WriteString(fmt.Sprintf("\t// TODO: Convert %s field %s\n", sourceField.Type.Name, sourceField.Name))
+		g.buf.WriteString(fmt.Sprintf("\t// TODO: Convert %s field %s\n", sourceType.Name, sourceField.Name))
 	}
 }
 
@@ -323,50 +346,46 @@ func (g *Generator) getFunctionName(source, target *model.Type) string {
 	return g.namer.GetFunctionName(source, target)
 }
 
+// getTypeString returns the string representation of a type (e.g., "[]*pkg.MyType").
+// It handles slices, pointers, local aliases, and package imports.
 func (g *Generator) getTypeString(t *model.Type) string {
-	if t == nil {
-		return "invalid" // Should not happen in valid code
-	}
-	prefix := ""
-	if t.Kind == model.TypeKindSlice {
-		prefix = "[]"
-		t = t.ElementType // Recurse on the element type
-		if t.IsPointer {
-			prefix += "*"
-		}
-	} else if t.IsPointer {
-		prefix = "*"
-	}
-
-	return prefix + g.getTypeName(t)
-}
-
-func (g *Generator) getTypeName(t *model.Type) string {
 	if t == nil {
 		return "invalid"
 	}
-	// Look for the alias of the base type (non-slice, non-pointer)
-	baseType := t
-	if baseType.Kind == model.TypeKindSlice {
-		baseType = baseType.ElementType
-	}
 
-	if alias, ok := g.aliasMap[baseType.GetFQN()]; ok {
-		return alias
-	}
+	var builder strings.Builder
 
-	return baseType.Name // Fallback for built-in or current-package types
-}
-
-// For alias generation
-func (g *Generator) getOriginalTypeName(t *analyzer.TypeInfo) string {
-	if t.ImportPath != "" && !g.isCurrentPackage(t.ImportPath) {
-		if alias := g.importMgr.GetAlias(t.ImportPath); alias != "" {
-			return fmt.Sprintf("%s.%s", alias, t.Name)
+	// Handle slices and pointers recursively
+	switch t.Kind {
+	case model.TypeKindSlice:
+		builder.WriteString("[]")
+		builder.WriteString(g.getTypeString(t.ElementType)) // Recursively call for element type
+	case model.TypeKindPointer:
+		builder.WriteString("*")
+		builder.WriteString(g.getTypeString(t.ElementType)) // Recursively call for element type
+	default:
+		// Base type (struct, primitive, named type)
+		// Check for a local type alias for this base type (e.g., DepartmentPB)
+		if alias, ok := g.aliasMap[t.GetFQN()]; ok {
+			builder.WriteString(alias)
+		} else if t.ImportPath != "" && !g.isCurrentPackage(t.ImportPath) {
+			// External type, use import alias (e.g., source.Department)
+			g.importMgr.Add(t.ImportPath) // Ensure the import is registered
+			if importAlias := g.importMgr.GetAlias(t.ImportPath); importAlias != "" {
+				builder.WriteString(fmt.Sprintf("%s.%s", importAlias, t.Name))
+			} else {
+				// Fallback if alias somehow not found (shouldn't happen with robust Add)
+				builder.WriteString(t.Name)
+			}
+		} else {
+			// Current package type or built-in
+			builder.WriteString(t.Name)
 		}
 	}
-	return t.Name
+
+	return builder.String()
 }
+
 
 func (g *Generator) getPackageName() string {
 	if g.ruleSet != nil && g.ruleSet.Context.PackageName != "" {
@@ -408,6 +427,11 @@ func (g *Generator) canDirectConvert(source, target *model.Type) bool {
 }
 
 func (g *Generator) AddTask(sourceType, targetType *model.Type, isAlias bool, aliasName string) {
+	// Avoid duplicating tasks
+	taskKey := fmt.Sprintf("%s->%s", sourceType.GetFQN(), targetType.GetFQN())
+	if g.processed[taskKey] {
+		return
+	}
 	task := &model.ConversionTask{
 		SourceType: sourceType,
 		TargetType: targetType,
@@ -417,6 +441,7 @@ func (g *Generator) AddTask(sourceType, targetType *model.Type, isAlias bool, al
 		AliasName:  aliasName,
 	}
 	g.tasks = append(g.tasks, task)
+	g.processed[taskKey] = true
 }
 
 func (g *Generator) DiscoverTasks() error {
@@ -530,7 +555,8 @@ func (g *Generator) runPackageDiscovery(packagePairs map[string]string) {
 			}
 
 			sourceFQN := (&model.Type{ImportPath: pkg.PkgPath, Name: typeName}).GetFQN()
-			if g.processed[sourceFQN] {
+			taskKey := fmt.Sprintf("%s->%s", sourceFQN, targetPkgPath)
+			if g.processed[taskKey] {
 				continue
 			}
 
@@ -551,7 +577,7 @@ func (g *Generator) runPackageDiscovery(packagePairs map[string]string) {
 				directTargetModelType := g.convertAnalyzerTypeToModel(directTargetTypeInfo)
 				if directTargetModelType != nil {
 					g.AddTask(sourceModelType, directTargetModelType, false, "")
-					g.processed[sourceFQN] = true
+					g.processed[taskKey] = true
 					slog.Debug("Added direct conversion task", "source", sourceFQN, "target", directTargetFQN)
 					continue
 				}
@@ -569,7 +595,7 @@ func (g *Generator) runPackageDiscovery(packagePairs map[string]string) {
 					aliasTargetModelType := g.convertAnalyzerTypeToModel(aliasTargetTypeInfo)
 					if aliasTargetModelType != nil {
 						g.AddTask(sourceModelType, aliasTargetModelType, true, predictedTargetTypeName)
-						g.processed[sourceFQN] = true
+						g.processed[taskKey] = true
 						slog.Debug("Added alias generation task", "source", sourceFQN, "aliasName", predictedTargetTypeName, "target", aliasTargetFQN)
 						continue
 					}
@@ -601,5 +627,3 @@ func (g *Generator) applyNamingRules(sourceName string) string {
 func (g *Generator) convertAnalyzerTypeToModel(info *analyzer.TypeInfo) *model.Type {
 	return g.converter.ConvertToModel(info)
 }
-
-

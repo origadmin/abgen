@@ -10,16 +10,16 @@ import (
 
 // Local type aliases for external types.
 type (
-	Gender        = ent.Gender
-	GenderAlias   = types.Gender
-	Resource      = ent.Resource
-	ResourceAlias = types.Resource
-	ResourceEdges = ent.ResourceEdges
-	Role          = ent.Role
-	RoleAlias     = types.Role
-	TimeAlias     = time.Time
-	User          = ent.User
-	UserAlias     = types.User
+	Gender        = Gender
+	GenderAlias   = GenderAlias
+	Resource      = Resource
+	ResourceAlias = ResourceAlias
+	ResourceEdges = ResourceEdges
+	Role          = Role
+	RoleAlias     = RoleAlias
+	TimeAlias     = TimeAlias
+	User          = User
+	UserAlias     = UserAlias
 )
 
 // ConvertGenderToGender converts Gender to GenderAlias

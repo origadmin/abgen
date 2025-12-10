@@ -10,16 +10,16 @@ import (
 
 // Local type aliases for external types.
 type (
-	Gender             = ent.Gender
-	GenderBilateral    = types.Gender
-	ResourceBilateral  = types.Resource
-	ResourceBilateral1 = ent.Resource
-	ResourceEdges      = ent.ResourceEdges
-	Role               = ent.Role
-	RoleBilateral      = types.Role
-	TimeBilateral      = time.Time
-	User               = ent.User
-	UserBilateral      = types.User
+	Gender             = Gender
+	GenderBilateral    = GenderBilateral
+	ResourceBilateral  = ResourceBilateral
+	ResourceBilateral1 = ResourceBilateral1
+	ResourceEdges      = ResourceEdges
+	Role               = Role
+	RoleBilateral      = RoleBilateral
+	TimeBilateral      = TimeBilateral
+	User               = User
+	UserBilateral      = UserBilateral
 )
 
 // ConvertGenderToGender converts Gender to GenderBilateral
@@ -54,9 +54,9 @@ func ConvertGenderToGender(from GenderBilateral) Gender {
 	return Gender(from)
 }
 
-// ConvertResourceToResource converts ResourceBilateral to ResourceBilateral1
-func ConvertResourceToResource(from ResourceBilateral) ResourceBilateral1 {
-	to := &ResourceBilateral1{}
+// ConvertResourceToResource converts ResourceBilateral1 to ResourceBilateral
+func ConvertResourceToResource(from ResourceBilateral1) ResourceBilateral {
+	to := &ResourceBilateral{}
 
 	to.ID = from.Id
 	to.Name = from.Name

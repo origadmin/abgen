@@ -10,23 +10,23 @@ import (
 
 // Local type aliases for external types.
 type (
-	Department        = source.Department
-	DepartmentEdges   = source.DepartmentEdges
-	DepartmentEdgesPB = target.DepartmentEdges
-	DepartmentPB      = target.Department
-	Gender            = source.Gender
-	GenderPB          = target.Gender
-	Position          = source.Position
-	PositionPB        = target.Position
-	Role              = source.Role
-	RolePB            = target.Role
-	TimePB            = time.Time
-	User              = source.User
-	UserDepartment    = source.UserDepartment
-	UserDepartmentPB  = target.UserDepartment
-	UserEdges         = source.UserEdges
-	UserEdgesPB       = target.UserEdges
-	UserPB            = target.User
+	Department        = Department
+	DepartmentEdges   = DepartmentEdges
+	DepartmentEdgesPB = DepartmentEdgesPB
+	DepartmentPB      = DepartmentPB
+	Gender            = Gender
+	GenderPB          = GenderPB
+	Position          = Position
+	PositionPB        = PositionPB
+	Role              = Role
+	RolePB            = RolePB
+	TimePB            = TimePB
+	User              = User
+	UserDepartment    = UserDepartment
+	UserDepartmentPB  = UserDepartmentPB
+	UserEdges         = UserEdges
+	UserEdgesPB       = UserEdgesPB
+	UserPB            = UserPB
 )
 
 // ConvertDepartmentToDepartment converts Department to DepartmentPB

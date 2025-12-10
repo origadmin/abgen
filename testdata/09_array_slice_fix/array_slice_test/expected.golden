@@ -10,13 +10,13 @@ import (
 
 // Local type aliases for external types.
 type (
-	Department   = source.Department
-	DepartmentPB = target.Department
-	Gender       = source.Gender
-	GenderPB     = target.Gender
-	TimePB       = time.Time
-	User         = source.User
-	UserPB       = target.User
+	Department   = Department
+	DepartmentPB = DepartmentPB
+	Gender       = Gender
+	GenderPB     = GenderPB
+	TimePB       = TimePB
+	User         = User
+	UserPB       = UserPB
 )
 
 // ConvertDepartmentToDepartment converts Department to DepartmentPB
