@@ -60,18 +60,21 @@ type TypeInfo struct {
 	// - For '*T', it points to T.
 	// - For '[]T', '[N]T', 'chan T', it points to T.
 	// - For 'map[K]V', it points to V (the value type). KeyType is separate.
-	Underlying *TypeInfo 
+	Underlying *TypeInfo
 
-	KeyType    *TypeInfo // If Kind is MapKind, points to the TypeInfo of its key.
+	KeyType *TypeInfo // If Kind is MapKind, points to the TypeInfo of its key.
 
 	// --- Alias-specific Information ---
-	IsAlias bool // Is this TypeInfo representing a type alias declaration (type XXX = YYY)?
-	        // If false, it's a new type definition (type XXX YYY).
+	// Is this TypeInfo representing a type alias declaration (type XXX = YYY)?
+	// If false, it's a new type definition (type XXX YYY).
+	IsAlias bool
 
-	LocalAlias string // This field is currently used in config, can remain as a string from config.
+	// This field is currently used in config, can remain as a string from config.
+	LocalAlias string
 
 	// --- Struct-specific Fields ---
-	Fields []StructField // If Kind is StructKind, lists the fields of the struct.
+	// If Kind is StructKind, lists the fields of the struct.
+	Fields []StructField
 }
 
 // GetName returns the base name of the type.

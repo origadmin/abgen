@@ -232,51 +232,23 @@ func (g *Generator) generateAllConversionFunctions() {
 	}
 }
 
-// isSliceType checks if a TypeInfo represents a slice type, including type aliases that are slices.
+// isSliceType checks if a TypeInfo represents a slice type.
+// It now directly uses the IsSlice field from TypeInfo.
 func (g *Generator) isSliceType(info *types.TypeInfo) bool {
 	if info == nil {
 		return false
 	}
-	// Direct check for slice type (e.g., "[]int", "[]*MyStruct")
-	if strings.HasPrefix(info.Name, "[]") {
-		return true
-	}
-
-	// If it's a type alias, resolve its underlying type and check if it's a slice.
-	// We need to resolve the *actual* type definition of 'info.Name'
-	// For example, if info.Name is "Resources" (alias for []*Resource),
-	// we need to resolve "Resources" to get its underlying type.
-	resolvedUnderlyingType, err := g.walker.Resolve(info.Name)
-	if err == nil && resolvedUnderlyingType != nil {
-		// Check if the resolved underlying type's name starts with "[]"
-		return strings.HasPrefix(resolvedUnderlyingType.Name, "[]")
-	}
-
-	return false
+	return info.IsSlice // Use TypeInfo.IsSlice directly
 }
 
 // getSliceElementType extracts the element type string and TypeInfo from a slice TypeInfo.
+// It now directly uses the ElemType field from TypeInfo.
 func (g *Generator) getSliceElementType(info *types.TypeInfo) (string, *types.TypeInfo) {
-	if !g.isSliceType(info) { // This will now correctly identify aliases as slices
+	if info == nil || !info.IsSlice || info.ElemType == nil {
 		return "", nil
 	}
-
-	// If it's a direct slice type (e.g., "[]int")
-	if strings.HasPrefix(info.Name, "[]") {
-		elemTypeStr := strings.TrimPrefix(info.Name, "[]")
-		elemInfo, _ := g.walker.Resolve(elemTypeStr)
-		return elemTypeStr, elemInfo
-	}
-
-	// If it's a type alias that resolves to a slice
-	resolvedUnderlyingType, err := g.walker.Resolve(info.Name)
-	if err == nil && resolvedUnderlyingType != nil && strings.HasPrefix(resolvedUnderlyingType.Name, "[]") {
-		elemTypeStr := strings.TrimPrefix(resolvedUnderlyingType.Name, "[]")
-		elemInfo, _ := g.walker.Resolve(elemTypeStr)
-		return elemTypeStr, elemInfo
-	}
-
-	return "", nil
+	// The ElemType.Name should already be the base name (e.g., "UserPB")
+	return info.ElemType.Name, info.ElemType
 }
 
 func (g *Generator) generateSingleConversionFunc(source, target *types.TypeInfo) {
@@ -284,19 +256,19 @@ func (g *Generator) generateSingleConversionFunc(source, target *types.TypeInfo)
 	isTargetSlice := g.isSliceType(target)
 
 	if isSourceSlice && isTargetSlice {
-		_, sourceElemInfo := g.getSliceElementType(source)
-		_, targetElemInfo := g.getSliceElementType(target)
+		sourceElemInfo := source.ElemType // Use ElemType directly
+		targetElemInfo := target.ElemType // Use ElemType directly
 
 		// Only generate slice-to-slice conversion if element types are structs
 		// and they are not basic types (e.g., []int to []string should be handled by auto-conversion or custom)
-		if sourceElemInfo != nil && targetElemInfo != nil && len(sourceElemInfo.Fields) > 0 && len(targetElemInfo.Fields) > 0 {
+		if sourceElemInfo != nil && targetElemInfo != nil && sourceElemInfo.IsStruct && targetElemInfo.IsStruct { // Use IsStruct
 			g.generateSliceToSliceFunc(source, target, sourceElemInfo, targetElemInfo)
 			return
 		}
 	}
 
-	isSourceStruct := len(source.Fields) > 0
-	isTargetStruct := len(target.Fields) > 0
+	isSourceStruct := source.IsStruct // Use IsStruct directly
+	isTargetStruct := target.IsStruct // Use IsStruct directly
 
 	if isSourceStruct && isTargetStruct {
 		g.generateStructToStructFunc(source, target)
@@ -347,33 +319,33 @@ func (g *Generator) generateStructToStructFunc(source, target *types.TypeInfo) {
 	targetTypeStr := g.getTypeName(target)
 
 	// Determine if we need pointers for function signature
-	sourceParam := "*" + sourceTypeStr
-	targetReturn := "*" + targetTypeStr
-	if g.isSliceType(source) { // This check should now correctly identify slice aliases
-		sourceParam = sourceTypeStr // If it's a slice, don't add '*'
-	}
-	if g.isSliceType(target) { // This check should now correctly identify slice aliases
-		targetReturn = targetTypeStr // If it's a slice, don't add '*'
-	}
+	sourceParam := sourceTypeStr
+	targetReturn := targetTypeStr
 
-	// NEW: Ensure sourceParam and targetReturn do not have an extra pointer if they are slice types.
-	// This is a defensive measure.
-	sourceParam = strings.TrimPrefix(sourceParam, "*")
-	targetReturn = strings.TrimPrefix(targetReturn, "*")
+	// If it's a struct (not a slice), and not already a pointer, add a pointer.
+	// This ensures struct-to-struct conversions return pointers.
+	if source.IsStruct && !source.IsPointer {
+		sourceParam = "*" + sourceTypeStr
+	}
+	if target.IsStruct && !target.IsPointer {
+		targetReturn = "*" + targetTypeStr
+	}
 
 	g.buf.WriteString(fmt.Sprintf("// %s converts a %s to a %s.\n", funcName, sourceParam, targetReturn))
 	g.buf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceParam, targetReturn))
 
-	if g.isSliceType(source) { // This check should now correctly identify slice aliases
+	if source.IsSlice { // Use info.IsSlice directly
 		g.buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n")
 		g.buf.WriteString(fmt.Sprintf("\tto := make(%s, len(from))\n", targetReturn))
 		g.buf.WriteString("\tfor i, item := range from {\n")
-		elemConvFuncName := g.getConversionFunctionName(source, target)
+		elemConvFuncName := g.getConversionFunctionName(source.ElemType, target.ElemType) // Use ElemType
 		g.buf.WriteString(fmt.Sprintf("\t\tto[i] = %s(item)\n", elemConvFuncName))
 		g.buf.WriteString("\t}\n")
 	} else {
 		g.buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n")
-		g.buf.WriteString(fmt.Sprintf("\tto := &%s{}\n\n", targetTypeStr))
+		// Create struct instance, always non-pointer, then take its address if targetReturn is a pointer
+		toVar := strings.TrimPrefix(targetTypeStr, "*")
+		g.buf.WriteString(fmt.Sprintf("\tto := &%s{}\n\n", toVar))
 		for _, field := range source.Fields {
 			g.handleFieldAssignment(field, source, target)
 		}
@@ -396,13 +368,13 @@ func (g *Generator) handleFieldAssignment(sourceField types.StructField, sourceI
 		return
 	}
 
-	sourceFieldType, _ := g.walker.Resolve(sourceField.Type)
-	targetFieldType, _ := g.walker.Resolve(targetField.Type)
+	sourceFieldType := sourceField.Type // Use TypeInfo directly
+	targetFieldType := targetField.Type // Use TypeInfo directly
 
 	convFuncName := g.getConversionFunctionName(sourceFieldType, targetFieldType)
 
 	sourceDeref := ""
-	if sourceField.IsPointer && isBasicType(sourceFieldType) {
+	if sourceFieldType.IsPointer && isBasicType(sourceFieldType) { // Use TypeInfo.IsPointer
 		sourceDeref = "*"
 	}
 
@@ -422,7 +394,9 @@ func (g *Generator) handleFieldAssignment(sourceField types.StructField, sourceI
 		}
 	}
 
-	if targetField.IsPointer && !isBasicType(targetFieldType) && !strings.HasPrefix(g.getConversionFunctionSignature(sourceFieldType, targetFieldType), "*") {
+	// NEW: If the target field is a struct pointer, and the assignment string is not already a pointer, add '&'.
+	// This handles cases like `to.Parent = &ConvertDepartmentPBToDepartment(from.Parent)`
+	if targetFieldType.IsStruct && targetFieldType.IsPointer && !strings.HasPrefix(assignmentStr, "&") && !strings.HasPrefix(assignmentStr, "*") {
 		assignmentStr = "&" + assignmentStr
 	}
 
@@ -431,53 +405,23 @@ func (g *Generator) handleFieldAssignment(sourceField types.StructField, sourceI
 }
 
 // getUnderlyingTypeInfo resolves the ultimate underlying type of a TypeInfo, handling aliases.
+// It now directly uses the Underlying field from TypeInfo.
 func (g *Generator) getUnderlyingTypeInfo(info *types.TypeInfo) *types.TypeInfo {
 	if info == nil {
 		return nil
 	}
-
-	currentInfo := info
-	// Use a map to detect cycles and prevent infinite recursion.
-	visited := make(map[string]bool)
-
-	for {
-		if currentInfo == nil {
-			return nil
-		}
-
-		// If we've already visited this type name in the current resolution chain, it's a cycle.
-		// Return the currentInfo to break the loop.
-		if visited[currentInfo.Name] {
-			return currentInfo
-		}
-		visited[currentInfo.Name] = true
-
-		// If it's a basic type, it's its own underlying type.
-		if isBasicType(currentInfo) {
-			return currentInfo
-		}
-
-		// Try to resolve the current type's name.
-		// If currentInfo.Name is "Gender", we want to resolve what "Gender" *is*.
-		// If "Gender" is "type Gender string", then resolvedInfo.Name should be "string".
-		resolvedInfo, err := g.walker.Resolve(currentInfo.Name)
-
-		// If resolution fails, or we get back the same info (meaning it's not an alias, or a self-referencing alias),
-		// then currentInfo is the ultimate underlying type we can find.
-		if err != nil || resolvedInfo == nil || resolvedInfo.Name == currentInfo.Name {
-			return currentInfo
-		}
-
-		// Move to the resolved info for the next iteration.
-		currentInfo = resolvedInfo
+	if info.IsAlias && info.Underlying != nil {
+		// Recursively get the ultimate underlying type
+		return g.getUnderlyingTypeInfo(info.Underlying)
 	}
+	return info
 }
 
 // canDirectCast checks if a direct type cast is possible between two non-pointer basic number types.
 func (g *Generator) canDirectCast(source, target *types.TypeInfo) bool {
 	return !source.IsPointer && !target.IsPointer &&
-		isBasicType(source) && isBasicType(target) &&
-		types.IsNumberType(source.Name) && types.IsNumberType(target.Name)
+		source.IsPrimitive && target.IsPrimitive && // Use IsPrimitive
+		source.IsNumber && target.IsNumber // Use IsNumber
 }
 
 func (g *Generator) getConversionFunctionName(source, target *types.TypeInfo) string {
@@ -493,9 +437,9 @@ func (g *Generator) getConversionFunctionName(source, target *types.TypeInfo) st
 	}
 
 	// If both are slice types, get the conversion function for their elements
-	if g.isSliceType(source) && g.isSliceType(target) {
-		_, sourceElemInfo := g.getSliceElementType(source)
-		_, targetElemInfo := g.getSliceElementType(target)
+	if source.IsSlice && target.IsSlice { // Use info.IsSlice directly
+		sourceElemInfo := source.ElemType // Use info.ElemType directly
+		targetElemInfo := target.ElemType // Use info.ElemType directly
 
 		if sourceElemInfo != nil && targetElemInfo != nil {
 			// Get the base name of the element types (singular)
@@ -549,8 +493,8 @@ func (g *Generator) canAutoConvert(source, target *types.TypeInfo) bool {
 	}
 	// RE-ADD: Number to number conversion (direct cast) for standalone functions.
 	if !source.IsPointer && !target.IsPointer &&
-		isBasicType(source) && isBasicType(target) &&
-		types.IsNumberType(source.Name) && types.IsNumberType(target.Name) {
+		source.IsPrimitive && target.IsPrimitive && // Use IsPrimitive
+		source.IsNumber && target.IsNumber { // Use IsNumber
 		return true
 	}
 	return false
@@ -580,8 +524,8 @@ func (g *Generator) generateAutoConversionFunc(source, target *types.TypeInfo) {
 		g.buf.WriteString("\treturn strconv.Itoa(int(from))\n")
 	// RE-ADD: Number to number conversion
 	case !source.IsPointer && !target.IsPointer &&
-		isBasicType(source) && isBasicType(target) &&
-		types.IsNumberType(source.Name) && types.IsNumberType(target.Name):
+		source.IsPrimitive && target.IsPrimitive && // Use IsPrimitive
+		source.IsNumber && target.IsNumber { // Use IsNumber
 		g.buf.WriteString(fmt.Sprintf("\treturn %s(from)\n", target.Name)) // Direct cast
 	}
 
@@ -701,6 +645,9 @@ func (g *Generator) getFuncNamePart(typeInfo *types.TypeInfo, prefix, suffix str
 }
 
 func (g *Generator) getTypeName(typeInfo *types.TypeInfo) string {
+	if typeInfo == nil {
+		return ""
+	}
 	// If it's a local alias (defined in the directive file), use it directly
 	if typeInfo.LocalAlias != "" {
 		return typeInfo.LocalAlias
@@ -712,42 +659,31 @@ func (g *Generator) getTypeName(typeInfo *types.TypeInfo) string {
 		return alias
 	}
 
-	// Handle slice types: recursively get the element type name
-	if g.isSliceType(typeInfo) {
-		_, elemInfo := g.getSliceElementType(typeInfo)
-		if elemInfo != nil {
-			// Get prefix and suffix for the element info
-			prefix, suffix := g.getPrefixSuffix(elemInfo)
-
-			// The base name for pluralization is the original element type name (e.g., "Role" from "types.Role")
-			baseNameForPluralization := elemInfo.Name
-
-			// If suffix exists, use Name + "s" + Suffix
-			sliceAliasName := prefix + baseNameForPluralization + suffix
-
-			// NEW: Ensure sliceAliasName does not have a leading '*' if it's a slice type.
-			// Slices themselves are not pointers in function signatures.
-			sliceAliasName = strings.TrimPrefix(sliceAliasName, "*")
-
-			sliceFqn := typeInfo.ImportPath + "." + sliceAliasName
-			g.generatedAliases[sliceFqn] = sliceAliasName
-			return sliceAliasName
+	// If it's a slice, return the slice type name (e.g., "[]*MyType" or "[]MyType")
+	if typeInfo.IsSlice {
+		elemTypeName := g.getTypeName(typeInfo.ElemType) // Get the name of the element type
+		if typeInfo.ElemType != nil && typeInfo.ElemType.IsPointer {
+			return "[]*" + strings.TrimPrefix(elemTypeName, "*") // Ensure only one '*' for element
 		}
-		// Fallback if element info not found - return raw slice type
-		// NEW: Also trim prefix '*' here for raw slice type fallback.
-		return strings.TrimPrefix(typeInfo.Name, "*")
+		return "[]" + strings.TrimPrefix(elemTypeName, "*")
 	}
 
 	// For external types, add import and use package alias
 	if g.isExternalType(typeInfo) {
 		pkgAlias := g.imports.Add(typeInfo.ImportPath)
-		// NEW: Also trim prefix '*' here for external types if TypeInfo.Name incorrectly includes it.
-		return pkgAlias + "." + strings.TrimPrefix(typeInfo.Name, "*")
+		typeName := typeInfo.Name
+		if typeInfo.IsPointer {
+			typeName = "*" + typeName
+		}
+		return pkgAlias + "." + typeName
 	}
 
 	// For internal types or basic types, just use the name
-	// NEW: Also trim prefix '*' here for internal/basic types if TypeInfo.Name incorrectly includes it.
-	return strings.TrimPrefix(typeInfo.Name, "*")
+	typeName := typeInfo.Name
+	if typeInfo.IsPointer {
+		typeName = "*" + typeName
+	}
+	return typeName
 }
 
 func (g *Generator) findCustomRule(sourceType, targetType *types.TypeInfo) string {
@@ -767,13 +703,7 @@ func isBasicType(typeInfo *types.TypeInfo) bool {
 	if typeInfo == nil {
 		return false
 	}
-	if types.IsPrimitiveType(typeInfo.Name) && typeInfo.ImportPath == "builtin" {
-		return true
-	}
-	if typeInfo.ImportPath == "time" && typeInfo.Name == "Time" {
-		return true
-	}
-	return false
+	return types.IsPrimitiveType(typeInfo.Name) && typeInfo.ImportPath == "builtin"
 }
 
 func capitalize(s string) string {
