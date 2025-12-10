@@ -64,7 +64,7 @@ func TestGenerator_Integration(t *testing.T) {
 		},
 	}
 	
-	generator.AddTask(sourceType, targetType)
+	generator.AddTask(sourceType, targetType, false, "") // Updated call
 	
 	// Generate code
 	code, err := generator.Generate()
@@ -120,7 +120,7 @@ func TestGenerator_BasicStructConversion(t *testing.T) {
 		},
 	}
 	
-	generator.AddTask(sourceType, targetType)
+	generator.AddTask(sourceType, targetType, false, "") // Updated call
 	
 	code, err := generator.Generate()
 	if err != nil {

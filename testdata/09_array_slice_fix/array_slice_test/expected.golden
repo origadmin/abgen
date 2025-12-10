@@ -12,8 +12,8 @@ import (
 type (
 	Department       = source.Department
 	DepartmentPB     = target.Department
-	Departments      = []*source.Department  // Array/slice alias
-	DepartmentsPB    = []*target.Department  // Array/slice alias
+	Departments      = []*source.Department
+	DepartmentsPB    = []*target.Department
 	Gender           = source.Gender
 	GenderPB         = target.GenderPB
 	Time             = time.Time

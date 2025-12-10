@@ -58,6 +58,11 @@ type ConversionTask struct {
 	Direction ConversionDirection
 	// RuleSet contains the rules for this conversion.
 	RuleSet interface{} // Will be *config.RuleSet after proper integration
+
+	// IsAlias indicates if this task is to generate a type alias.
+	IsAlias bool
+	// AliasName is the name of the alias to be generated (e.g., "DepartmentPB").
+	AliasName string
 }
 
 // ConversionDirection represents the direction of conversion.

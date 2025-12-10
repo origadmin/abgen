@@ -84,8 +84,11 @@ func (w *PackageWalker) LoadFullGraph(initialPath string, dependencyPaths ...str
 // FindTypeByFQN is the main entry point for resolving a type.
 // It can dynamically load missing packages if needed.
 func (w *PackageWalker) FindTypeByFQN(fqn string) (*TypeInfo, error) {
+	slog.Debug("FindTypeByFQN called", "fqn", fqn) // Added log
+
 	// First, try to find in already loaded packages
 	if info, err := w.findTypeInLoadedPkgs(fqn); err == nil && info != nil {
+		slog.Debug("FindTypeByFQN found in loaded packages", "fqn", fqn) // Added log
 		return info, nil
 	}
 
@@ -97,20 +100,24 @@ func (w *PackageWalker) FindTypeByFQN(fqn string) (*TypeInfo, error) {
 
 	// Check if we already tried and failed to load this package
 	if w.failedLoads[pkgPath] {
+		slog.Debug("FindTypeByFQN skipping failed package", "pkgPath", pkgPath) // Added log
 		return nil, fmt.Errorf("package %q previously failed to load", pkgPath)
 	}
 
 	// Try to load the missing package dynamically
 	if err := w.loadMissingPackage(pkgPath); err != nil {
 		w.failedLoads[pkgPath] = true
+		slog.Error("FindTypeByFQN failed to load missing package", "pkgPath", pkgPath, "fqn", fqn, "error", err) // Added log
 		return nil, fmt.Errorf("failed to load missing package %q for type %q: %w", pkgPath, fqn, err)
 	}
 
 	// Now that the package is loaded, try to find the type again
 	if info, err := w.findTypeInLoadedPkgs(fqn); err == nil && info != nil {
+		slog.Debug("FindTypeByFQN found after dynamic load", "fqn", fqn) // Added log
 		return info, nil
 	}
 
+	slog.Debug("FindTypeByFQN type not found after all attempts", "fqn", fqn) // Added log
 	return nil, fmt.Errorf("type %q not found after loading package %q", fqn, pkgPath)
 }
 
@@ -123,21 +130,32 @@ func (w *PackageWalker) findTypeInLoadedPkgs(fqn string) (*TypeInfo, error) {
 		return nil, fmt.Errorf("invalid FQN: %s", fqn)
 	}
 
+	slog.Debug("Searching for type in loaded packages", "fqn", fqn, "pkgPath", pkgPath, "typeName", typeName) // Added log
+
 	for _, pkg := range w.pkgs {
+		slog.Debug("Checking package", "currentPkgPath", pkg.PkgPath, "targetPkgPath", pkgPath) // Added log
 		if pkg.PkgPath == pkgPath {
+			slog.Debug("Found matching package path", "pkgPath", pkg.PkgPath) // Added log
+			slog.Debug("Package scope names", "names", pkg.Types.Scope().Names()) // Added log
+
 			obj := pkg.Types.Scope().Lookup(typeName)
 			if obj == nil {
+				slog.Debug("Object not found in package scope", "typeName", typeName, "pkgPath", pkg.PkgPath) // Added log
 				continue
 			}
+
+			slog.Debug("Object found in package scope", "typeName", typeName, "pkgPath", pkg.PkgPath, "obj", obj) // Added log
 
 			// Check if the found object is a TypeName.
 			tn, ok := obj.(*types.TypeName)
 			if !ok {
+				slog.Debug("Object is not a TypeName", "typeName", typeName, "objType", fmt.Sprintf("%T", obj)) // Added log
 				return nil, fmt.Errorf("%q is not a type name", fqn)
 			}
 
 			// If it's an alias, handle it here at the top level.
 			if tn.IsAlias() {
+				slog.Debug("Found alias type", "fqn", fqn) // Added log
 				info := &TypeInfo{
 					Name:       tn.Name(),
 					ImportPath: tn.Pkg().Path(),
@@ -171,9 +189,11 @@ func (w *PackageWalker) findTypeInLoadedPkgs(fqn string) (*TypeInfo, error) {
 			}
 
 			// If it's a regular type definition, resolve it normally.
+			slog.Debug("Found regular type definition", "fqn", fqn) // Added log
 			return w.resolveType(obj.Type()), nil
 		}
 	}
+	slog.Debug("Type not found in any loaded package", "fqn", fqn) // Added log
 	return nil, fmt.Errorf("type %q not found in loaded packages", fqn)
 }
 

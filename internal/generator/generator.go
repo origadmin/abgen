@@ -61,7 +61,7 @@ func (g *Generator) Generate() ([]byte, error) {
 	// Write imports
 	g.writeImports()
 
-	// Generate conversion functions
+	// Generate conversion functions and aliases
 	g.generateConversionFunctions()
 
 	// Format the output
@@ -101,11 +101,48 @@ func (g *Generator) writeImports() {
 	g.buf.WriteString(")\n\n")
 }
 
-// generateConversionFunctions generates all conversion functions.
+// generateConversionFunctions generates all conversion functions and aliases.
 func (g *Generator) generateConversionFunctions() {
+	// First, generate type aliases
+	g.buf.WriteString("// Local type aliases for external types.\n")
+	g.buf.WriteString("type (\n")
+	hasAliases := false
 	for _, task := range g.tasks {
-		g.generateConversionFunction(task)
+		if task.IsAlias {
+			g.generateTypeAlias(task)
+			hasAliases = true
+		}
 	}
+	if hasAliases {
+		g.buf.WriteString(")\n\n")
+	} else {
+		g.buf.WriteString(")\n\n") // Still write empty type block if no aliases
+	}
+
+	// Then, generate regular conversion functions
+	for _, task := range g.tasks {
+		if !task.IsAlias {
+			g.generateConversionFunction(task)
+		}
+	}
+}
+
+// generateTypeAlias generates a type alias declaration.
+func (g *Generator) generateTypeAlias(task *model.ConversionTask) {
+	// Example: type DepartmentPB = target.Department
+	// AliasName is "DepartmentPB"
+	// TargetType is model.Type for target.Department
+
+	// Ensure TargetType is not nil
+	if task.TargetType == nil {
+		slog.Error("Cannot generate alias for nil TargetType", "aliasName", task.AliasName)
+		return
+	}
+
+	// Get the full Go type string for the underlying target type, including its package alias
+	targetTypeString := g.getTypeName(task.TargetType) // This will include package alias like 'target.Department'
+
+	g.buf.WriteString(fmt.Sprintf("\t%s = %s\n", task.AliasName, targetTypeString))
 }
 
 // generateConversionFunction generates a single conversion function.
@@ -113,7 +150,7 @@ func (g *Generator) generateConversionFunction(task *model.ConversionTask) {
 	sourceType := task.SourceType
 	targetType := task.TargetType
 
-	funcName := g.getFunctionName(sourceType, targetType)
+	funcName := g.namer.GetFunctionName(sourceType, targetType)
 	sourceParam := g.getTypeString(sourceType)
 	targetReturn := g.getTypeString(targetType)
 
@@ -291,12 +328,14 @@ func (g *Generator) canDirectConvert(source, target *model.Type) bool {
 }
 
 // AddTask adds a conversion task to the generator.
-func (g *Generator) AddTask(sourceType, targetType *model.Type) {
+func (g *Generator) AddTask(sourceType, targetType *model.Type, isAlias bool, aliasName string) {
 	task := &model.ConversionTask{
 		SourceType: sourceType,
 		TargetType: targetType,
-		Direction:  model.DirectionTo,
+		Direction:  model.DirectionTo, // Default direction, can be extended later
 		RuleSet:    g.ruleSet,
+		IsAlias:    isAlias,
+		AliasName:  aliasName,
 	}
 	g.tasks = append(g.tasks, task)
 }
@@ -305,36 +344,30 @@ func (g *Generator) AddTask(sourceType, targetType *model.Type) {
 func (g *Generator) DiscoverTasks() error {
 	slog.Debug("Discovering conversion tasks...")
 
-	// 1. Get package pairing rules
 	packagePairs := g.ruleSet.PackagePairs
-	slog.Debug("RuleSet PackagePairs", "pairs", packagePairs) // Added log
+	slog.Debug("RuleSet PackagePairs", "pairs", packagePairs)
 	if len(packagePairs) == 0 {
 		slog.Warn("No package pairing rules found. No conversion tasks will be generated.")
 		return nil
 	}
 
-	// 2. Iterate through all loaded packages in the walker
 	for _, pkg := range g.walker.GetLoadedPackages() {
-		// We only care about packages that are part of a pairing rule (as a source package)
 		targetPkgPath, isSourcePkg := packagePairs[pkg.PkgPath]
 		if !isSourcePkg {
-			slog.Debug("Skipping package, not a source in any pairing rule", "pkgPath", pkg.PkgPath) // Added log
+			slog.Debug("Skipping package, not a source in any pairing rule", "pkgPath", pkg.PkgPath)
 			continue
 		}
 
 		slog.Debug("Processing source package for tasks", "sourcePkg", pkg.PkgPath, "targetPkg", targetPkgPath)
 
-		// Iterate through all named types in the source package
 		for _, typeName := range pkg.Types.Scope().Names() {
 			obj := pkg.Types.Scope().Lookup(typeName)
 			if obj == nil || !obj.Exported() {
-				slog.Debug("Skipping unexported or non-existent object", "typeName", typeName, "pkgPath", pkg.PkgPath) // Added log
-				continue // Skip unexported or non-existent objects
+				slog.Debug("Skipping unexported or non-existent object", "typeName", typeName, "pkgPath", pkg.PkgPath)
+				continue
 			}
-
-			// Only process actual types (not functions, variables, etc.)
 			if _, ok := obj.(*types.TypeName); !ok {
-				slog.Debug("Skipping non-type object", "typeName", typeName, "pkgPath", pkg.PkgPath) // Added log
+				slog.Debug("Skipping non-type object", "typeName", typeName, "pkgPath", pkg.PkgPath)
 				continue
 			}
 
@@ -344,38 +377,56 @@ func (g *Generator) DiscoverTasks() error {
 				slog.Error("Failed to find source type info", "fqn", sourceFQN, "error", err)
 				continue
 			}
-
-			// Convert analyzer.TypeInfo to model.Type
 			sourceModelType := g.convertAnalyzerTypeToModel(sourceTypeInfo)
 			if sourceModelType == nil {
 				slog.Error("Failed to convert source analyzer.TypeInfo to model.Type", "fqn", sourceFQN)
 				continue
 			}
 
-			// Predict target type name based on naming rules
-			slog.Debug("Applying naming rules", "sourceName", sourceTypeInfo.Name, "SourcePrefix", g.ruleSet.NamingRules.SourcePrefix, "SourceSuffix", g.ruleSet.NamingRules.SourceSuffix, "TargetPrefix", g.ruleSet.NamingRules.TargetPrefix, "TargetSuffix", g.ruleSet.NamingRules.TargetSuffix) // Added log
+			// --- Strategy 1: Try to find a direct match in the target package (same name) ---
+			directTargetFQN := targetPkgPath + "." + sourceTypeInfo.Name
+			directTargetTypeInfo, directErr := g.walker.FindTypeByFQN(directTargetFQN)
+
+			if directErr == nil && directTargetTypeInfo != nil {
+				directTargetModelType := g.convertAnalyzerTypeToModel(directTargetTypeInfo)
+				if directTargetModelType != nil {
+					g.AddTask(sourceModelType, directTargetModelType, false, "") // Regular conversion task
+					slog.Debug("Added direct conversion task", "source", sourceFQN, "target", directTargetFQN)
+					continue // Move to next source type
+				}
+			} else {
+				slog.Debug("Direct target type not found", "sourceFQN", sourceFQN, "directTargetFQN", directTargetFQN, "error", directErr)
+			}
+
+			// --- Strategy 2: If no direct match, try to find a target type using naming rules for alias generation ---
+			// This applies if the target package has types named without the suffix/prefix,
+			// but we want to generate an alias with the suffix/prefix.
 			predictedTargetTypeName := g.applyNamingRules(sourceTypeInfo.Name)
-			slog.Debug("Predicted target type name", "sourceName", sourceTypeInfo.Name, "predictedName", predictedTargetTypeName) // Added log
+			
+			// Check if naming rules actually changed the name
+			if predictedTargetTypeName != sourceTypeInfo.Name {
+				// Try to find the target type *without* the applied suffix/prefix in the target package
+				// For example, source.Department -> target.Department (and we generate alias DepartmentPB = target.Department)
+				aliasTargetFQN := targetPkgPath + "." + sourceTypeInfo.Name // Look for the original name in the target package
+				slog.Debug("Attempting to find alias target type", "aliasTargetFQN", aliasTargetFQN) // Added log
+				aliasTargetTypeInfo, aliasErr := g.walker.FindTypeByFQN(aliasTargetFQN)
 
-			targetFQN := targetPkgPath + "." + predictedTargetTypeName
-
-			targetTypeInfo, err := g.walker.FindTypeByFQN(targetFQN)
-			if err != nil {
-				slog.Debug("Target type not found for source type", "sourceFQN", sourceFQN, "targetFQN", targetFQN, "error", err)
-				continue // Target type might not exist, skip this conversion task
+				if aliasErr == nil && aliasTargetTypeInfo != nil {
+					slog.Debug("Found alias target type", "aliasTargetFQN", aliasTargetFQN) // Added log
+					aliasTargetModelType := g.convertAnalyzerTypeToModel(aliasTargetTypeInfo)
+					if aliasTargetModelType != nil {
+						// Create an alias task: SourceType is the original source type, TargetType is the actual type found in target package
+						// AliasName is the predicted name (e.g., DepartmentPB)
+						g.AddTask(sourceModelType, aliasTargetModelType, true, predictedTargetTypeName)
+						slog.Debug("Added alias generation task", "source", sourceFQN, "aliasName", predictedTargetTypeName, "target", aliasTargetFQN)
+						continue // Move to next source type
+					}
+				} else {
+					slog.Debug("Alias target type not found (looking for original name in target)", "sourceFQN", sourceFQN, "aliasTargetFQN", aliasTargetFQN, "error", aliasErr)
+				}
 			}
 
-			targetModelType := g.convertAnalyzerTypeToModel(targetTypeInfo)
-			if targetModelType == nil {
-				slog.Error("Failed to convert target analyzer.TypeInfo to model.Type", "fqn", targetFQN)
-				continue
-			}
-
-			// Add conversion task (Source -> Target)
-			g.AddTask(sourceModelType, targetModelType)
-			slog.Debug("Added conversion task", "source", sourceFQN, "target", targetFQN)
-
-			// TODO: Add reverse conversion task (Target -> Source) based on rules if needed
+			slog.Debug("No conversion task added for source type", "sourceFQN", sourceFQN)
 		}
 	}
 
