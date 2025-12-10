@@ -19,21 +19,59 @@ const (
 `
 )
 
+// TypeKind represents the fundamental kind of a Go type.
+type TypeKind int
+
+const (
+	UnknownKind TypeKind = iota
+	PrimitiveKind
+	StructKind
+	InterfaceKind
+	MapKind
+	ChanKind
+	FuncKind
+	SliceKind
+	ArrayKind
+	PointerKind
+)
+
 // StructField represents a field in a struct.
 type StructField struct {
-	Name      string
-	Type      string // Fully qualified type of the field
-	Tags      string
-	IsPointer bool
+	Name     string
+	Type     string    // The string representation of the field's type (e.g., "int", "*User", "[]string")
+	TypeInfo *TypeInfo // Resolved TypeInfo for this field's type. This is crucial.
+	Tags     string
 }
 
 // TypeInfo holds resolved information about a Go type.
 type TypeInfo struct {
-	Name       string
-	ImportPath string
-	IsPointer  bool
-	Fields     []StructField
-	LocalAlias string // The local alias for this type, if one exists.
+	Name       string // The canonical name of the type (e.g., "User", "string", "[]*User", "*[]User")
+	ImportPath string // The import path where this canonical type is defined
+
+	Kind TypeKind // The fundamental kind of this type (e.g., PrimitiveKind, StructKind, SliceKind, PointerKind)
+
+	IsPointer bool // Does this TypeInfo represent a pointer to another type? (e.g., *User)
+
+	ArrayLen int // If Kind is ArrayKind, the length of the array.
+
+	// --- Recursive Type Relationships (Unified) ---
+	// This field points to the type that this TypeInfo is built upon.
+	// - For 'type XXX YYY' or 'type XXX = YYY', it points to YYY.
+	// - For '*T', it points to T.
+	// - For '[]T', '[N]T', 'chan T', it points to T.
+	// - For 'map[K]V', it points to V (the value type). KeyType is separate.
+	Underlying *TypeInfo 
+
+	KeyType    *TypeInfo // If Kind is MapKind, points to the TypeInfo of its key.
+
+	// --- Alias-specific Information ---
+	IsAlias bool // Is this TypeInfo representing a type alias declaration (type XXX = YYY)?
+	        // If false, it's a new type definition (type XXX YYY).
+
+	LocalAlias string // This field is currently used in config, can remain as a string from config.
+
+	// --- Struct-specific Fields ---
+	Fields []StructField // If Kind is StructKind, lists the fields of the struct.
 }
 
 // GetName returns the base name of the type.

@@ -1,4 +1,4 @@
-package bug_fix_001
+package alias_gen
 
 import (
 	"github.com/origadmin/abgen/testdata/fixture/ent"
@@ -28,7 +28,8 @@ import (
 //    detect the 'ent.Gender (int)' <-> 'types.Gender (string)' conversion
 //    and generate the appropriate switch-case logic.
 
-// --- Type Aliases for Local Context ---
+// --- Type Aliases for User Types ---
 // These are kept for compiler correctness and clarity within this file.
+
 type User = ent.User
 type UserPB = types.User

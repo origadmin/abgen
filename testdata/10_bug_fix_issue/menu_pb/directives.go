@@ -1,4 +1,4 @@
-package test_menu_pb_issue
+package menu_pb
 
 import (
 	"context"
