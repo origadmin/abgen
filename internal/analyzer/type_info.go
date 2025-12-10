@@ -1,5 +1,3 @@
-// Package analyzer is responsible for parsing Go source code, resolving types,
-// and building a detailed internal representation of the packages and their types.
 package analyzer
 
 import (
@@ -31,44 +29,34 @@ const (
 type TypeInfo struct {
 	// Name is the simple, non-qualified name of the type (e.g., "User", "string").
 	// For anonymous types (like `[]int` or `*int`), this field will be empty.
+	// For composite types, this might be a synthetic name like "[]int" or "*string".
 	Name       string
 	ImportPath string // The import path where this canonical type is defined
 
-	Kind TypeKind // The fundamental kind of this type (e.g., Primitive, Struct, Slice, Pointer)
+	Kind TypeKind // The fundamental kind of this type
 
 	ArrayLen int // If Kind is Array, the length of the array.
 
-	// --- Recursive Type Relationships (Unified) ---
-	// This field points to the type that this TypeInfo is built upon.
+	// Underlying points to the type that this TypeInfo is built upon.
 	// - For 'type XXX YYY' or 'type XXX = YYY', it points to YYY.
 	// - For '*T', it points to T.
 	// - For '[]T', '[N]T', 'chan T', it points to T.
 	// - For 'map[K]V', it points to V (the value type). KeyType is separate.
-	Underlying    *TypeInfo
-	UnderlyingFQN string
+	Underlying *TypeInfo
 
 	// If Kind is Map, points to the TypeInfo of its key.
-	KeyType    *TypeInfo
-	KeyTypeFQN string
+	KeyType *TypeInfo
 
-	// --- Alias-specific Information ---
-	// Is this TypeInfo representing a type alias declaration (type XXX = YYY)?
-	// If false, it's a new type definition (type XXX YYY).
+	// IsAlias indicates if this TypeInfo represents a type alias declaration (type XXX = YYY).
 	IsAlias bool
-
-	// This field is currently used in config, can remain as a string from config.
-	LocalAlias string
-
-	// --- Struct-specific Fields ---
 
 	// Fields contains the list of fields for a struct type.
 	Fields []*FieldInfo
 
 	// Methods contains the list of methods associated with the type.
-	Methods []*MethodInfo
+	Methods []*MethodInfo // Changed to use SignatureInfo
 
 	// Original is the raw type object from the go/types package.
-	// This can be used for more advanced type-checking or inspection if needed.
 	Original types.Object
 }
 
@@ -77,67 +65,80 @@ func (ti *TypeInfo) GetName() string {
 	if ti == nil {
 		return ""
 	}
-	parts := strings.Split(ti.Name, ".")
-	return parts[len(parts)-1]
+	return ti.Name // Name is now expected to be the simple name
 }
 
 func (ti *TypeInfo) String() string {
 	return ti.Name
 }
 
-func (ti *TypeInfo) FQN() string {
-	return ti.ImportPath + "." + ti.Name
+// IsNamedType returns true if the type has a name and an import path, and is not a primitive.
+func (ti *TypeInfo) IsNamedType() bool {
+	return ti != nil && ti.Name != "" && ti.ImportPath != "" && ti.Kind != Primitive
 }
 
-// ToTypeString reconstructs the Go type string from the TypeInfo.
-// It handles named types, pointers, slices, arrays, and maps.
-func (ti *TypeInfo) ToTypeString() string {
+// FQN returns the Fully Qualified Name for named types.
+// For anonymous types, it returns an empty string.
+func (ti *TypeInfo) FQN() string {
+	if ti == nil {
+		return ""
+	}
+	if ti.IsNamedType() {
+		return ti.ImportPath + "." + ti.Name
+	}
+	return ""
+}
+
+// GoTypeString reconstructs the Go type string from the TypeInfo, suitable for code generation.
+// It does not include import paths; the generator is responsible for managing imports and aliases.
+func (ti *TypeInfo) GoTypeString() string {
 	if ti == nil {
 		return "nil"
 	}
 
 	var sb strings.Builder
 
-	// Handle pointer
-	if ti.Kind == Pointer {
+	switch ti.Kind {
+	case Pointer:
 		sb.WriteString("*")
-	}
-
-	// Handle slice/array
-	if ti.Kind == Slice {
+		if ti.Underlying != nil {
+			sb.WriteString(ti.Underlying.GoTypeString())
+		} else {
+			sb.WriteString("interface{}") // Fallback for unknown underlying type
+		}
+	case Slice:
 		sb.WriteString("[]")
-	} else if ti.Kind == Array {
+		if ti.Underlying != nil {
+			sb.WriteString(ti.Underlying.GoTypeString())
+		} else {
+			sb.WriteString("interface{}") // Fallback for unknown element type
+		}
+	case Array:
 		sb.WriteString(fmt.Sprintf("[%d]", ti.ArrayLen))
-	}
-
-	// Handle map
-	if ti.Kind == Map {
+		if ti.Underlying != nil {
+			sb.WriteString(ti.Underlying.GoTypeString())
+		} else {
+			sb.WriteString("interface{}") // Fallback for unknown element type
+		}
+	case Map:
 		sb.WriteString("map[")
 		if ti.KeyType != nil {
-			sb.WriteString(ti.KeyType.ToTypeString())
+			sb.WriteString(ti.KeyType.GoTypeString())
 		} else {
-			sb.WriteString("?")
+			sb.WriteString("interface{}") // Fallback for unknown key type
 		}
 		sb.WriteString("]")
-	}
-
-	// Handle the base type (named or primitive)
-	if ti.Name != "" {
-		// If it's a named type and has an import path, use FQN for clarity in reconstruction
-		// Primitive types (like "int") don't need import path prefix, even if they have one (e.g., "builtin.int")
-		if ti.ImportPath != "" && ti.Kind != Primitive {
-			sb.WriteString(ti.ImportPath)
-			sb.WriteString(".")
+		if ti.Underlying != nil { // Underlying is the value type for map
+			sb.WriteString(ti.Underlying.GoTypeString())
+		} else {
+			sb.WriteString("interface{}") // Fallback for unknown value type
 		}
+	case Primitive, Struct, Interface, Chan, Func:
+		// For named types (including primitives), use the simple name.
+		// Import path handling (e.g., adding package alias) is the responsibility of the code generator.
 		sb.WriteString(ti.Name)
-	} else if ti.Underlying != nil { // For anonymous composite types, recurse to the underlying type
-		// This handles cases like `[]*User` where `[]` is the outer TypeInfo,
-		// and `*User` is its Underlying. The Name for the outer TypeInfo (Slice) would be empty.
-		sb.WriteString(ti.Underlying.ToTypeString())
-	} else {
-		// Fallback for unhandled or truly anonymous types without an underlying
-		// This case should ideally not be hit if all types are properly handled.
-		sb.WriteString(ti.Kind.String())
+	default:
+		sb.WriteString("unknown") // Fallback for unhandled kinds
 	}
 
 	return sb.String()
@@ -164,7 +165,14 @@ type MethodInfo struct {
 	Name string
 
 	// Signature is the signature of the method.
-	Signature *types.Signature
+	Signature *SignatureInfo // Changed to use SignatureInfo
+}
+
+// SignatureInfo represents the detailed information of a function or method signature.
+type SignatureInfo struct {
+	Params     []*TypeInfo
+	Results    []*TypeInfo
+	IsVariadic bool
 }
 
 func (k TypeKind) String() string {

@@ -355,7 +355,7 @@ func TestComplexTypeResolution(t *testing.T) {
 			}
 
 			// Validate reconstructed type string
-			reconstructedType := ti.ToTypeString()
+			reconstructedType := ti.GoTypeString()
 			if reconstructedType != tt.expectedType {
 				t.Errorf("ToTypeString mismatch for %s:\nExpected: %s\nGot:      %s", tt.name, tt.expectedType, reconstructedType)
 			}
