@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"go/types" // Import go/types for type checking
 	"log/slog"
 	"strings"
 
@@ -41,6 +42,11 @@ func NewGenerator(walker *analyzer.PackageWalker, ruleSet *config.RuleSet) *Gene
 
 // Generate produces the Go source code for the conversions.
 func (g *Generator) Generate() ([]byte, error) {
+	// Discover tasks before generating code
+	if err := g.DiscoverTasks(); err != nil {
+		return nil, fmt.Errorf("failed to discover conversion tasks: %w", err)
+	}
+
 	// Reset buffer
 	g.buf.Reset()
 
@@ -297,9 +303,76 @@ func (g *Generator) AddTask(sourceType, targetType *model.Type) {
 
 // DiscoverTasks discovers conversion tasks from analyzer and rule set.
 func (g *Generator) DiscoverTasks() error {
-	// TODO: Implement task discovery from analyzer and rule set
-	// This will be part of the full integration in phase 5
-	slog.Debug("DiscoverTasks not yet implemented - placeholder")
+	slog.Debug("Discovering conversion tasks...")
+
+	// 1. Get package pairing rules
+	packagePairs := g.ruleSet.PackagePairs
+	if len(packagePairs) == 0 {
+		slog.Warn("No package pairing rules found. No conversion tasks will be generated.")
+		return nil
+	}
+
+	// 2. Iterate through all loaded packages in the walker
+	for _, pkg := range g.walker.GetLoadedPackages() {
+		// We only care about packages that are part of a pairing rule (as a source package)
+		targetPkgPath, isSourcePkg := packagePairs[pkg.PkgPath]
+		if !isSourcePkg {
+			continue
+		}
+
+		slog.Debug("Processing source package for tasks", "sourcePkg", pkg.PkgPath, "targetPkg", targetPkgPath)
+
+		// Iterate through all named types in the source package
+		for _, typeName := range pkg.Types.Scope().Names() {
+			obj := pkg.Types.Scope().Lookup(typeName)
+			if obj == nil || !obj.Exported() {
+				continue // Skip unexported or non-existent objects
+			}
+
+			// Only process actual types (not functions, variables, etc.)
+			if _, ok := obj.(*types.TypeName); !ok {
+				continue
+			}
+
+			sourceFQN := pkg.PkgPath + "." + typeName
+			sourceTypeInfo, err := g.walker.FindTypeByFQN(sourceFQN)
+			if err != nil {
+				slog.Error("Failed to find source type info", "fqn", sourceFQN, "error", err)
+				continue
+			}
+
+			// Convert analyzer.TypeInfo to model.Type
+			sourceModelType := g.convertAnalyzerTypeToModel(sourceTypeInfo)
+			if sourceModelType == nil {
+				slog.Error("Failed to convert source analyzer.TypeInfo to model.Type", "fqn", sourceFQN)
+				continue
+			}
+
+			// Predict target type name based on naming rules
+			predictedTargetTypeName := g.applyNamingRules(sourceTypeInfo.Name)
+			targetFQN := targetPkgPath + "." + predictedTargetTypeName
+
+			targetTypeInfo, err := g.walker.FindTypeByFQN(targetFQN)
+			if err != nil {
+				slog.Debug("Target type not found for source type", "sourceFQN", sourceFQN, "targetFQN", targetFQN, "error", err)
+				continue // Target type might not exist, skip this conversion task
+			}
+
+			targetModelType := g.convertAnalyzerTypeToModel(targetTypeInfo)
+			if targetModelType == nil {
+				slog.Error("Failed to convert target analyzer.TypeInfo to model.Type", "fqn", targetFQN)
+				continue
+			}
+
+			// Add conversion task (Source -> Target)
+			g.AddTask(sourceModelType, targetModelType)
+			slog.Debug("Added conversion task", "source", sourceFQN, "target", targetFQN)
+
+			// TODO: Add reverse conversion task (Target -> Source) based on rules if needed
+		}
+	}
+
+	slog.Debug("Finished discovering conversion tasks", "totalTasks", len(g.tasks))
 	return nil
 }
 

@@ -10,6 +10,8 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
+var _ *TypeInfo // Dummy reference to ensure TypeInfo is recognized within the package
+
 const abgenDirectivePrefix = "//go:abgen:"
 
 // PackageWalker is responsible for walking through Go packages,

@@ -4,8 +4,8 @@ import (
 	"testing"
 )
 
-func TestParser_ParseNamingRules(t *testing.T) {
-	parser := NewParser()
+func TestRuleParser_ParseNamingRules(t *testing.T) {
+	parser := NewRuleParser()
 	
 	// Test naming directives
 	directives := []string{
@@ -38,8 +38,8 @@ func TestParser_ParseNamingRules(t *testing.T) {
 	}
 }
 
-func TestParser_ParseBehaviorRules(t *testing.T) {
-	parser := NewParser()
+func TestRuleParser_ParseBehaviorRules(t *testing.T) {
+	parser := NewRuleParser()
 	
 	// Test behavior directives
 	err := parser.Parse("convert:alias:generate=true")
@@ -54,8 +54,8 @@ func TestParser_ParseBehaviorRules(t *testing.T) {
 	}
 }
 
-func TestParser_ParseIgnoreRules(t *testing.T) {
-	parser := NewParser()
+func TestRuleParser_ParseIgnoreRules(t *testing.T) {
+	parser := NewRuleParser()
 	
 	// Test ignore directive
 	err := parser.Parse("convert:ignore=UserEntity#Password,Salt")
@@ -78,8 +78,8 @@ func TestParser_ParseIgnoreRules(t *testing.T) {
 	}
 }
 
-func TestParser_ParseRemapRules(t *testing.T) {
-	parser := NewParser()
+func TestRuleParser_ParseRemapRules(t *testing.T) {
+	parser := NewRuleParser()
 	
 	// Test remap directive
 	err := parser.Parse("convert:remap=A#TypeIDs:Type.ID")
@@ -96,13 +96,13 @@ func TestParser_ParseRemapRules(t *testing.T) {
 		if targetField, hasTypeIDs := remapped["TypeIDs"]; !hasTypeIDs {
 			t.Error("Expected TypeIDs to be remapped")
 		} else if targetField != "Type.ID" {
-			t.Errorf("Expected TypeIDs to be remapped to 'Type.ID', got '%s'", targetField)
+			t.Errorf("Expected TypeIDs to be remap to 'Type.ID', got '%s'", targetField)
 		}
 	}
 }
 
-func TestParser_ParsePackagePath(t *testing.T) {
-	parser := NewParser()
+func TestRuleParser_ParsePackagePath(t *testing.T) {
+	parser := NewRuleParser()
 	
 	// Test package path directive
 	err := parser.Parse("package:path=github.com/my/project/ent,alias=ent_source")
@@ -123,8 +123,8 @@ func TestParser_ParsePackagePath(t *testing.T) {
 	// In a real scenario, you'd have more comprehensive testing
 }
 
-func TestParser_RuleOverride(t *testing.T) {
-	parser := NewParser()
+func TestRuleParser_RuleOverride(t *testing.T) {
+	parser := NewRuleParser()
 	
 	// Set initial value
 	err := parser.Parse("convert:source:suffix=Ent")
@@ -145,8 +145,8 @@ func TestParser_RuleOverride(t *testing.T) {
 	}
 }
 
-func TestParser_ParseDirectives(t *testing.T) {
-	parser := NewParser()
+func TestRuleParser_ParseDirectives(t *testing.T) {
+	parser := NewRuleParser()
 	
 	directives := []string{
 		"convert:source:suffix=Ent",
@@ -172,8 +172,8 @@ func TestParser_ParseDirectives(t *testing.T) {
 	}
 }
 
-func TestParser_ParseWithPrefix(t *testing.T) {
-	parser := NewParser()
+func TestRuleParser_ParseWithPrefix(t *testing.T) {
+	parser := NewRuleParser()
 	
 	// Test with full prefix
 	err := parser.Parse("//go:abgen:convert:source:suffix=Ent")
@@ -188,10 +188,10 @@ func TestParser_ParseWithPrefix(t *testing.T) {
 	}
 }
 
-func TestNewParser(t *testing.T) {
-	parser := NewParser()
+func TestNewRuleParser(t *testing.T) {
+	parser := NewRuleParser()
 	if parser == nil {
-		t.Fatal("NewParser() returned nil")
+		t.Fatal("NewRuleParser() returned nil")
 	}
 	
 	ruleSet := parser.GetRuleSet()

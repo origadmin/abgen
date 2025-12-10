@@ -2,30 +2,81 @@
 package config
 
 import (
+	"fmt"
 	"strings"
+
+	"golang.org/x/tools/go/packages"
 )
 
-// Parser holds the state for the parsing process.
-type Parser struct {
+// DirectiveParser is responsible for discovering abgen directives from Go source files.
+type DirectiveParser struct{}
+
+// NewDirectiveParser creates a new instance of DirectiveParser.
+func NewDirectiveParser() *DirectiveParser {
+	return &DirectiveParser{}
+}
+
+// DiscoverDirectives scans the provided package for //go:abgen: comments and extracts them.
+func (dp *DirectiveParser) DiscoverDirectives(pkg *packages.Package) ([]string, error) {
+	var directives []string
+	for _, file := range pkg.Syntax {
+		for _, commentGroup := range file.Comments {
+			for _, comment := range commentGroup.List {
+				if strings.HasPrefix(comment.Text, "//go:abgen:") {
+					directives = append(directives, strings.TrimSpace(comment.Text))
+				}
+			}
+		}
+	}
+	if len(directives) == 0 {
+		return nil, fmt.Errorf("no abgen directives found in package %s", pkg.ID)
+	}
+	return directives, nil
+}
+
+// ExtractDependencies extracts package import paths from directives.
+// This method is a simplified placeholder and might need more sophisticated parsing
+// depending on the directive format for dependencies.
+func (dp *DirectiveParser) ExtractDependencies(directives []string) []string {
+	// This is a simplified implementation. A more robust solution would parse
+	// specific directive types that declare dependencies.
+	// For now, we'll look for 'package:path' directives.
+	var dependencies []string
+	for _, d := range directives {
+		if strings.HasPrefix(d, "//go:abgen:package:path=") {
+			// Example: //go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/ent,alias=ent
+			parts := strings.SplitN(d, "=", 2)
+			if len(parts) == 2 {
+				pathAndAlias := strings.SplitN(parts[1], ",", 2)
+				dependencies = append(dependencies, pathAndAlias[0])
+			}
+		}
+		// Add other directive types that might declare dependencies if needed
+	}
+	return dependencies
+}
+
+// RuleParser holds the state for the parsing process of abgen rules.
+type RuleParser struct {
 	ruleSet        *RuleSet
 	packageAliases map[string]string // Maps alias to full package path
 }
 
-// NewParser creates a new parser instance.
-func NewParser() *Parser {
-	return &Parser{
+// NewRuleParser creates a new RuleParser instance.
+func NewRuleParser() *RuleParser {
+	return &RuleParser{
 		ruleSet:        NewRuleSet(),
 		packageAliases: make(map[string]string),
 	}
 }
 
 // Parse parses a single directive string and updates the ruleset.
-func (p *Parser) Parse(directive string) error {
+func (rp *RuleParser) Parse(directive string) error {
 	// Remove the //go:abgen: prefix if present
 	if strings.HasPrefix(directive, "//go:abgen:") {
 		directive = strings.TrimPrefix(directive, "//go:abgen:")
 	}
-	
+
 	parts := strings.Split(directive, "=")
 	key := parts[0]
 	var value string
@@ -36,35 +87,35 @@ func (p *Parser) Parse(directive string) error {
 	// Parse based on key
 	switch {
 	case strings.HasPrefix(key, "package:path"):
-		p.parsePackagePath(value)
+		rp.parsePackagePath(value)
 	case strings.HasPrefix(key, "pair:packages"):
-		p.parsePackagePairs(value)
+		rp.parsePackagePairs(value)
 	case strings.HasPrefix(key, "convert:source:suffix"):
-		p.ruleSet.NamingRules.SourceSuffix = value
+		rp.ruleSet.NamingRules.SourceSuffix = value
 	case strings.HasPrefix(key, "convert:target:suffix"):
-		p.ruleSet.NamingRules.TargetSuffix = value
+		rp.ruleSet.NamingRules.TargetSuffix = value
 	case strings.HasPrefix(key, "convert:source:prefix"):
-		p.ruleSet.NamingRules.SourcePrefix = value
+		rp.ruleSet.NamingRules.SourcePrefix = value
 	case strings.HasPrefix(key, "convert:target:prefix"):
-		p.ruleSet.NamingRules.TargetPrefix = value
+		rp.ruleSet.NamingRules.TargetPrefix = value
 	case strings.HasPrefix(key, "convert:direction"):
 		// This requires type context, simplified for now
-		p.ruleSet.BehaviorRules.Direction["*"] = value
+		rp.ruleSet.BehaviorRules.Direction["*"] = value
 	case strings.HasPrefix(key, "convert:alias:generate"):
-		p.ruleSet.BehaviorRules.GenerateAlias = (value == "true")
+		rp.ruleSet.BehaviorRules.GenerateAlias = (value == "true")
 	case strings.HasPrefix(key, "convert:ignore"):
-		p.parseIgnoreRule(value)
+		rp.parseIgnoreRule(value)
 	case strings.HasPrefix(key, "convert:remap"):
-		p.parseRemapRule(value)
+		rp.parseRemapRule(value)
 	}
-	
+
 	return nil
 }
 
 // ParseDirectives parses multiple directives.
-func (p *Parser) ParseDirectives(directives []string) error {
+func (rp *RuleParser) ParseDirectives(directives []string) error {
 	for _, directive := range directives {
-		if err := p.Parse(directive); err != nil {
+		if err := rp.Parse(directive); err != nil {
 			return err
 		}
 	}
@@ -72,12 +123,12 @@ func (p *Parser) ParseDirectives(directives []string) error {
 }
 
 // GetRuleSet returns the final, consolidated RuleSet.
-func (p *Parser) GetRuleSet() *RuleSet {
-	return p.ruleSet
+func (rp *RuleParser) GetRuleSet() *RuleSet {
+	return rp.ruleSet
 }
 
 // parsePackagePath parses package path directives.
-func (p *Parser) parsePackagePath(value string) {
+func (rp *RuleParser) parsePackagePath(value string) {
 	pathAliasParts := strings.Split(value, ",")
 	path := pathAliasParts[0]
 	alias := ""
@@ -86,24 +137,24 @@ func (p *Parser) parsePackagePath(value string) {
 	} else {
 		alias = path[strings.LastIndex(path, "/")+1:]
 	}
-	p.packageAliases[alias] = path
+	rp.packageAliases[alias] = path
 }
 
 // parsePackagePairs parses package pairing directives.
-func (p *Parser) parsePackagePairs(value string) {
+func (rp *RuleParser) parsePackagePairs(value string) {
 	pair := strings.Split(value, ",")
 	if len(pair) == 2 {
 		sourceAlias, targetAlias := pair[0], pair[1]
-		if sourcePath, ok := p.packageAliases[sourceAlias]; ok {
-			if targetPath, ok := p.packageAliases[targetAlias]; ok {
-				p.ruleSet.PackagePairs[sourcePath] = targetPath
+		if sourcePath, ok := rp.packageAliases[sourceAlias]; ok {
+			if targetPath, ok := rp.packageAliases[targetAlias]; ok {
+				rp.ruleSet.PackagePairs[sourcePath] = targetPath
 			}
 		}
 	}
 }
 
 // parseIgnoreRule parses field ignore rules.
-func (p *Parser) parseIgnoreRule(value string) {
+func (rp *RuleParser) parseIgnoreRule(value string) {
 	parts := strings.Split(value, "#")
 	if len(parts) != 2 {
 		return
@@ -111,16 +162,16 @@ func (p *Parser) parseIgnoreRule(value string) {
 	typeName, fieldStr := parts[0], parts[1]
 	fields := strings.Split(fieldStr, ",")
 
-	if _, ok := p.ruleSet.FieldRules.Ignore[typeName]; !ok {
-		p.ruleSet.FieldRules.Ignore[typeName] = make(map[string]struct{})
+	if _, ok := rp.ruleSet.FieldRules.Ignore[typeName]; !ok {
+		rp.ruleSet.FieldRules.Ignore[typeName] = make(map[string]struct{})
 	}
 	for _, field := range fields {
-		p.ruleSet.FieldRules.Ignore[typeName][field] = struct{}{}
+		rp.ruleSet.FieldRules.Ignore[typeName][field] = struct{}{}
 	}
 }
 
 // parseRemapRule parses field remap rules.
-func (p *Parser) parseRemapRule(value string) {
+func (rp *RuleParser) parseRemapRule(value string) {
 	parts := strings.Split(value, "#")
 	if len(parts) != 2 {
 		return
@@ -133,8 +184,8 @@ func (p *Parser) parseRemapRule(value string) {
 	}
 	sourceField, targetField := remapParts[0], remapParts[1]
 
-	if _, ok := p.ruleSet.FieldRules.Remap[typeName]; !ok {
-		p.ruleSet.FieldRules.Remap[typeName] = make(map[string]string)
+	if _, ok := rp.ruleSet.FieldRules.Remap[typeName]; !ok {
+		rp.ruleSet.FieldRules.Remap[typeName] = make(map[string]string)
 	}
-	p.ruleSet.FieldRules.Remap[typeName][sourceField] = targetField
+	rp.ruleSet.FieldRules.Remap[typeName][sourceField] = targetField
 }
