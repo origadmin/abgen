@@ -2,17 +2,28 @@
 // It contains the data structures that hold parsed directive information.
 package config
 
+// GenerationContext holds information about the target package for generation.
+type GenerationContext struct {
+	// PackageName is the name of the package for the generated file (e.g., "users").
+	PackageName string
+	// PackagePath is the import path of the package (e.g., "github.com/my/project/users").
+	PackagePath string
+}
+
 // RuleSet holds all the rules parsed from directives.
 type RuleSet struct {
+	// Context holds information about the package where code is being generated.
+	Context GenerationContext
+
 	// PackagePairs maps source package paths to target package paths.
 	PackagePairs map[string]string
-	
+
 	// NamingRules defines how to name types and functions.
 	NamingRules NamingRuleSet
-	
+
 	// BehaviorRules defines conversion behaviors.
 	BehaviorRules BehaviorRuleSet
-	
+
 	// FieldRules defines field-specific rules.
 	FieldRules FieldRuleSet
 }
@@ -20,6 +31,7 @@ type RuleSet struct {
 // NewRuleSet creates a new empty RuleSet.
 func NewRuleSet() *RuleSet {
 	return &RuleSet{
+		Context:      GenerationContext{},
 		PackagePairs: make(map[string]string),
 		NamingRules: NamingRuleSet{
 			SourcePrefix: "",

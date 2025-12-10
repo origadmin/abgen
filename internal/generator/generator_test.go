@@ -164,7 +164,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 
 			// Step 6: Parse directives into a RuleSet
 			ruleParser := config.NewRuleParser()
-			err = ruleParser.ParseDirectives(directives) // Corrected: Call ParseDirectives
+			err = ruleParser.ParseDirectives(directives, initialPkg) // Corrected: Call ParseDirectives with package context
 			if err != nil {
 				t.Fatalf("Failed to parse directives into RuleSet for %s: %v", tc.directivePath, err)
 			}

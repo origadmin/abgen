@@ -281,16 +281,20 @@ func (g *Generator) getSimpleTypeName(t *model.Type) string {
 	return name
 }
 
-// getPackageName returns the current package name.
+// getPackageName returns the current package name from the rule set context.
 func (g *Generator) getPackageName() string {
-	// This should be derived from the context package in the rule set
-	// For now, return a default
+	if g.ruleSet != nil && g.ruleSet.Context.PackageName != "" {
+		return g.ruleSet.Context.PackageName
+	}
+	// Fallback for safety, though context should always be set.
 	return "generated"
 }
 
-// isCurrentPackage checks if the import path is the current package.
+// isCurrentPackage checks if the import path is the current package's path.
 func (g *Generator) isCurrentPackage(importPath string) bool {
-	// TODO: Get this from the rule set context
+	if g.ruleSet != nil && g.ruleSet.Context.PackagePath != "" {
+		return g.ruleSet.Context.PackagePath == importPath
+	}
 	return false
 }
 
@@ -347,8 +351,9 @@ func (g *Generator) DiscoverTasks() error {
 	packagePairs := g.ruleSet.PackagePairs
 	slog.Debug("RuleSet PackagePairs", "pairs", packagePairs)
 	if len(packagePairs) == 0 {
-		slog.Warn("No package pairing rules found. No conversion tasks will be generated.")
-		return nil
+		// This is a critical failure. If no pairs are defined, no tasks can be generated.
+		// Return an error to make the failure explicit in tests and command-line runs.
+		return fmt.Errorf("no package pairing rules found in RuleSet. Check directives for 'pair:packages'")
 	}
 
 	for _, pkg := range g.walker.GetLoadedPackages() {

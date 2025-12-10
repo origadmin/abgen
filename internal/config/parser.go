@@ -77,43 +77,53 @@ func (rp *RuleParser) Parse(directive string) error {
 		directive = strings.TrimPrefix(directive, "//go:abgen:")
 	}
 
-	parts := strings.Split(directive, "=")
+	parts := strings.SplitN(directive, "=", 2) // Use SplitN for robustness
 	key := parts[0]
 	var value string
 	if len(parts) > 1 {
 		value = strings.Trim(parts[1], `"`)
 	}
 
-	// Parse based on key
-	switch {
-	case strings.HasPrefix(key, "package:path"):
+	// Parse based on the exact key
+	switch key {
+	case "package:path":
 		rp.parsePackagePath(value)
-	case strings.HasPrefix(key, "pair:packages"):
+	case "pair:packages":
 		rp.parsePackagePairs(value)
-	case strings.HasPrefix(key, "convert:source:suffix"):
+	case "convert:source:suffix":
 		rp.ruleSet.NamingRules.SourceSuffix = value
-	case strings.HasPrefix(key, "convert:target:suffix"):
+	case "convert:target:suffix":
 		rp.ruleSet.NamingRules.TargetSuffix = value
-	case strings.HasPrefix(key, "convert:source:prefix"):
+	case "convert:source:prefix":
 		rp.ruleSet.NamingRules.SourcePrefix = value
-	case strings.HasPrefix(key, "convert:target:prefix"):
+	case "convert:target:prefix":
 		rp.ruleSet.NamingRules.TargetPrefix = value
-	case strings.HasPrefix(key, "convert:direction"):
+	case "convert:direction":
 		// This requires type context, simplified for now
 		rp.ruleSet.BehaviorRules.Direction["*"] = value
-	case strings.HasPrefix(key, "convert:alias:generate"):
+	case "convert:alias:generate":
 		rp.ruleSet.BehaviorRules.GenerateAlias = (value == "true")
-	case strings.HasPrefix(key, "convert:ignore"):
+	case "convert:ignore":
 		rp.parseIgnoreRule(value)
-	case strings.HasPrefix(key, "convert:remap"):
+	case "convert:remap":
 		rp.parseRemapRule(value)
+	case "convert":
+		// This directive is currently unhandled. It seems to be a remnant of a
+		// previous design. The current logic relies on package pairs and automatic
+		// type discovery. We will ignore it for now.
 	}
 
 	return nil
 }
 
-// ParseDirectives parses multiple directives.
-func (rp *RuleParser) ParseDirectives(directives []string) error {
+// ParseDirectives parses multiple directives and sets the generation context.
+func (rp *RuleParser) ParseDirectives(directives []string, pkg *packages.Package) error {
+	if pkg == nil {
+		return fmt.Errorf("package context cannot be nil")
+	}
+	rp.ruleSet.Context.PackageName = pkg.Name
+	rp.ruleSet.Context.PackagePath = pkg.ID
+
 	for _, directive := range directives {
 		if err := rp.Parse(directive); err != nil {
 			return err
