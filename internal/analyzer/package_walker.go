@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/types"
 	"log/slog"
+	"os"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -21,6 +22,8 @@ type PackageWalker struct {
 
 // NewPackageWalker creates a new PackageWalker.
 func NewPackageWalker() *PackageWalker {
+	// Temporarily set slog to Debug level for testing
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	return &PackageWalker{
 		typeCache:   make(map[types.Type]*TypeInfo),
 		failedLoads: make(map[string]bool),
@@ -173,9 +176,28 @@ func (w *PackageWalker) findTypeInLoadedPkgs(fqn string) (*TypeInfo, error) {
 					Original:   tn,
 				}
 				// The underlying type of an alias is the type it points to.
-				info.Underlying = w.resolveType(tn.Type())
-				// The Kind of an alias is determined by its underlying type.
-				info.Kind = info.Underlying.Kind
+				// For 'type A = B', tn.Type() returns *types.Alias.
+				// We need to unwrap that *types.Alias to get B.
+				resolvedUnderlyingType := tn.Type()
+				if aliasType, ok := resolvedUnderlyingType.(*types.Alias); ok {
+					resolvedUnderlyingType = aliasType.Underlying()
+				}
+				underlyingInfo := w.resolveType(resolvedUnderlyingType)
+
+				// For aliases, we want to inherit the full structure of the underlying type.
+				// This includes its Underlying, Kind, KeyType, etc.
+				// For aliases, we want to point to the element type for composite types
+			// This ensures proper type hierarchy for GoTypeString
+			if elem := getElementOrValueType(underlyingInfo); elem != nil {
+				info.Underlying = elem
+			} else {
+				info.Underlying = underlyingInfo
+			}
+				info.Kind = underlyingInfo.Kind
+				info.KeyType = underlyingInfo.KeyType
+				info.ArrayLen = underlyingInfo.ArrayLen
+				info.Fields = underlyingInfo.Fields
+				
 				return info, nil
 			}
 
@@ -240,91 +262,540 @@ func (w *PackageWalker) GetFailedPackagesCount() int {
 	return len(w.failedLoads)
 }
 
-// resolveType is the recursive worker for building the TypeInfo graph.
-// It should not be called directly for top-level types that might be aliases.
-func (w *PackageWalker) resolveType(typ types.Type) *TypeInfo {
-	if typ == nil {
+// Helper function to get the "element type" from a TypeInfo if it's a composite
+func getElementOrValueType(ti *TypeInfo) *TypeInfo {
+	if ti == nil {
+		slog.Debug("getElementOrValueType", "input_ti", "nil", "result", "nil")
 		return nil
 	}
-	if cached, exists := w.typeCache[typ]; exists {
-		return cached
-	}
-
-	info := &TypeInfo{}
-	w.typeCache[typ] = info
-
-	switch t := typ.(type) {
-	case *types.Named:
-		obj := t.Obj()
-		info.Name = obj.Name()
-		if obj.Pkg() != nil {
-			info.ImportPath = obj.Pkg().Path()
-		}
-		info.IsAlias = obj.IsAlias()
-		info.Original = obj
-
-		underlyingType := t.Underlying()
-		if info.IsAlias {
-			// For aliases, the underlying type should be properly resolved
-			info.Underlying = w.resolveType(underlyingType)
-			info.Kind = info.Underlying.Kind
-		} else {
-			// For defined types, also resolve the underlying type
-			info.Underlying = w.resolveType(underlyingType)
-			info.Kind = info.Underlying.Kind
-		}
-
-		if s, ok := underlyingType.(*types.Struct); ok {
-			info.Fields = w.parseFields(s)
-		}
-
-	case *types.Pointer:
-		info.Kind = Pointer
-		info.Underlying = w.resolveType(t.Elem())
-		info.Name = "*" + info.Underlying.Name
-
-	case *types.Slice:
-		info.Kind = Slice
-		info.Underlying = w.resolveType(t.Elem())
-		info.Name = "[]" + info.Underlying.Name
-
-	case *types.Array:
-		info.Kind = Array
-		info.ArrayLen = int(t.Len())
-		info.Underlying = w.resolveType(t.Elem())
-		info.Name = fmt.Sprintf("[%d]%s", info.ArrayLen, info.Underlying.Name)
-
-	case *types.Map:
-		info.Kind = Map
-		info.KeyType = w.resolveType(t.Key())
-		info.Underlying = w.resolveType(t.Elem()) // Value type
-		info.Name = fmt.Sprintf("map[%s]%s", info.KeyType.Name, info.Underlying.Name)
-
-	case *types.Struct:
-		info.Kind = Struct
-		info.Fields = w.parseFields(t)
-
-	case *types.Basic:
-		info.Kind = Primitive
-		info.Name = t.Name()
-
-	case *types.Interface:
-		info.Kind = Interface
-
-	case *types.Chan:
-		info.Kind = Chan
-
-	case *types.Signature:
-		info.Kind = Func
-
+	switch ti.Kind {
+	case Pointer, Slice, Array:
+		slog.Debug("getElementOrValueType", "input_ti", ti.Name, "input_kind", ti.Kind, "result_ti", ti.Underlying)
+		return ti.Underlying // This is the element type
+	case Map:
+		slog.Debug("getElementOrValueType", "input_ti", ti.Name, "input_kind", ti.Kind, "result_ti", ti.Underlying)
+		return ti.Underlying // This is the value type
 	default:
-		slog.Warn("unhandled type in resolveType", "type", t.String())
-		info.Kind = Unknown
-		info.Name = t.String()
+		slog.Debug("getElementOrValueType", "input_ti", ti.Name, "input_kind", ti.Kind, "result_ti", "nil (not composite)")
+		return nil // Not a composite with a direct element
+	}
+}
+
+// resolveType is the recursive worker for building the TypeInfo graph.
+
+// It should not be called directly for top-level types that might be aliases.
+
+func (w *PackageWalker) resolveType(typ types.Type) *TypeInfo {
+
+	if typ == nil {
+
+		return nil
+
 	}
 
-	return info
+	if cached, exists := w.typeCache[typ]; exists {
+
+		slog.Debug("resolveType (cached)", "typ", typ.String(), "info", cached)
+
+		return cached
+
+	}
+
+
+
+		info := &TypeInfo{}
+
+
+
+		slog.Debug("resolveType (new)", "typ", typ.String())
+
+
+
+	
+
+
+
+		switch t := typ.(type) {
+
+
+
+						case *types.Alias: // Handles 'type T = U' declarations
+
+
+
+							obj := t.Obj()
+
+
+
+							info.Name = obj.Name()
+
+
+
+							if obj.Pkg() != nil {
+
+
+
+								info.ImportPath = obj.Pkg().Path()
+
+
+
+							}
+
+
+
+							info.IsAlias = true
+
+
+
+							info.Original = obj
+
+
+
+	
+
+
+
+							underlyingType := t.Underlying()
+
+
+
+							// Directly unwrap composite underlying types for aliases
+
+
+
+							if ptr, ok := underlyingType.(*types.Pointer); ok {
+
+
+
+								info.Kind = Pointer
+
+
+
+								info.Underlying = w.resolveType(ptr.Elem()) // Alias points to element of the pointer
+
+
+
+							} else if slice, ok := underlyingType.(*types.Slice); ok {
+
+
+
+								info.Kind = Slice
+
+
+
+								info.Underlying = w.resolveType(slice.Elem()) // Alias points to element of the slice
+
+
+
+							} else if array, ok := underlyingType.(*types.Array); ok {
+
+
+
+								info.Kind = Array
+
+
+
+								info.ArrayLen = int(array.Len())
+
+
+
+								info.Underlying = w.resolveType(array.Elem()) // Alias points to element of the array
+
+
+
+							} else if mp, ok := underlyingType.(*types.Map); ok {
+
+
+
+								info.Kind = Map
+
+
+
+								info.KeyType = w.resolveType(mp.Key())
+
+
+
+								info.Underlying = w.resolveType(mp.Elem()) // Alias points to value of the map
+
+
+
+							} else {
+
+
+
+								// Not a composite underlying type (e.g., alias to struct, basic)
+
+
+
+								underlyingInfo := w.resolveType(underlyingType)
+
+
+
+								info.Kind = underlyingInfo.Kind
+
+
+
+								info.Underlying = underlyingInfo
+
+
+
+								info.KeyType = underlyingInfo.KeyType
+
+
+
+								info.ArrayLen = underlyingInfo.ArrayLen
+
+
+
+								info.Fields = underlyingInfo.Fields
+
+
+
+							}
+
+
+
+							slog.Debug("resolveType (*types.Alias)", "typ", typ.String(), "info", info)
+
+
+
+				
+
+
+
+					case *types.Named: // Handles 'type T U' declarations
+
+
+
+						slog.Debug("resolveType (*types.Named)", "typ", typ.String(), "obj.Name", t.Obj().Name(), "t.Underlying() type", fmt.Sprintf("%T", t.Underlying()), "t.Underlying() value", t.Underlying().String())
+
+
+
+						obj := t.Obj()
+
+
+
+						info.Name = obj.Name()
+
+
+
+						if obj.Pkg() != nil {
+
+
+
+							info.ImportPath = obj.Pkg().Path()
+
+
+
+						}
+
+
+
+						info.IsAlias = false // Explicitly false for type definitions
+
+
+
+						info.Original = obj
+
+
+
+	
+
+
+
+						underlyingInfo := w.resolveType(t.Underlying()) // This is TypeInfo(U)
+
+
+
+	
+
+
+
+						info.Kind = underlyingInfo.Kind
+
+
+
+	
+
+
+
+				        // For defined types, Underlying points to the resolved element/value type of U (if U is composite),
+
+
+
+				        // or to U itself if U is a struct/primitive/etc.
+
+
+
+						if elem := getElementOrValueType(underlyingInfo); elem != nil {
+
+
+
+							info.Underlying = elem
+
+
+
+						} else {
+
+
+
+							info.Underlying = underlyingInfo
+
+
+
+						}
+
+
+
+	
+
+
+
+						info.KeyType = underlyingInfo.KeyType
+
+
+
+						info.ArrayLen = underlyingInfo.ArrayLen
+
+
+
+						info.Fields = underlyingInfo.Fields
+
+
+
+						slog.Debug("resolveType (*types.Named)", "typ", typ.String(), "info", info)
+
+
+
+			case *types.Pointer:
+
+
+
+				info.Kind = Pointer
+
+
+
+				info.Underlying = w.resolveType(t.Elem())
+
+
+
+				// info.Name is intentionally left empty for anonymous composite types
+
+
+
+				slog.Debug("resolveType (*types.Pointer)", "typ", typ.String(), "info", info)
+
+
+
+	
+
+
+
+			case *types.Slice:
+
+
+
+				info.Kind = Slice
+
+
+
+				info.Underlying = w.resolveType(t.Elem())
+
+
+
+				// info.Name is intentionally left empty for anonymous composite types
+
+
+
+				slog.Debug("resolveType (*types.Slice)", "typ", typ.String(), "info", info)
+
+
+
+	
+
+
+
+			case *types.Array:
+
+
+
+				info.Kind = Array
+
+
+
+				info.ArrayLen = int(t.Len())
+
+
+
+				info.Underlying = w.resolveType(t.Elem())
+
+
+
+				// info.Name is intentionally left empty for anonymous composite types
+
+
+
+				slog.Debug("resolveType (*types.Array)", "typ", typ.String(), "info", info)
+
+
+
+	
+
+
+
+			case *types.Map:
+
+
+
+				info.Kind = Map
+
+
+
+				info.KeyType = w.resolveType(t.Key())
+
+
+
+				info.Underlying = w.resolveType(t.Elem()) // Value type
+
+
+
+				// info.Name is intentionally left empty for anonymous composite types
+
+
+
+				slog.Debug("resolveType (*types.Map)", "typ", typ.String(), "info", info)
+
+
+
+		case *types.Struct:
+
+
+
+			info.Kind = Struct
+
+
+
+			info.Fields = w.parseFields(t)
+
+
+
+			slog.Debug("resolveType (*types.Struct)", "typ", typ.String(), "info", info)
+
+
+
+	
+
+
+
+		case *types.Basic:
+
+
+
+			info.Kind = Primitive
+
+
+
+			info.Name = t.Name()
+
+
+
+			slog.Debug("resolveType (*types.Basic)", "typ", typ.String(), "info", info)
+
+
+
+	
+
+
+
+		case *types.Interface:
+
+
+
+			info.Kind = Interface
+
+
+
+			slog.Debug("resolveType (*types.Interface)", "typ", typ.String(), "info", info)
+
+
+
+	
+
+
+
+		case *types.Chan:
+
+
+
+			info.Kind = Chan
+
+
+
+			slog.Debug("resolveType (*types.Chan)", "typ", typ.String(), "info", info)
+
+
+
+	
+
+
+
+		case *types.Signature:
+
+
+
+			info.Kind = Func
+
+
+
+			slog.Debug("resolveType (*types.Signature)", "typ", typ.String(), "info", info)
+
+
+
+	
+
+
+
+		default:
+
+
+
+			slog.Warn("unhandled type in resolveType", "type", fmt.Sprintf("%T", t), "value", t.String())
+
+
+
+			info.Kind = Unknown
+
+
+
+			info.Name = t.String()
+
+
+
+			slog.Debug("resolveType (default)", "typ", typ.String(), "info", info)
+
+
+
+		}
+
+
+
+	
+
+
+
+		// Insert into cache only after info is fully populated
+
+
+
+		w.typeCache[typ] = info
+
+
+
+		return info
+
 }
+
+
 
 // parseFields parses the fields of a *types.Struct.
 func (w *PackageWalker) parseFields(s *types.Struct) []*FieldInfo {

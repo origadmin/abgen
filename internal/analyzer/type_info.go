@@ -3,6 +3,7 @@ package analyzer
 import (
 	"fmt"
 	"go/types"
+	"log/slog"
 	"strings"
 )
 
@@ -90,12 +91,33 @@ func (ti *TypeInfo) FQN() string {
 }
 
 // GoTypeString reconstructs the Go type string from the TypeInfo, suitable for code generation.
+// For named types (both aliases and defined types), it constructs the type string based on the Kind.
+// For anonymous types, it constructs the type string directly.
 // It does not include import paths; the generator is responsible for managing imports and aliases.
 func (ti *TypeInfo) GoTypeString() string {
 	if ti == nil {
+		slog.Debug("GoTypeString", "ti", "nil", "result", "nil")
 		return "nil"
 	}
 
+	underlyingName := "nil"
+	underlyingKind := Unknown
+	underlyingAddr := "nil"
+	if ti.Underlying != nil {
+		underlyingName = ti.Underlying.Name
+		underlyingKind = ti.Underlying.Kind
+		underlyingAddr = fmt.Sprintf("%p", ti.Underlying)
+	}
+	slog.Debug("GoTypeString", "ti_addr", fmt.Sprintf("%p", ti), "ti_name", ti.Name, "ti_kind", ti.Kind, "ti_underlying_name", underlyingName, "ti_underlying_kind", underlyingKind, "ti_underlying_addr", underlyingAddr)
+
+	// Always build the type string based on the Kind
+	// This ensures we get the proper representation like "*BaseStruct" for both aliases and defined types
+	return ti.buildTypeStringFromUnderlying()
+}
+
+// buildTypeStringFromUnderlying builds the type string based on the current type's kind
+// but using the underlying type's actual representation
+func (ti *TypeInfo) buildTypeStringFromUnderlying() string {
 	var sb strings.Builder
 
 	switch ti.Kind {
@@ -134,9 +156,13 @@ func (ti *TypeInfo) GoTypeString() string {
 			sb.WriteString("interface{}") // Fallback for unknown value type
 		}
 	case Primitive, Struct, Interface, Chan, Func:
-		// For named types (including primitives), use the simple name.
-		// Import path handling (e.g., adding package alias) is the responsibility of the code generator.
-		sb.WriteString(ti.Name)
+		// For primitive, struct, etc., just use the name
+		// For anonymous structs, Name will be empty, but this shouldn't happen for named types
+		if ti.Name != "" {
+			sb.WriteString(ti.Name)
+		} else {
+			sb.WriteString("interface{}") // Fallback
+		}
 	default:
 		sb.WriteString("unknown") // Fallback for unhandled kinds
 	}

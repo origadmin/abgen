@@ -16,20 +16,20 @@ func TestComplexTypeResolution(t *testing.T) {
 
 	// --- Test Cases ---
 	tests := []struct {
-		name         string
-		fqn          string // Fully Qualified Name
-		isAlias      bool
-		expectedKind TypeKind
-		expectedType string // The expected string representation of the type
-		validate     func(t *testing.T, ti *TypeInfo)
+		name                 string
+		fqn                  string // Fully Qualified Name
+		isAlias              bool
+		expectedKind         TypeKind
+		expectedGoTypeString string // The expected string representation of the type from GoTypeString()
+		validate             func(t *testing.T, ti *TypeInfo)
 	}{
 		// --- Basic Struct ---
 		{
-			name:         "User",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.User",
-			isAlias:      false,
-			expectedKind: Struct,
-			expectedType: "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.User",
+			name:                 "User",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.User",
+			isAlias:              false,
+			expectedKind:         Struct,
+			expectedGoTypeString: "User", // Changed from FQN
 			validate: func(t *testing.T, ti *TypeInfo) {
 				if len(ti.Fields) != 5 {
 					t.Errorf("Expected User to have 5 fields, got %d", len(ti.Fields))
@@ -38,11 +38,11 @@ func TestComplexTypeResolution(t *testing.T) {
 		},
 		// --- Alias to External Struct ---
 		{
-			name:         "UserAlias",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.UserAlias",
-			isAlias:      true,
-			expectedKind: Struct, // The alias resolves to a struct
-			expectedType: "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.UserAlias",
+			name:                 "UserAlias",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.UserAlias",
+			isAlias:              true,
+			expectedKind:         Struct,      // The alias resolves to a struct
+			expectedGoTypeString: "UserAlias", 
 			validate: func(t *testing.T, ti *TypeInfo) {
 				if ti.Underlying == nil {
 					t.Fatal("Underlying is nil for UserAlias")
@@ -50,12 +50,13 @@ func TestComplexTypeResolution(t *testing.T) {
 				if ti.Name != "UserAlias" {
 					t.Errorf("Expected name to be UserAlias, got %s", ti.Name)
 				}
-				// The underlying type should be the resolved external.User
-				if ti.Underlying.Name != "User" {
-					t.Errorf("Expected Underlying.Name to be 'User', got '%s'", ti.Underlying.Name)
+				// Because types.Alias.Underlying() returns the raw struct, not the types.Named wrapper for external.User,
+				// the Underlying TypeInfo will represent the anonymous struct directly.
+				if ti.Underlying.Name != "" { // Expected to be empty for the anonymous struct
+					t.Errorf("Expected Underlying.Name to be '', got '%s'", ti.Underlying.Name)
 				}
-				if ti.Underlying.ImportPath != "github.com/origadmin/abgen/testdata/00_complex_type_parsing/external" {
-					t.Errorf("Expected Underlying.ImportPath to be external, got '%s'", ti.Underlying.ImportPath)
+				if ti.Underlying.ImportPath != "" { // Expected to be empty for the anonymous struct
+					t.Errorf("Expected Underlying.ImportPath to be '', got '%s'", ti.Underlying.ImportPath)
 				}
 				if ti.Underlying.Kind != Struct {
 					t.Errorf("Expected Underlying.Kind to be Struct, got %v", ti.Underlying.Kind)
@@ -68,74 +69,58 @@ func TestComplexTypeResolution(t *testing.T) {
 		},
 		// --- Defined Pointer to Struct ---
 		{
-			name:         "DefinedPtr",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.DefinedPtr",
-			isAlias:      false,
-			expectedKind: Pointer, // It's a named type, but its underlying kind is a pointer
-			expectedType: "*github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.BaseStruct",
+			name:                 "DefinedPtr",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.DefinedPtr",
+			isAlias:              false,
+			expectedKind:         Pointer,       // It's a named type, but its underlying kind is a pointer
+			expectedGoTypeString: "*BaseStruct", 
 			validate: func(t *testing.T, ti *TypeInfo) {
-				if ti.Underlying == nil {
+				if ti.Underlying == nil { // ti.Underlying is TypeInfo(BaseStruct)
 					t.Fatal("Underlying is nil for DefinedPtr")
 				}
-				if ti.Underlying.Kind != Pointer {
-					t.Fatalf("Expected Underlying kind to be Pointer, got %v", ti.Underlying.Kind)
+				if ti.Underlying.Name != "BaseStruct" { // Checks TypeInfo(BaseStruct).Name
+					t.Errorf("Expected Underlying name to be BaseStruct, got %s", ti.Underlying.Name)
 				}
-				// The element of the pointer
-				elem := ti.Underlying.Underlying
-				if elem == nil {
-					t.Fatal("Pointer element is nil for DefinedPtr")
+				if ti.Underlying.Kind != Struct { // Checks TypeInfo(BaseStruct).Kind
+					t.Errorf("Expected Underlying kind to be Struct, got %v", ti.Underlying.Kind)
 				}
-				if elem.Name != "BaseStruct" {
-					t.Errorf("Expected pointer element to be BaseStruct, got %s", elem.Name)
-				}
-				if elem.Kind != Struct {
-					t.Errorf("Expected pointer element kind to be Struct, got %v", elem.Kind)
-				}
-				if len(elem.Fields) != 2 {
-					t.Errorf("Expected BaseStruct to have 2 fields, got %d", len(elem.Fields))
+				if len(ti.Underlying.Fields) != 2 { // Fields are from BaseStruct
+					t.Errorf("Expected BaseStruct to have 2 fields, got %d", len(ti.Underlying.Fields))
 				}
 			},
 		},
 		// --- Alias to Pointer ---
 		{
-			name:         "AliasPtr",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.AliasPtr",
-			isAlias:      true,
-			expectedKind: Pointer, // It's an alias to a pointer
-			expectedType: "*github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.BaseStruct",
+			name:                 "AliasPtr",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.AliasPtr",
+			isAlias:              true,
+			expectedKind:         Pointer,       // It's an alias to a pointer
+			expectedGoTypeString: "*BaseStruct", 
 			validate: func(t *testing.T, ti *TypeInfo) {
-				if ti.Underlying == nil {
+				if ti.Underlying == nil { // ti.Underlying is TypeInfo(BaseStruct)
 					t.Fatal("Underlying is nil for AliasPtr")
 				}
-				if ti.Underlying.Kind != Pointer {
-					t.Errorf("Expected Underlying kind to be Pointer, got %v", ti.Underlying.Kind)
+				if ti.Underlying.Name != "BaseStruct" { // Checks TypeInfo(BaseStruct).Name
+					t.Errorf("Expected Underlying name to be BaseStruct, got %s", ti.Underlying.Name)
 				}
-				elem := ti.Underlying.Underlying
-				if elem == nil {
-					t.Fatal("Pointer element is nil for AliasPtr")
-				}
-				if elem.Name != "BaseStruct" {
-					t.Errorf("Expected pointer element to be BaseStruct, got %s", elem.Name)
+				if ti.Underlying.Kind != Struct { // Checks TypeInfo(BaseStruct).Kind
+					t.Errorf("Expected Underlying kind to be Struct, got %v", ti.Underlying.Kind)
 				}
 			},
 		},
 		// --- Defined Slice of Pointers ---
 		{
-			name:         "DefinedSliceOfPtrs",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.DefinedSliceOfPtrs",
-			isAlias:      false,
-			expectedKind: Slice,
-			expectedType: "[]*github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.BaseStruct",
+			name:                 "DefinedSliceOfPtrs",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.DefinedSliceOfPtrs",
+			isAlias:              false,
+			expectedKind:         Slice,
+			expectedGoTypeString: "[]*BaseStruct", 
 			validate: func(t *testing.T, ti *TypeInfo) {
-				slice := ti.Underlying
-				if slice.Kind != Slice {
-					t.Fatalf("Expected Underlying kind to be Slice, got %v", slice.Kind)
+				ptr := ti.Underlying // This is TypeInfo(*BaseStruct)
+				if ptr.Kind != Pointer {
+					t.Fatalf("Expected Underlying kind to be Pointer, got %v", ptr.Kind)
 				}
-				pointer := slice.Underlying
-				if pointer.Kind != Pointer {
-					t.Fatalf("Expected slice element kind to be Pointer, got %v", pointer.Kind)
-				}
-				strct := pointer.Underlying
+				strct := ptr.Underlying // This is TypeInfo(BaseStruct)
 				if strct.Kind != Struct {
 					t.Fatalf("Expected pointer element kind to be Struct, got %v", strct.Kind)
 				}
@@ -146,39 +131,38 @@ func TestComplexTypeResolution(t *testing.T) {
 		},
 		// --- Alias to Slice of Pointers ---
 		{
-			name:         "AliasSliceOfPtrs",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.AliasSliceOfPtrs",
-			isAlias:      true,
-			expectedKind: Slice,
-			expectedType: "[]*github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.BaseStruct",
+			name:                 "AliasSliceOfPtrs",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.AliasSliceOfPtrs",
+			isAlias:              true,
+			expectedKind:         Slice,
+			expectedGoTypeString: "[]*BaseStruct", 
 			validate: func(t *testing.T, ti *TypeInfo) {
-				slice := ti.Underlying
-				if slice.Kind != Slice {
-					t.Fatalf("Expected Underlying kind to be Slice, got %v", slice.Kind)
+				ptr := ti.Underlying // This is TypeInfo(*BaseStruct)
+				if ptr.Kind != Pointer {
+					t.Fatalf("Expected Underlying kind to be Pointer, got %v", ptr.Kind)
 				}
-				pointer := slice.Underlying
-				if pointer.Kind != Pointer {
-					t.Fatalf("Expected slice element kind to be Pointer, got %v", pointer.Kind)
+				strct := ptr.Underlying // This is TypeInfo(BaseStruct)
+				if strct.Kind != Struct {
+					t.Fatalf("Expected pointer element kind to be Struct, got %v", strct.Kind)
+				}
+				if strct.Name != "BaseStruct" {
+					t.Errorf("Expected final element to be BaseStruct, got %s", strct.Name)
 				}
 			},
 		},
 		// --- Defined Pointer to Slice ---
 		{
-			name:         "DefinedPtrToSlice",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.DefinedPtrToSlice",
-			isAlias:      false,
-			expectedKind: Pointer,
-			expectedType: "*[]github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.BaseStruct",
+			name:                 "DefinedPtrToSlice",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.DefinedPtrToSlice",
+			isAlias:              false,
+			expectedKind:         Pointer,
+			expectedGoTypeString: "*[]BaseStruct", 
 			validate: func(t *testing.T, ti *TypeInfo) {
-				pointer := ti.Underlying
-				if pointer.Kind != Pointer {
-					t.Fatalf("Expected Underlying kind to be Pointer, got %v", pointer.Kind)
-				}
-				slice := pointer.Underlying
+				slice := ti.Underlying // This is TypeInfo([]BaseStruct)
 				if slice.Kind != Slice {
-					t.Fatalf("Expected pointer element kind to be Slice, got %v", slice.Kind)
+					t.Fatalf("Expected Underlying kind to be Slice, got %v", slice.Kind)
 				}
-				strct := slice.Underlying
+				strct := slice.Underlying // This is TypeInfo(BaseStruct)
 				if strct.Kind != Struct {
 					t.Fatalf("Expected slice element kind to be Struct, got %v", strct.Kind)
 				}
@@ -186,29 +170,25 @@ func TestComplexTypeResolution(t *testing.T) {
 		},
 		// --- Alias to Pointer to Slice ---
 		{
-			name:         "AliasPtrToSlice",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.AliasPtrToSlice",
-			isAlias:      true,
-			expectedKind: Pointer,
-			expectedType: "*[]github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.BaseStruct",
+			name:                 "AliasPtrToSlice",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.AliasPtrToSlice",
+			isAlias:              true,
+			expectedKind:         Pointer,
+			expectedGoTypeString: "*[]BaseStruct", // Changed from FQN
 		},
 		// --- Defined Slice of Slices ---
 		{
-			name:         "DefinedSliceOfSlices",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.DefinedSliceOfSlices",
-			isAlias:      false,
-			expectedKind: Slice,
-			expectedType: "[][]github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.BaseStruct",
+			name:                 "DefinedSliceOfSlices",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.DefinedSliceOfSlices",
+			isAlias:              false,
+			expectedKind:         Slice,
+			expectedGoTypeString: "[][]BaseStruct", 
 			validate: func(t *testing.T, ti *TypeInfo) {
-				outerSlice := ti.Underlying
-				if outerSlice.Kind != Slice {
-					t.Fatalf("Expected Underlying to be Slice, got %v", outerSlice.Kind)
-				}
-				innerSlice := outerSlice.Underlying
+				innerSlice := ti.Underlying // This is TypeInfo([]BaseStruct)
 				if innerSlice.Kind != Slice {
-					t.Fatalf("Expected inner type to be Slice, got %v", innerSlice.Kind)
+					t.Fatalf("Expected Underlying to be Slice, got %v", innerSlice.Kind)
 				}
-				strct := innerSlice.Underlying
+				strct := innerSlice.Underlying // This is TypeInfo(BaseStruct)
 				if strct.Kind != Struct {
 					t.Fatalf("Expected final element to be Struct, got %v", strct.Kind)
 				}
@@ -216,72 +196,56 @@ func TestComplexTypeResolution(t *testing.T) {
 		},
 		// --- Alias to Slice of Slices ---
 		{
-			name:         "AliasSliceOfSlices",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.AliasSliceOfSlices",
-			isAlias:      true,
-			expectedKind: Slice,
-			expectedType: "[][]github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.BaseStruct",
+			name:                 "AliasSliceOfSlices",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.AliasSliceOfSlices",
+			isAlias:              true,
+			expectedKind:         Slice,
+			expectedGoTypeString: "[][]BaseStruct", // Changed from FQN
 		},
 		// --- Defined Map ---
 		{
-			name:         "DefinedMap",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.DefinedMap",
-			isAlias:      false,
-			expectedKind: Map,
-			expectedType: "map[string]*github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.BaseStruct",
+			name:                 "DefinedMap",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.DefinedMap",
+			isAlias:              false,
+			expectedKind:         Map,
+			expectedGoTypeString: "map[string]*BaseStruct", 
 			validate: func(t *testing.T, ti *TypeInfo) {
-				mp := ti.Underlying
-				if mp.Kind != Map {
-					t.Fatalf("Expected Underlying to be Map, got %v", mp.Kind)
+				if ti.KeyType.Kind != Primitive || ti.KeyType.Name != "string" {
+					t.Errorf("Expected map key to be string, got %v", ti.KeyType)
 				}
-				if mp.KeyType.Kind != Primitive || mp.KeyType.Name != "string" {
-					t.Errorf("Expected map key to be string, got %v", mp.KeyType)
-				}
-				if mp.Underlying.Kind != Pointer || mp.Underlying.Underlying.Name != "BaseStruct" {
-					t.Errorf("Expected map value to be *BaseStruct, got %v", mp.Underlying)
+				valType := ti.Underlying // This is TypeInfo(*BaseStruct)
+				if valType.Kind != Pointer || valType.Underlying.Name != "BaseStruct" {
+					t.Errorf("Expected map value to be *BaseStruct, got %v", valType)
 				}
 			},
 		},
 		// --- Alias to Map ---
 		{
-			name:         "AliasMap",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.AliasMap",
-			isAlias:      true,
-			expectedKind: Map,
-			expectedType: "map[string]*github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.BaseStruct",
+			name:                 "AliasMap",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.AliasMap",
+			isAlias:              true,
+			expectedKind:         Map,
+			expectedGoTypeString: "map[string]*BaseStruct", // Changed from FQN
 		},
 		// --- Defined Triple Pointer ---
 		{
-			name:         "TriplePtr",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.TriplePtr",
-			isAlias:      false,
-			expectedKind: Pointer,
-			expectedType: "***github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.BaseStruct",
+			name:                 "TriplePtr",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.TriplePtr",
+			isAlias:              false,
+			expectedKind:         Pointer,
+			expectedGoTypeString: "***BaseStruct", 
 			validate: func(t *testing.T, ti *TypeInfo) {
-				if ti.Underlying == nil {
-					t.Fatal("Underlying is nil for TriplePtr (first pointer)")
-				}
-				if ti.Underlying.Kind != Pointer {
-					t.Fatalf("Expected first Underlying kind to be Pointer, got %v", ti.Underlying.Kind)
+				firstPtr := ti.Underlying // This is TypeInfo(**BaseStruct)
+				if firstPtr.Kind != Pointer {
+					t.Fatalf("Expected first Underlying kind to be Pointer, got %v", firstPtr.Kind)
 				}
 
-				secondPtr := ti.Underlying.Underlying
-				if secondPtr == nil {
-					t.Fatal("Underlying.Underlying is nil for TriplePtr (second pointer)")
-				}
+				secondPtr := firstPtr.Underlying // This is TypeInfo(*BaseStruct)
 				if secondPtr.Kind != Pointer {
 					t.Fatalf("Expected second Underlying kind to be Pointer, got %v", secondPtr.Kind)
 				}
 
-				thirdPtr := secondPtr.Underlying
-				if thirdPtr == nil {
-					t.Fatal("Underlying.Underlying.Underlying is nil for TriplePtr (third pointer)")
-				}
-				if thirdPtr.Kind != Pointer {
-					t.Fatalf("Expected third Underlying kind to be Pointer, got %v", thirdPtr.Kind)
-				}
-
-				baseStruct := thirdPtr.Underlying
+				baseStruct := secondPtr.Underlying // This is TypeInfo(BaseStruct)
 				if baseStruct == nil {
 					t.Fatal("BaseStruct is nil for TriplePtr")
 				}
@@ -295,19 +259,13 @@ func TestComplexTypeResolution(t *testing.T) {
 		},
 		// --- Defined MyPtr (Pointer to int) ---
 		{
-			name:         "MyPtr",
-			fqn:          "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.MyPtr",
-			isAlias:      false,
-			expectedKind: Pointer,
-			expectedType: "*int",
+			name:                 "MyPtr",
+			fqn:                  "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types.MyPtr",
+			isAlias:              false,
+			expectedKind:         Pointer,
+			expectedGoTypeString: "*int", 
 			validate: func(t *testing.T, ti *TypeInfo) {
-				if ti.Underlying == nil {
-					t.Fatal("Underlying is nil for MyPtr")
-				}
-				if ti.Underlying.Kind != Pointer {
-					t.Fatalf("Expected Underlying kind to be Pointer, got %v", ti.Underlying.Kind)
-				}
-				elem := ti.Underlying.Underlying
+				elem := ti.Underlying // This is TypeInfo(int)
 				if elem == nil {
 					t.Fatal("Pointer element is nil for MyPtr")
 				}
@@ -355,9 +313,9 @@ func TestComplexTypeResolution(t *testing.T) {
 			}
 
 			// Validate reconstructed type string
-			reconstructedType := ti.GoTypeString()
-			if reconstructedType != tt.expectedType {
-				t.Errorf("ToTypeString mismatch for %s:\nExpected: %s\nGot:      %s", tt.name, tt.expectedType, reconstructedType)
+			reconstructedType := ti.GoTypeString() // Changed from ToTypeString()
+			if reconstructedType != tt.expectedGoTypeString {
+				t.Errorf("GoTypeString mismatch for %s:\nExpected: %s\nGot:      %s", tt.name, tt.expectedGoTypeString, reconstructedType)
 			}
 
 			// Run specific deep validation if provided

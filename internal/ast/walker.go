@@ -15,8 +15,8 @@ import (
 	"github.com/origadmin/abgen/internal/types"
 )
 
-// PackageWalker walks the AST of a package, collects directives, and builds a configuration.
-type PackageWalker struct {
+// DirectiveParser walks the AST of a package, collects directives, and builds a configuration.
+type DirectiveParser struct {
 	config             *types.ConversionConfig
 	userPathAliases    map[string]string // Maps alias from `package:path` directive to full package path
 	defaultPathAliases map[string]string // Maps built-in shorthand aliases to full package paths
@@ -26,12 +26,12 @@ type PackageWalker struct {
 	packageMode        packages.LoadMode
 	allKnownPkgs       []*packages.Package
 	localTypeNameToFQN map[string]string // Maps local alias name to its FQN (e.g., "Resource" -> "github.com/origadmin/abgen/testdata/fixture/ent.Resource")
-	analyzerWalker     *analyzer.PackageWalker // Add analyzer.PackageWalker
+	analyzerWalker     *analyzer.PackageWalker // Analyzer for type resolution
 }
 
-// NewPackageWalker creates a new PackageWalker.
-func NewPackageWalker() *PackageWalker {
-	return &PackageWalker{
+// NewDirectiveParser creates a new DirectiveParser.
+func NewDirectiveParser() *DirectiveParser {
+	return &DirectiveParser{
 		config:             types.NewDefaultConfig(),
 		userPathAliases:    make(map[string]string),
 		defaultPathAliases: map[string]string{
@@ -48,12 +48,12 @@ func NewPackageWalker() *PackageWalker {
 }
 
 // Config returns the final, processed configuration.
-func (w *PackageWalker) Config() *types.ConversionConfig {
+func (w *DirectiveParser) Config() *types.ConversionConfig {
 	return w.config
 }
 
-// AddPackages adds packages to the walker's known packages list.
-func (w *PackageWalker) AddPackages(pkgs ...*packages.Package) {
+// AddPackages adds packages to the parser's known packages list.
+func (w *DirectiveParser) AddPackages(pkgs ...*packages.Package) {
 	if w.allKnownPkgs == nil {
 		w.allKnownPkgs = make([]*packages.Package, 0)
 	}
@@ -71,7 +71,7 @@ func (w *PackageWalker) AddPackages(pkgs ...*packages.Package) {
 }
 
 // Analyze walks the AST of the given package and populates the configuration.
-func (w *PackageWalker) Analyze(pkg *packages.Package) error {
+func (w *DirectiveParser) Analyze(pkg *packages.Package) error {
 	slog.Info("Analyzing package", "path", pkg.PkgPath)
 	w.currentPkg = pkg
 	w.config.ContextPackagePath = pkg.PkgPath
@@ -95,7 +95,7 @@ func (w *PackageWalker) Analyze(pkg *packages.Package) error {
 }
 
 // collectLocalTypeAliases scans the file for `type T = some.OtherType` declarations.
-func (w *PackageWalker) collectLocalTypeAliases(file *goast.File) {
+func (w *DirectiveParser) collectLocalTypeAliases(file *goast.File) {
 	for _, decl := range file.Decls {
 		if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
 			for _, spec := range genDecl.Specs {
@@ -116,7 +116,7 @@ func (w *PackageWalker) collectLocalTypeAliases(file *goast.File) {
 }
 
 // processFileDirectives scans all comment groups in a file and applies any found directives.
-func (w *PackageWalker) processFileDirectives(file *goast.File) {
+func (w *DirectiveParser) processFileDirectives(file *goast.File) {
 	for _, commentGroup := range file.Comments {
 		for _, comment := range commentGroup.List {
 			w.parseAndApplyDirective(comment.Text)
@@ -124,8 +124,8 @@ func (w *PackageWalker) processFileDirectives(file *goast.File) {
 	}
 }
 
-// parseAndApplyDirective parses a single directive line and applies it to the walker's configuration.
-func (w *PackageWalker) parseAndApplyDirective(line string) {
+// parseAndApplyDirective parses a single directive line and applies it to the parser's configuration.
+func (w *DirectiveParser) parseAndApplyDirective(line string) {
 	key, value := parseDirective(line)
 	if key == "" {
 		return
@@ -161,7 +161,7 @@ func (w *PackageWalker) parseAndApplyDirective(line string) {
 }
 
 // applyConversionDirective handles all directives starting with "convert:".
-func (w *PackageWalker) applyConversionDirective(keys []string, value string) {
+func (w *DirectiveParser) applyConversionDirective(keys []string, value string) {
 	if len(keys) == 1 { // convert="A,B"
 		parts := strings.Split(value, ",")
 		if len(parts) == 2 {
@@ -228,7 +228,7 @@ func (w *PackageWalker) applyConversionDirective(keys []string, value string) {
 }
 
 // processPackagePairs finds matching types for configured package pairs and adds them to the config.
-func (w *PackageWalker) processPackagePairs() error {
+func (w *DirectiveParser) processPackagePairs() error {
 	if w.config.Source.Package == "" || w.config.Target.Package == "" {
 		return nil
 	}
@@ -286,7 +286,7 @@ func (w *PackageWalker) processPackagePairs() error {
 }
 
 // Resolve resolves a type name to its TypeInfo structure.
-func (w *PackageWalker) Resolve(typeName string) (*types.TypeInfo, error) {
+func (w *DirectiveParser) Resolve(typeName string) (*types.TypeInfo, error) {
 	// Delegate to analyzer.PackageWalker for type resolution
 	fqn, isLocalAlias := w.findFQNForLocalName(typeName)
 	if !isLocalAlias {
@@ -317,25 +317,25 @@ func (w *PackageWalker) Resolve(typeName string) (*types.TypeInfo, error) {
 }
 
 // GetTypeCache returns the cache of known types.
-func (w *PackageWalker) GetTypeCache() map[string]*types.TypeInfo {
+func (w *DirectiveParser) GetTypeCache() map[string]*types.TypeInfo {
 	return w.TypeCache
 }
 
 // GetLocalTypeNameToFQN returns the map of local type aliases to their FQN.
-func (w *PackageWalker) GetLocalTypeNameToFQN() map[string]string {
+func (w *DirectiveParser) GetLocalTypeNameToFQN() map[string]string {
 	return w.localTypeNameToFQN
 }
 
 // --- Helper Methods ---
 
 // buildTypeInfo is no longer needed as type resolution is delegated to analyzer.PackageWalker.
-// func (w *PackageWalker) buildTypeInfo(spec *goast.TypeSpec, pkg *packages.Package) *types.TypeInfo {
-// 	// This method should be removed or significantly refactored if AST walker needs to build partial TypeInfo.
+// func (w *DirectiveParser) buildTypeInfo(spec *goast.TypeSpec, pkg *packages.Package) *types.TypeInfo {
+// 	// This method should be removed or significantly refactored if AST parser needs to build partial TypeInfo.
 // 	// For now, it's assumed that full TypeInfo comes from analyzer.
 // 	return &types.TypeInfo{}
 // }
 
-func (w *PackageWalker) findPackage(pkgPath string) *packages.Package {
+func (w *DirectiveParser) findPackage(pkgPath string) *packages.Package {
 	for _, p := range w.allKnownPkgs {
 		if p.PkgPath == pkgPath {
 			return p
@@ -344,12 +344,12 @@ func (w *PackageWalker) findPackage(pkgPath string) *packages.Package {
 	return nil
 }
 
-func (w *PackageWalker) findFQNForLocalName(name string) (string, bool) {
+func (w *DirectiveParser) findFQNForLocalName(name string) (string, bool) {
 	fqn, ok := w.localTypeNameToFQN[name]
 	return fqn, ok
 }
 
-func (w *PackageWalker) getPackageTypes(pkg *packages.Package) map[string]bool {
+func (w *DirectiveParser) getPackageTypes(pkg *packages.Package) map[string]bool {
 	typesMap := make(map[string]bool)
 	if pkg == nil || pkg.Types == nil {
 		return typesMap
@@ -365,7 +365,7 @@ func (w *PackageWalker) getPackageTypes(pkg *packages.Package) map[string]bool {
 	return typesMap
 }
 
-func (w *PackageWalker) loadPackage(importPath string) (*packages.Package, error) {
+func (w *DirectiveParser) loadPackage(importPath string) (*packages.Package, error) {
 	if pkg, ok := w.loadedPkgs[importPath]; ok {
 		return pkg, nil
 	}
@@ -382,11 +382,11 @@ func (w *PackageWalker) loadPackage(importPath string) (*packages.Package, error
 	}
 	pkg := pkgs[0]
 	w.loadedPkgs[pkg.PkgPath] = pkg
-	w.AddPackages(pkg) // Add to both ast walker and analyzer walker
+	w.AddPackages(pkg) // Add to both ast parser and analyzer walker
 	return pkg, nil
 }
 
-func (w *PackageWalker) resolveAlias(aliasOrPath string) string {
+func (w *DirectiveParser) resolveAlias(aliasOrPath string) string {
 	// User-defined aliases take precedence
 	if path, ok := w.userPathAliases[aliasOrPath]; ok {
 		return path
@@ -400,7 +400,7 @@ func (w *PackageWalker) resolveAlias(aliasOrPath string) string {
 
 // exprToString resolves an expression to its fully qualified type name, optionally including pointer/slice info.
 // This method is still used for parsing local type aliases and should return the FQN.
-func (w *PackageWalker) exprToString(expr goast.Expr, pkg *packages.Package, includeModifiers bool) string {
+func (w *DirectiveParser) exprToString(expr goast.Expr, pkg *packages.Package, includeModifiers bool) string {
 	if pkg == nil || pkg.TypesInfo == nil {
 		return "unknown"
 	}
