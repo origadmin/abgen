@@ -1,4 +1,3 @@
-// Package ast implements the functions, types, and interfaces for the module.
 package ast
 
 import (
@@ -12,6 +11,7 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
+	"github.com/origadmin/abgen/internal/analyzer" // Import analyzer package
 	"github.com/origadmin/abgen/internal/types"
 )
 
@@ -21,11 +21,12 @@ type PackageWalker struct {
 	userPathAliases    map[string]string // Maps alias from `package:path` directive to full package path
 	defaultPathAliases map[string]string // Maps built-in shorthand aliases to full package paths
 	currentPkg         *packages.Package
-	TypeCache          map[string]*types.TypeInfo
+	TypeCache          map[string]*types.TypeInfo // Use types.TypeInfo
 	loadedPkgs         map[string]*packages.Package
-	packageMode        packages.LoadMode // Corrected: Type should be packages.LoadMode
+	packageMode        packages.LoadMode
 	allKnownPkgs       []*packages.Package
 	localTypeNameToFQN map[string]string // Maps local alias name to its FQN (e.g., "Resource" -> "github.com/origadmin/abgen/testdata/fixture/ent.Resource")
+	analyzerWalker     *analyzer.PackageWalker // Add analyzer.PackageWalker
 }
 
 // NewPackageWalker creates a new PackageWalker.
@@ -38,10 +39,11 @@ func NewPackageWalker() *PackageWalker {
 			"uuid": "github.com/google/uuid",
 			// Add other common packages here
 		},
-		TypeCache:          make(map[string]*types.TypeInfo),
+		TypeCache:          make(map[string]*types.TypeInfo), // Use types.TypeInfo
 		loadedPkgs:         make(map[string]*packages.Package),
-		packageMode:        packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps, // Corrected: Value assigned here
+		packageMode:        packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
 		localTypeNameToFQN: make(map[string]string),
+		analyzerWalker:     analyzer.NewPackageWalker(), // Initialize analyzer.PackageWalker
 	}
 }
 
@@ -65,6 +67,7 @@ func (w *PackageWalker) AddPackages(pkgs ...*packages.Package) {
 			existingPkgs[newPkg.PkgPath] = true
 		}
 	}
+	w.analyzerWalker.AddInitialPackages(pkgs) // Also add to analyzer's packages
 }
 
 // Analyze walks the AST of the given package and populates the configuration.
@@ -99,7 +102,10 @@ func (w *PackageWalker) collectLocalTypeAliases(file *goast.File) {
 				if typeSpec, ok := spec.(*goast.TypeSpec); ok {
 					if typeSpec.Assign.IsValid() {
 						aliasName := typeSpec.Name.Name
-						fqn := w.exprToString(typeSpec.Type, w.currentPkg, false) // Pass false for isPointer
+						// This part still uses exprToString, which is AST-based.
+						// For local aliases, we might still need this, but the FQN should be resolved by analyzer.
+						// For now, keep it as is, but note for future refactoring.
+						fqn := w.exprToString(typeSpec.Type, w.currentPkg, false)
 						w.localTypeNameToFQN[aliasName] = fqn
 						slog.Debug("Collected local type alias", "alias", aliasName, "fqn", fqn)
 					}
@@ -281,71 +287,33 @@ func (w *PackageWalker) processPackagePairs() error {
 
 // Resolve resolves a type name to its TypeInfo structure.
 func (w *PackageWalker) Resolve(typeName string) (*types.TypeInfo, error) {
-	isPtr := strings.HasPrefix(typeName, "*")
-	typeName = strings.TrimPrefix(typeName, "*")
-
-	if info, ok := w.TypeCache[typeName]; ok {
-		info.IsPointer = isPtr
-		return info, nil
-	}
-
-	if types.IsPrimitiveType(typeName) {
-		info := &types.TypeInfo{Name: typeName, ImportPath: "builtin", IsPointer: isPtr}
-		w.TypeCache[typeName] = info
-		return info, nil
-	}
-
+	// Delegate to analyzer.PackageWalker for type resolution
 	fqn, isLocalAlias := w.findFQNForLocalName(typeName)
 	if !isLocalAlias {
 		fqn = typeName
 	}
 
-	pkgPath, typeNameOnly := splitFQN(fqn)
-	fmt.Printf("DEBUG: Resolving type original=%s fqn=%s pkgPath=%s typeNameOnly=%s\n", typeName, fqn, pkgPath, typeNameOnly)
-
 	// Resolve package alias if the path part is an alias.
+	pkgPath, typeNameOnly := splitFQN(fqn)
 	pkgPath = w.resolveAlias(pkgPath)
-	fmt.Printf("DEBUG: After resolveAlias pkgPath=%s\n", pkgPath)
-
 	if pkgPath == "" {
 		pkgPath = w.currentPkg.PkgPath
 	}
+	fqn = pkgPath + "." + typeNameOnly
 
-	pkg := w.findPackage(pkgPath)
-	fmt.Printf("DEBUG: Found package %v for pkgPath %s\n", pkg != nil, pkgPath)
-	if pkg == nil {
-		var err error
-		pkg, err = w.loadPackage(pkgPath)
-		if err != nil {
-			return nil, fmt.Errorf("package %q for type %q not found or loaded", pkgPath, typeName)
-		}
+	info, err := w.analyzerWalker.FindTypeByFQN(fqn)
+	if err != nil {
+		return nil, err
 	}
 
-	fmt.Printf("DEBUG: Package %s has %d files\n", pkg.PkgPath, len(pkg.Syntax))
-	for _, file := range pkg.Syntax {
-		fmt.Printf("DEBUG: Checking file %s\n", pkg.Fset.File(file.Pos()).Name())
-		for _, decl := range file.Decls {
-			if genDecl, ok := decl.(*goast.GenDecl); ok && genDecl.Tok == token.TYPE {
-				for _, spec := range genDecl.Specs {
-					if typeSpec, ok := spec.(*goast.TypeSpec); ok {
-						fmt.Printf("DEBUG: Found type spec: %s\n", typeSpec.Name.Name)
-						if typeSpec.Name.Name == typeNameOnly {
-							fmt.Printf("DEBUG: Found matching type!\n")
-							info := w.buildTypeInfo(typeSpec, pkg)
-							info.IsPointer = isPtr
-							if isLocalAlias {
-								info.LocalAlias = typeName
-							}
-							w.TypeCache[typeName] = info
-							return info, nil
-						}
-					}
-				}
-			}
-		}
+	// If it was a local alias, set the LocalAlias field
+	if isLocalAlias {
+		info.LocalAlias = typeName
 	}
 
-	return nil, fmt.Errorf("type %q not found in package %q", typeNameOnly, pkgPath)
+	// Cache the resolved type
+	w.TypeCache[typeName] = info
+	return info, nil
 }
 
 // GetTypeCache returns the cache of known types.
@@ -360,49 +328,12 @@ func (w *PackageWalker) GetLocalTypeNameToFQN() map[string]string {
 
 // --- Helper Methods ---
 
-func (w *PackageWalker) buildTypeInfo(spec *goast.TypeSpec, pkg *packages.Package) *types.TypeInfo {
-	info := &types.TypeInfo{
-		Name:       spec.Name.Name,
-		ImportPath: pkg.PkgPath,
-	}
-	// Determine if the type itself is a pointer (e.g., `type MyPtr *SomeType`)
-	if _, ok := spec.Type.(*goast.StarExpr); ok {
-		info.IsPointer = true
-	}
-
-	if structType, ok := spec.Type.(*goast.StructType); ok {
-		for _, field := range structType.Fields.List {
-			if len(field.Names) > 0 && field.Names[0].IsExported() {
-				fieldInfo := types.StructField{
-					Name:      field.Names[0].Name,
-					Type:      w.exprToString(field.Type, pkg, false), // Get base type name for field type
-					IsPointer: isPointer(field.Type),
-				}
-				if field.Tag != nil {
-					fieldInfo.Tags = field.Tag.Value
-				}
-				info.Fields = append(info.Fields, fieldInfo)
-			}
-		}
-	} else if ident, ok := spec.Type.(*goast.Ident); ok && ident.Obj != nil && ident.Obj.Kind == goast.Typ {
-		// Handle aliases like `type MyString string`
-		// The underlying type is ident.Name, but we need its FQN
-		underlyingType := w.exprToString(ident, pkg, false)
-		if underlyingType != info.Name { // It's an alias to another type
-			info.LocalAlias = info.Name // The alias name itself
-			info.Name = underlyingType  // The actual underlying type name
-		}
-	} else if selExpr, ok := spec.Type.(*goast.SelectorExpr); ok {
-		// Handle aliases like `type MyUser ent.User`
-		underlyingType := w.exprToString(selExpr, pkg, false)
-		if underlyingType != info.Name { // It's an alias to another type
-			info.LocalAlias = info.Name // The alias name itself
-			info.Name = underlyingType  // The actual underlying type name
-		}
-	}
-
-	return info
-}
+// buildTypeInfo is no longer needed as type resolution is delegated to analyzer.PackageWalker.
+// func (w *PackageWalker) buildTypeInfo(spec *goast.TypeSpec, pkg *packages.Package) *types.TypeInfo {
+// 	// This method should be removed or significantly refactored if AST walker needs to build partial TypeInfo.
+// 	// For now, it's assumed that full TypeInfo comes from analyzer.
+// 	return &types.TypeInfo{}
+// }
 
 func (w *PackageWalker) findPackage(pkgPath string) *packages.Package {
 	for _, p := range w.allKnownPkgs {
@@ -451,7 +382,7 @@ func (w *PackageWalker) loadPackage(importPath string) (*packages.Package, error
 	}
 	pkg := pkgs[0]
 	w.loadedPkgs[pkg.PkgPath] = pkg
-	w.AddPackages(pkg)
+	w.AddPackages(pkg) // Add to both ast walker and analyzer walker
 	return pkg, nil
 }
 
@@ -468,6 +399,7 @@ func (w *PackageWalker) resolveAlias(aliasOrPath string) string {
 }
 
 // exprToString resolves an expression to its fully qualified type name, optionally including pointer/slice info.
+// This method is still used for parsing local type aliases and should return the FQN.
 func (w *PackageWalker) exprToString(expr goast.Expr, pkg *packages.Package, includeModifiers bool) string {
 	if pkg == nil || pkg.TypesInfo == nil {
 		return "unknown"

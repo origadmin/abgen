@@ -1,10 +1,11 @@
-// Package types implements the functions, types, and interfaces for the module.
 package types
 
 // TypeEndpoint represents one side of a specific type pairing.
 type TypeEndpoint struct {
 	Type      string // Fully qualified type name, e.g., "github.com/my/pkg.UserEntity"
 	AliasType string // The local alias for the type, if one exists.
+	// Add a field to store the resolved TypeInfo for this endpoint
+	TypeInfo *TypeInfo
 }
 
 // TypePair defines a single, pure pairing of a source type to a target type.
@@ -62,5 +63,17 @@ func NewDefaultConfig() *ConversionConfig {
 		RemapFields:  make(map[string]string),
 		IgnoreTypes:  make(map[string]bool),
 		CustomRules:  make([]CustomRule, 0),
+	}
+}
+
+// IsPrimitiveType checks if a given type name is one of Go's built-in primitive types.
+func IsPrimitiveType(name string) bool {
+	switch name {
+	case "bool", "byte", "rune", "string", "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+		"float32", "float64", "complex64", "complex128", "error":
+		return true
+	default:
+		return false
 	}
 }

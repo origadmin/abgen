@@ -3,6 +3,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"go/types"
 	"strings"
 )
@@ -28,12 +29,12 @@ const (
 // TypeInfo represents the detailed information of a resolved Go type.
 // It serves as the primary data structure during the analysis phase.
 type TypeInfo struct {
-	Name       string // The canonical name of the type (e.g., "User", "string", "[]*User", "*[]User")
+	// Name is the simple, non-qualified name of the type (e.g., "User", "string").
+	// For anonymous types (like `[]int` or `*int`), this field will be empty.
+	Name       string
 	ImportPath string // The import path where this canonical type is defined
 
 	Kind TypeKind // The fundamental kind of this type (e.g., Primitive, Struct, Slice, Pointer)
-
-	IsPointer bool // Does this TypeInfo represent a pointer to another type? (e.g., *User)
 
 	ArrayLen int // If Kind is Array, the length of the array.
 
@@ -43,9 +44,12 @@ type TypeInfo struct {
 	// - For '*T', it points to T.
 	// - For '[]T', '[N]T', 'chan T', it points to T.
 	// - For 'map[K]V', it points to V (the value type). KeyType is separate.
-	Underlying *TypeInfo
+	Underlying    *TypeInfo
+	UnderlyingFQN string
 
-	KeyType *TypeInfo // If Kind is Map, points to the TypeInfo of its key.
+	// If Kind is Map, points to the TypeInfo of its key.
+	KeyType    *TypeInfo
+	KeyTypeFQN string
 
 	// --- Alias-specific Information ---
 	// Is this TypeInfo representing a type alias declaration (type XXX = YYY)?
@@ -83,6 +87,60 @@ func (ti *TypeInfo) String() string {
 
 func (ti *TypeInfo) FQN() string {
 	return ti.ImportPath + "." + ti.Name
+}
+
+// ToTypeString reconstructs the Go type string from the TypeInfo.
+// It handles named types, pointers, slices, arrays, and maps.
+func (ti *TypeInfo) ToTypeString() string {
+	if ti == nil {
+		return "nil"
+	}
+
+	var sb strings.Builder
+
+	// Handle pointer
+	if ti.Kind == Pointer {
+		sb.WriteString("*")
+	}
+
+	// Handle slice/array
+	if ti.Kind == Slice {
+		sb.WriteString("[]")
+	} else if ti.Kind == Array {
+		sb.WriteString(fmt.Sprintf("[%d]", ti.ArrayLen))
+	}
+
+	// Handle map
+	if ti.Kind == Map {
+		sb.WriteString("map[")
+		if ti.KeyType != nil {
+			sb.WriteString(ti.KeyType.ToTypeString())
+		} else {
+			sb.WriteString("?")
+		}
+		sb.WriteString("]")
+	}
+
+	// Handle the base type (named or primitive)
+	if ti.Name != "" {
+		// If it's a named type and has an import path, use FQN for clarity in reconstruction
+		// Primitive types (like "int") don't need import path prefix, even if they have one (e.g., "builtin.int")
+		if ti.ImportPath != "" && ti.Kind != Primitive {
+			sb.WriteString(ti.ImportPath)
+			sb.WriteString(".")
+		}
+		sb.WriteString(ti.Name)
+	} else if ti.Underlying != nil { // For anonymous composite types, recurse to the underlying type
+		// This handles cases like `[]*User` where `[]` is the outer TypeInfo,
+		// and `*User` is its Underlying. The Name for the outer TypeInfo (Slice) would be empty.
+		sb.WriteString(ti.Underlying.ToTypeString())
+	} else {
+		// Fallback for unhandled or truly anonymous types without an underlying
+		// This case should ideally not be hit if all types are properly handled.
+		sb.WriteString(ti.Kind.String())
+	}
+
+	return sb.String()
 }
 
 // FieldInfo represents a single field within a struct.

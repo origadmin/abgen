@@ -1,10 +1,6 @@
 // Package types implements the functions, types, and interfaces for the module.
 package types
 
-import (
-	"strings"
-)
-
 const (
 	Application = "abgen"
 	Description = "Alias Binding Generator is a tool for generating code for conversion between two types"
@@ -18,73 +14,6 @@ const (
         \/    \//_____/      \/     \/
 `
 )
-
-// TypeKind represents the fundamental kind of a Go type.
-type TypeKind int
-
-const (
-	UnknownKind TypeKind = iota
-	PrimitiveKind
-	StructKind
-	InterfaceKind
-	MapKind
-	ChanKind
-	FuncKind
-	SliceKind
-	ArrayKind
-	PointerKind
-)
-
-// StructField represents a field in a struct.
-type StructField struct {
-	Name     string
-	Type     string    // The string representation of the field's type (e.g., "int", "*User", "[]string")
-	TypeInfo *TypeInfo // Resolved TypeInfo for this field's type. This is crucial.
-	Tags     string
-}
-
-// TypeInfo holds resolved information about a Go type.
-type TypeInfo struct {
-	Name       string // The canonical name of the type (e.g., "User", "string", "[]*User", "*[]User")
-	ImportPath string // The import path where this canonical type is defined
-
-	Kind TypeKind // The fundamental kind of this type (e.g., PrimitiveKind, StructKind, SliceKind, PointerKind)
-
-	IsPointer bool // Does this TypeInfo represent a pointer to another type? (e.g., *User)
-
-	ArrayLen int // If Kind is ArrayKind, the length of the array.
-
-	// --- Recursive Type Relationships (Unified) ---
-	// This field points to the type that this TypeInfo is built upon.
-	// - For 'type XXX YYY' or 'type XXX = YYY', it points to YYY.
-	// - For '*T', it points to T.
-	// - For '[]T', '[N]T', 'chan T', it points to T.
-	// - For 'map[K]V', it points to V (the value type). KeyType is separate.
-	Underlying *TypeInfo
-
-	KeyType *TypeInfo // If Kind is MapKind, points to the TypeInfo of its key.
-
-	// --- Alias-specific Information ---
-	// Is this TypeInfo representing a type alias declaration (type XXX = YYY)?
-	// If false, it's a new type definition (type XXX YYY).
-	IsAlias bool
-
-	// This field is currently used in config, can remain as a string from config.
-	LocalAlias string
-
-	// --- Struct-specific Fields ---
-	// If Kind is StructKind, lists the fields of the struct.
-	Fields []StructField
-}
-
-// GetName returns the base name of the type.
-func (ti *TypeInfo) GetName() string {
-	if ti == nil {
-		return ""
-	}
-	parts := strings.Split(ti.Name, ".")
-	return parts[len(parts)-1]
-}
 
 // Import represents a single Go import statement.
 type Import struct {

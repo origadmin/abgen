@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"golang.org/x/tools/go/packages"
+
+	"github.com/origadmin/abgen/internal/types" // Import the new types package
 )
 
 const abgenDirectivePrefix = "//go:abgen:"
@@ -15,188 +17,86 @@ const abgenDirectivePrefix = "//go:abgen:"
 // resolving types, and building a collection of TypeInfo structures.
 type PackageWalker struct {
 	pkgs        []*packages.Package
-	typeCache   map[types.Type]*TypeInfo
-	failedLoads map[string]bool // Tracks packages that failed to load to prevent infinite retries
+	typeCache   map[string]*types.TypeInfo // Use types.TypeInfo
+	failedLoads map[string]bool
 }
 
 // NewPackageWalker creates a new PackageWalker.
 func NewPackageWalker() *PackageWalker {
 	return &PackageWalker{
-		typeCache:   make(map[types.Type]*TypeInfo),
+		typeCache:   make(map[string]*types.TypeInfo), // Use types.TypeInfo
 		failedLoads: make(map[string]bool),
 	}
 }
 
-// LoadInitialPackage loads only the essential information for a single package
-// in order to discover directives. It does not perform full type checking.
-func (w *PackageWalker) LoadInitialPackage(path string) (*packages.Package, error) {
-	cfg := &packages.Config{
-		Mode:       packages.NeedSyntax | packages.NeedFiles,
-		Dir:        path,
-		Tests:      false,
-		BuildFlags: []string{"-tags=abgen"},
-	}
-	pkgs, err := packages.Load(cfg, ".")
-	if err != nil {
-		return nil, fmt.Errorf("failed to load initial package: %w", err)
-	}
-	if packages.PrintErrors(pkgs) > 0 {
-		return nil, fmt.Errorf("initial package contains errors")
-	}
-	if len(pkgs) == 0 {
-		return nil, fmt.Errorf("no initial package found at path: %s", path)
-	}
-	return pkgs[0], nil
-}
-
-// DiscoverDirectives scans the AST of a package and collects all abgen directives.
-func (w *PackageWalker) DiscoverDirectives(pkg *packages.Package) []string {
-	var directives []string
-	for _, file := range pkg.Syntax {
-		for _, commentGroup := range file.Comments {
-			for _, comment := range commentGroup.List {
-				if strings.HasPrefix(comment.Text, abgenDirectivePrefix) {
-					directives = append(directives, comment.Text)
-				}
-			}
-		}
-	}
-	return directives
-}
-
-// ExtractDependencies parses directives to find all referenced package paths.
-func (w *PackageWalker) ExtractDependencies(directives []string) []string {
-	depMap := make(map[string]struct{})
-	for _, d := range directives {
-		if strings.Contains(d, "path=") {
-			parts := strings.Split(d, "path=")
-			if len(parts) > 1 {
-				pathPart := parts[1]
-				path := strings.Split(pathPart, ",")[0]
-				depMap[path] = struct{}{}
-			}
-		}
-	}
-
-	deps := make([]string, 0, len(depMap))
-	for dep := range depMap {
-		deps = append(deps, dep)
-	}
-	return deps
-}
-
-// LoadFullGraph loads the complete type information for the initial package
-// and all its specified dependencies.
-func (w *PackageWalker) LoadFullGraph(initialPath string, dependencyPaths ...string) ([]*packages.Package, error) {
-	loadPatterns := append([]string{initialPath}, dependencyPaths...)
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
-			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
-		Dir:        ".",
-		Tests:      false,
-		BuildFlags: []string{"-tags=abgen"},
-	}
-
-	pkgs, err := packages.Load(cfg, loadPatterns...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load full package graph: %w", err)
-	}
-	if packages.PrintErrors(pkgs) > 0 {
-		return nil, fmt.Errorf("full package graph contains errors")
-	}
-
-	w.pkgs = pkgs
-	return pkgs, nil
-}
-
 // FindTypeByFQN is the main entry point for resolving a type.
-// It can dynamically load missing packages if needed.
-func (w *PackageWalker) FindTypeByFQN(fqn string) (*TypeInfo, error) {
-	// First, try to find in already loaded packages
-	if info, err := w.findTypeInLoadedPkgs(fqn); err == nil && info != nil {
+// It orchestrates package loading and type resolution.
+func (w *PackageWalker) FindTypeByFQN(fqn string) (*types.TypeInfo, error) { // Use types.TypeInfo
+	// Check cache first
+	if info, ok := w.typeCache[fqn]; ok {
 		return info, nil
 	}
 
-	// If not found, extract package path and try to load the missing package
-	pkgPath := fqn[:strings.LastIndex(fqn, ".")]
+	// Resolve the type, which may involve loading packages
+	info, err := w.resolveTypeByFQN(fqn)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the successfully resolved type
+	w.typeCache[fqn] = info
+	return info, nil
+}
+
+// resolveTypeByFQN performs the core logic of finding and resolving a type.
+func (w *PackageWalker) resolveTypeByFQN(fqn string) (*types.TypeInfo, error) { // Use types.TypeInfo
+	pkgPath, typeName := splitFQN(fqn)
+
+	// Handle built-in types
 	if pkgPath == "" {
-		return nil, fmt.Errorf("invalid FQN: %s", fqn)
+		if isPrimitiveType(typeName) {
+			return &types.TypeInfo{Name: typeName, Kind: types.Primitive}, nil // Use types.Primitive
+		}
+		return nil, fmt.Errorf("cannot resolve built-in or unqualified type: %q", typeName)
+	}
+
+	// Find the package, loading it if necessary
+	pkg, err := w.findOrLoadPackage(pkgPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find or load package %q for type %q: %w", pkgPath, fqn, err)
+	}
+
+	// Lookup the type name in the package's scope
+	obj := pkg.Types.Scope().Lookup(typeName)
+	if obj == nil {
+		return nil, fmt.Errorf("type %q not found in package %q", typeName, pkgPath)
+	}
+
+	tn, ok := obj.(*types.TypeName)
+	if !ok {
+		return nil, fmt.Errorf("%q in package %q is not a type name", typeName, pkgPath)
+	}
+
+	// Now, resolve the found type object into our TypeInfo struct
+	return w.resolveType(tn.Type())
+}
+
+// findOrLoadPackage finds a package in the walker's list or loads it dynamically.
+func (w *PackageWalker) findOrLoadPackage(pkgPath string) (*packages.Package, error) {
+	// Check if already loaded
+	for _, pkg := range w.pkgs {
+		if pkg.PkgPath == pkgPath {
+			return pkg, nil
+		}
 	}
 
 	// Check if we already tried and failed to load this package
 	if w.failedLoads[pkgPath] {
-		return nil, fmt.Errorf("package %q previously failed to load", pkgPath)
+		return nil, fmt.Errorf("package previously failed to load")
 	}
 
-	// Try to load the missing package dynamically
-	if err := w.loadMissingPackage(pkgPath); err != nil {
-		w.failedLoads[pkgPath] = true
-		return nil, fmt.Errorf("failed to load missing package %q for type %q: %w", pkgPath, fqn, err)
-	}
-
-	// Now that the package is loaded, try to find the type again
-	if info, err := w.findTypeInLoadedPkgs(fqn); err == nil && info != nil {
-		return info, nil
-	}
-
-	return nil, fmt.Errorf("type %q not found after loading package %q", fqn, pkgPath)
-}
-
-// findTypeInLoadedPkgs searches for a type in all already loaded packages.
-func (w *PackageWalker) findTypeInLoadedPkgs(fqn string) (*TypeInfo, error) {
-	pkgPath := fqn[:strings.LastIndex(fqn, ".")]
-	typeName := fqn[strings.LastIndex(fqn, ".")+1:]
-
-	if pkgPath == "" || typeName == "" {
-		return nil, fmt.Errorf("invalid FQN: %s", fqn)
-	}
-
-	for _, pkg := range w.pkgs {
-		if pkg.PkgPath == pkgPath {
-			obj := pkg.Types.Scope().Lookup(typeName)
-			if obj == nil {
-				continue
-			}
-
-			// Check if the found object is a TypeName.
-			tn, ok := obj.(*types.TypeName)
-			if !ok {
-				return nil, fmt.Errorf("%q is not a type name", fqn)
-			}
-
-			// If it's an alias, handle it here at the top level.
-			if tn.IsAlias() {
-				info := &TypeInfo{
-					Name:       tn.Name(),
-					ImportPath: tn.Pkg().Path(),
-					IsAlias:    true,
-					Original:   tn,
-				}
-				// The underlying type of an alias is the type it points to.
-				info.Underlying = w.resolveType(tn.Type())
-				// The Kind of an alias is determined by its underlying type.
-				info.Kind = info.Underlying.Kind
-				return info, nil
-			}
-
-			// If it's a regular type definition, resolve it normally.
-			return w.resolveType(obj.Type()), nil
-		}
-	}
-	return nil, fmt.Errorf("type %q not found in loaded packages", fqn)
-}
-
-// loadMissingPackage dynamically loads a package that hasn't been loaded yet.
-func (w *PackageWalker) loadMissingPackage(pkgPath string) error {
-	// Check if already loaded
-	for _, pkg := range w.pkgs {
-		if pkg.PkgPath == pkgPath {
-			return nil
-		}
-	}
-
+	// If not found, load it
 	slog.Debug("Dynamically loading missing package", "path", pkgPath)
-
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
 			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
@@ -204,138 +104,220 @@ func (w *PackageWalker) loadMissingPackage(pkgPath string) error {
 		BuildFlags: []string{"-tags=abgen"},
 	}
 
-	pkgs, err := packages.Load(cfg, pkgPath)
+	loadedPkgs, err := packages.Load(cfg, pkgPath)
 	if err != nil {
 		w.failedLoads[pkgPath] = true
-		return fmt.Errorf("failed to load package %q: %w", pkgPath, err)
+		return nil, fmt.Errorf("packages.Load failed: %w", err)
 	}
-
-	if len(pkgs) == 0 {
+	if packages.PrintErrors(loadedPkgs) > 0 {
 		w.failedLoads[pkgPath] = true
-		return fmt.Errorf("no package found for import path %q", pkgPath)
+		return nil, fmt.Errorf("loaded package contains errors")
 	}
-
-	errorCount := packages.PrintErrors(pkgs)
-	if errorCount > 0 {
-		slog.Warn("Errors while loading package", "path", pkgPath, "errorCount", errorCount)
-		// If there are errors, consider the package failed to load
+	if len(loadedPkgs) == 0 {
 		w.failedLoads[pkgPath] = true
-		return fmt.Errorf("package %q loaded with %d errors", pkgPath, errorCount)
+		return nil, fmt.Errorf("no package found for import path")
 	}
 
-	// Add the loaded package to our package list
-	w.pkgs = append(w.pkgs, pkgs[0])
-
-	slog.Debug("Successfully loaded missing package", "path", pkgPath, "files", len(pkgs[0].Syntax))
-	return nil
+	newPkg := loadedPkgs[0]
+	w.pkgs = append(w.pkgs, newPkg)
+	slog.Debug("Successfully loaded and added package", "path", newPkg.PkgPath)
+	return newPkg, nil
 }
 
-// GetLoadedPackages returns the list of loaded packages
-func (w *PackageWalker) GetLoadedPackages() []*packages.Package {
-	return w.pkgs
+// typeUnwindInfo collects information during the type unwinding process.
+type typeUnwindInfo struct {
+	kind           types.TypeKind // Use types.TypeKind
+	arrayLen       int
+	isAlias        bool
+	original       types.Object
+	baseNamedType  *types.TypeName // The innermost named type found
+	effectiveType  types.Type      // The final non-alias, non-named, non-composite type (e.g., *types.Struct, *types.Basic)
+	underlyingType types.Type      // The direct element type for the current level of modification (e.g., for *T, it's T)
+	keyType        types.Type      // For map, the key type
 }
 
-// GetFailedPackagesCount returns the count of failed package loads
-func (w *PackageWalker) GetFailedPackagesCount() int {
-	return len(w.failedLoads)
+// unwindType recursively unwinds aliases and named types to find the effective base type
+// and collect all modifiers.
+func (w *PackageWalker) unwindType(typ types.Type) typeUnwindInfo {
+	info := typeUnwindInfo{}
+	currentType := typ
+
+	for {
+		switch t := currentType.(type) {
+		case *types.Alias:
+			slog.Debug("Unwinding *types.Alias", "type", t.String())
+			if info.original == nil { // Capture the first original object for the top-level type
+				info.original = t.Obj()
+				info.isAlias = true
+			}
+			if info.baseNamedType == nil { // Capture the first named type encountered
+				info.baseNamedType = t.Obj()
+			}
+			currentType = t.Rhs() // Continue unwinding the aliased type
+
+		case *types.Named:
+			slog.Debug("Unwinding *types.Named", "type", t.String())
+			if info.original == nil { // Capture the first original object for the top-level type
+				info.original = t.Obj()
+				info.isAlias = t.Obj().IsAlias()
+			}
+			if info.baseNamedType == nil { // Capture the first named type encountered
+				info.baseNamedType = t.Obj()
+			}
+			currentType = t.Underlying() // Continue unwinding the underlying type
+
+		case *types.Pointer:
+			slog.Debug("Unwinding *types.Pointer", "type", t.String())
+			info.kind = types.Pointer // Use types.Pointer
+			info.underlyingType = t.Elem()
+			currentType = t.Elem()
+
+		case *types.Slice:
+			slog.Debug("Unwinding *types.Slice", "type", t.String())
+			info.kind = types.Slice // Use types.Slice
+			info.underlyingType = t.Elem()
+			currentType = t.Elem()
+
+		case *types.Array:
+			slog.Debug("Unwinding *types.Array", "type", t.String())
+			info.kind = types.Array // Use types.Array
+			info.arrayLen = int(t.Len())
+			info.underlyingType = t.Elem()
+			currentType = t.Elem()
+
+		case *types.Map:
+			slog.Debug("Unwinding *types.Map", "type", t.String())
+			info.kind = types.Map // Use types.Map
+			info.keyType = t.Key()
+			info.underlyingType = t.Elem() // Value type
+			currentType = t.Elem()
+
+		case *types.Basic:
+			slog.Debug("Unwinding *types.Basic", "type", t.String())
+			info.kind = types.Primitive // Use types.Primitive
+			info.effectiveType = t
+			return info
+
+		case *types.Struct:
+			slog.Debug("Unwinding *types.Struct", "type", t.String())
+			info.kind = types.Struct // Use types.Struct
+			info.effectiveType = t
+			return info
+
+		case *types.Interface:
+			slog.Debug("Unwinding *types.Interface", "type", t.String())
+			info.kind = types.Interface // Use types.Interface
+			info.effectiveType = t
+			return info
+
+		case *types.Chan:
+			slog.Debug("Unwinding *types.Chan", "type", t.String())
+			info.kind = types.Chan // Use types.Chan
+			info.effectiveType = t
+			return info
+
+		case *types.Signature:
+			slog.Debug("Unwinding *types.Signature", "type", t.String())
+			info.kind = types.Func // Use types.Func
+			info.effectiveType = t
+			return info
+
+		default:
+			slog.Warn("unhandled type during unwind", "type", t.String(), "typeOf", fmt.Sprintf("%T", t))
+			info.kind = types.Unknown // Use types.Unknown
+			info.effectiveType = t
+			return info
+		}
+
+		// If currentType is the same as typ, it means we didn't unwind anything,
+		// so baseType should be typ. Otherwise, baseType is the innermost type.
+		if currentType == typ {
+			break // Avoid infinite loop if type doesn't unwind further
+		}
+		typ = currentType // Update typ for the next iteration
+	}
+
+	info.effectiveType = currentType // The last unwound type is the effective type
+	return info
 }
 
 // resolveType is the recursive worker for building the TypeInfo graph.
-// It should not be called directly for top-level types that might be aliases.
-func (w *PackageWalker) resolveType(typ types.Type) *TypeInfo {
+func (w *PackageWalker) resolveType(typ types.Type) *types.TypeInfo { // Use types.TypeInfo
 	if typ == nil {
 		return nil
 	}
-	if cached, exists := w.typeCache[typ]; exists {
-		return cached
+
+	// Unwind the type to get its effective kind and base named type
+	unwindInfo := w.unwindType(typ)
+
+	// Determine the cache key. Only cache named types by their FQN.
+	var cacheKey string
+	if unwindInfo.original != nil { // If the top-level type is a named type or alias
+		cacheKey = unwindInfo.original.Pkg().Path() + "." + unwindInfo.original.Name()
+		if cached, exists := w.typeCache[cacheKey]; exists {
+			return cached
+		}
 	}
 
-	info := &TypeInfo{}
-	w.typeCache[typ] = info
+	info := &types.TypeInfo{ // Use types.TypeInfo
+		Kind:       unwindInfo.kind,
+		ArrayLen:   unwindInfo.arrayLen,
+		IsAlias:    unwindInfo.isAlias,
+		Original:   unwindInfo.original,
+	}
 
-	switch t := typ.(type) {
-	case *types.Named:
-		obj := t.Obj()
-		info.Name = obj.Name()
-		if obj.Pkg() != nil {
-			info.ImportPath = obj.Pkg().Path()
+	// Pre-cache for recursion, only for named types to prevent cycles with anonymous types.
+	if cacheKey != "" {
+		w.typeCache[cacheKey] = info
+	}
+
+	// Populate Name and ImportPath for the top-level named type if applicable
+	if unwindInfo.original != nil {
+		info.Name = unwindInfo.original.Name()
+		if unwindInfo.original.Pkg() != nil {
+			info.ImportPath = unwindInfo.original.Pkg().Path()
 		}
-		info.IsAlias = obj.IsAlias()
-		info.Original = obj
+	} else if basic, ok := typ.(*types.Basic); ok { // Handle primitive types directly if not named
+		info.Name = basic.Name()
+	} else if structType, ok := typ.(*types.Struct); ok { // Handle anonymous structs
+		info.Name = "struct{...}"
+	} else if interfaceType, ok := typ.(*types.Interface); ok { // Handle anonymous interfaces
+		info.Name = "interface{...}"
+	}
 
-		underlyingType := t.Underlying()
-		if info.IsAlias {
-			// For aliases, the underlying type should be properly resolved
-			info.Underlying = w.resolveType(underlyingType)
-			info.Kind = info.Underlying.Kind
-		} else {
-			// For defined types, also resolve the underlying type
-			info.Underlying = w.resolveType(underlyingType)
-			info.Kind = info.Underlying.Kind
+	// Resolve Underlying and KeyType
+	if unwindInfo.underlyingType != nil {
+		info.Underlying = w.resolveType(unwindInfo.underlyingType)
+		if info.Underlying != nil && info.Underlying.FQN() != "" {
+			info.UnderlyingFQN = info.Underlying.FQN()
 		}
-
-		if s, ok := underlyingType.(*types.Struct); ok {
-			info.Fields = w.parseFields(s)
+	}
+	if unwindInfo.keyType != nil {
+		info.KeyType = w.resolveType(unwindInfo.keyType)
+		if info.KeyType != nil && info.KeyType.FQN() != "" {
+			info.KeyTypeFQN = info.KeyType.FQN()
 		}
+	}
 
-	case *types.Pointer:
-		info.Kind = Pointer
-		info.IsPointer = true
-		info.Underlying = w.resolveType(t.Elem())
-		info.Name = "*" + info.Underlying.Name
-
-	case *types.Slice:
-		info.Kind = Slice
-		info.Underlying = w.resolveType(t.Elem())
-		info.Name = "[]" + info.Underlying.Name
-
-	case *types.Array:
-		info.Kind = Array
-		info.ArrayLen = int(t.Len())
-		info.Underlying = w.resolveType(t.Elem())
-		info.Name = fmt.Sprintf("[%d]%s", info.ArrayLen, info.Underlying.Name)
-
-	case *types.Map:
-		info.Kind = Map
-		info.KeyType = w.resolveType(t.Key())
-		info.Underlying = w.resolveType(t.Elem()) // Value type
-		info.Name = fmt.Sprintf("map[%s]%s", info.KeyType.Name, info.Underlying.Name)
-
-	case *types.Struct:
-		info.Kind = Struct
-		info.Fields = w.parseFields(t)
-
-	case *types.Basic:
-		info.Kind = Primitive
-		info.Name = t.Name()
-
-	case *types.Interface:
-		info.Kind = Interface
-
-	case *types.Chan:
-		info.Kind = Chan
-
-	case *types.Signature:
-		info.Kind = Func
-
-	default:
-		slog.Warn("unhandled type in resolveType", "type", t.String())
-		info.Kind = Unknown
-		info.Name = t.String()
+	// Handle struct fields
+	if info.Kind == types.Struct { // Use types.Struct
+		if structType, ok := unwindInfo.effectiveType.(*types.Struct); ok {
+			info.Fields = w.parseFields(structType)
+		}
 	}
 
 	return info
 }
 
 // parseFields parses the fields of a *types.Struct.
-func (w *PackageWalker) parseFields(s *types.Struct) []*FieldInfo {
-	fields := make([]*FieldInfo, 0, s.NumFields())
+func (w *PackageWalker) parseFields(s *types.Struct) []*types.FieldInfo { // Use types.FieldInfo
+	fields := make([]*types.FieldInfo, 0, s.NumFields()) // Use types.FieldInfo
 	for i := 0; i < s.NumFields(); i++ {
 		f := s.Field(i)
 		if !f.Exported() {
 			continue
 		}
-		fields = append(fields, &FieldInfo{
+		fields = append(fields, &types.FieldInfo{ // Use types.FieldInfo
 			Name:       f.Name(),
 			Type:       w.resolveType(f.Type()),
 			Tag:        s.Tag(i),
@@ -343,4 +325,31 @@ func (w *PackageWalker) parseFields(s *types.Struct) []*FieldInfo {
 		})
 	}
 	return fields
+}
+
+// AddInitialPackages seeds the walker with a set of pre-loaded packages.
+func (w *PackageWalker) AddInitialPackages(pkgs []*packages.Package) {
+	w.pkgs = append(w.pkgs, pkgs...)
+}
+
+// --- Helper Functions ---
+
+func splitFQN(fqn string) (pkgPath, typeName string) {
+	lastDot := strings.LastIndex(fqn, ".")
+	if lastDot == -1 {
+		return "", fqn
+	}
+	return fqn[:lastDot], fqn[lastDot+1:]
+}
+
+func isPrimitiveType(name string) bool {
+	// A simplified check for Go's built-in primitive types.
+	switch name {
+	case "bool", "byte", "rune", "string", "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+		"float32", "float64", "complex64", "complex128", "error":
+		return true
+	default:
+		return false
+	}
 }
