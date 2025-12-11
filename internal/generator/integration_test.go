@@ -46,19 +46,6 @@ func TestGenerator_Golden(t *testing.T) {
 			t.Run(subDir.Name(), func(t *testing.T) {
 				t.Parallel() // Run test cases in parallel
 
-				// Set the current working directory to the test case path
-				originalWD, err := os.Getwd()
-				if err != nil {
-					t.Fatalf("Failed to get current working directory: %v", err)
-				}
-				err = os.Chdir(casePath)
-				if err != nil {
-					t.Fatalf("Failed to change directory to %s: %v", casePath, err)
-				}
-				defer func() {
-					_ = os.Chdir(originalWD) // Change back after test
-				}()
-
 				directivesFile := filepath.Join(casePath, "directives.go")
 				goldenFile := filepath.Join(casePath, "expected.golden")
 				if _, err := os.Stat(directivesFile); os.IsNotExist(err) {
@@ -69,18 +56,11 @@ func TestGenerator_Golden(t *testing.T) {
 				}
 				// 1. Parse configuration using the new high-level API.
 				parser := config.NewParser()
-				cfg, err := parser.Parse(".") // Parse config for the current directory (casePath)
+				cfg, err := parser.Parse(casePath) // Pass the specific test case path directly.
+
 				if err != nil {
 					t.Fatalf("config.Parser.Parse() failed for %s: %v", casePath, err)
 				}
-				// Override generation context package path for the test, as Parse might resolve it differently
-				cfg.GenerationContext.PackagePath = strings.ReplaceAll(casePath, string(filepath.Separator), "/")
-				if !strings.HasPrefix(cfg.GenerationContext.PackagePath, "github.com/origadmin/abgen/") {
-					// This is a hack for test execution context. Adjust this if testdata is moved.
-					cfg.GenerationContext.PackagePath = strings.Replace(cfg.GenerationContext.PackagePath, "../../", "github.com/origadmin/abgen/", 1)
-					cfg.GenerationContext.PackagePath = strings.Replace(cfg.GenerationContext.PackagePath, "testdata/", "testdata", 1)
-				}
-				cfg.GenerationContext.PackageName = strings.ReplaceAll(filepath.Base(casePath), "-", "") // Example: simplebilateral -> simplebilateral
 
 				// 2. Analyze types using the new high-level API.
 				typeAnalyzer := analyzer.NewTypeAnalyzer()
@@ -97,13 +77,12 @@ func TestGenerator_Golden(t *testing.T) {
 					t.Fatalf("Generator failed: %v", err)
 				}
 				if os.Getenv("UPDATE_GOLDEN_FILES") != "" {
-					err = os.WriteFile(goldenFile, generatedBytes, 0644)
-					if err != nil {
-						t.Fatalf("Failed to update golden file %s: %v", goldenFile, err) // Fixed: changed generatedCode to generatedBytes
+					if err := os.WriteFile(goldenFile, generatedBytes, 0644); err != nil {
+						t.Fatalf("Failed to update golden file %s: %v", goldenFile, err)
 					}
 					t.Logf("Updated golden file: %s", goldenFile)
+					return // Skip comparison when updating
 				}
-				// 8. Read the golden file
 				goldenBytes, err := os.ReadFile(goldenFile)
 				if err != nil {
 					t.Fatalf("Failed to read golden file: %v", err)
