@@ -9,14 +9,12 @@ import (
 	"log/slog"
 	"sort"
 
-	"github.com/origadmin/abgen/internal/analyzer"
 	"github.com/origadmin/abgen/internal/config"
 	"github.com/origadmin/abgen/internal/model"
 )
 
 // Generator holds the state for code generation.
 type Generator struct {
-	analyzer  *analyzer.TypeAnalyzer
 	config    *config.Config
 	buf       bytes.Buffer
 	importMgr *ImportManager
@@ -27,9 +25,8 @@ type Generator struct {
 }
 
 // NewGenerator creates a new Generator instance.
-func NewGenerator(analyzer *analyzer.TypeAnalyzer, config *config.Config) *Generator {
+func NewGenerator(config *config.Config) *Generator {
 	return &Generator{
-		analyzer:  analyzer,
 		config:    config,
 		importMgr: NewImportManager(),
 		converter: NewTypeConverter(),
@@ -39,27 +36,16 @@ func NewGenerator(analyzer *analyzer.TypeAnalyzer, config *config.Config) *Gener
 	}
 }
 
-// Generate produces the Go source code for the conversions.
-func (g *Generator) Generate() ([]byte, error) {
-	// 1. Analyze types from config
-	packagePaths := g.config.RequiredPackages()
-	fqns := g.config.RequiredTypeFQNs() // This method needs to be added to config.Config
-
-	typeInfos, err := g.analyzer.Analyze(packagePaths, fqns)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to analyze types: %w", err)
-	}
-
-	slog.Debug("Analyzed types", "count", len(typeInfos), "rules", len(g.config.ConversionRules))
+// Generate produces the Go source code for the conversions. It takes the pre-analyzed type information.
+func (g *Generator) Generate(typeInfos map[string]*model.TypeInfo) ([]byte, error) {
+	slog.Debug("Generating code", "type_count", len(typeInfos), "rules", len(g.config.ConversionRules))
 	for fqn, info := range typeInfos {
-		slog.Debug("Type info", "fqn", fqn, "name", info.Name, "kind", info.Kind)
+		slog.Debug("Type info received by generator", "fqn", fqn, "name", info.Name, "kind", info.Kind)
 	}
 
-	// 2. Populate aliases for all referenced types
+	// 1. Populate aliases for all referenced types
 	g.populateAliases(typeInfos)
-
-	// 3. Generate the actual code
+	// 2. Generate the actual code
 	g.buf.Reset()
 	g.writePackageHeader()
 	g.writeImports()

@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	goversion "github.com/caarlos0/go-version"
-	"golang.org/x/tools/go/packages"
 
 	"github.com/origadmin/abgen/internal/analyzer"
 	"github.com/origadmin/abgen/internal/config"
@@ -17,15 +16,15 @@ import (
 )
 
 var (
-	version   = "0.0.1"
-	commit    = ""
-	treeState = ""
-	date      = ""
-	builtBy   = ""
-	debug     = flag.Bool("debug", false, "Enable debug logging")
-	output    = flag.String("output", "", "Output file name for the main generated code. Defaults to <package_name>.gen.go.")
+	version      = "0.0.1"
+	commit       = ""
+	treeState    = ""
+	date         = ""
+	builtBy      = ""
+	debug        = flag.Bool("debug", false, "Enable debug logging")
+	output       = flag.String("output", "", "Output file name for the main generated code. Defaults to <package_name>.gen.go.")
 	customOutput = flag.String("custom-output", "custom.gen.go", "Output file name for custom conversion stubs.")
-	logFile   = flag.String("log-file", "", "Path to a file where logs should be written. If empty, logs go to stderr.") // Added log-file flag
+	logFile      = flag.String("log-file", "", "Path to a file where logs should be written. If empty, logs go to stderr.") // Added log-file flag
 )
 
 func main() {
@@ -66,92 +65,33 @@ func main() {
 	slog.Info("Starting abgen", "sourceDir", sourceDir)
 
 	// --- 1. Load the initial package to find directives ---
-	slog.Debug("Loading initial package...")
-	directiveParser := config.NewDirectiveParser()
-	
-	initialLoaderCfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedSyntax | packages.NeedFiles,
-		Dir:  sourceDir,
-		Tests: false,
-	}
-	initialPkgs, err := packages.Load(initialLoaderCfg, ".")
+	// Use the new high-level parser to get the config.
+	slog.Debug("Parsing configuration...")
+	parser := config.NewParser()
+	cfg, err := parser.Parse(sourceDir) // The new Parse method handles initial package loading and directive parsing.
 	if err != nil {
-		slog.Error("Failed to load initial package for directives", "error", err)
+		slog.Error("Failed to parse configuration", "error", err)
 		os.Exit(1)
 	}
-	if packages.PrintErrors(initialPkgs) > 0 {
-		slog.Error("Initial package for directives contains errors")
-		os.Exit(1)
-	}
-	if len(initialPkgs) == 0 {
-		slog.Error("No initial package found at path", "sourceDir", sourceDir)
-		os.Exit(1)
-	}
-	initialPkg := initialPkgs[0]
 
-	// --- 2. Discover and parse directives ---
-	slog.Debug("Discovering directives...")
-	directives, err := directiveParser.DiscoverDirectives(initialPkg)
+	// --- 2. Prepare parameters for the analyzer ---
+	slog.Debug("Extracting package paths and type FQNs for analysis...")
+	packagePaths := cfg.RequiredPackages()
+	typeFQNs := cfg.RequiredTypeFQNs()
+
+	// --- 3. Analyze Types ---
+	slog.Debug("Analyzing types...")
+	analyzer := analyzer.NewTypeAnalyzer()
+	typeInfos, err := analyzer.Analyze(packagePaths, typeFQNs) // Use the new Analyze method signature
 	if err != nil {
-		slog.Error("Failed to discover directives", "error", err)
-		os.Exit(1)
-	}
-	
-	ruleParser := config.NewRuleParser()
-	if err := ruleParser.ParseDirectives(directives, initialPkg); err != nil {
-		slog.Error("Failed to parse directives", "error", err)
-		os.Exit(1)
-	}
-	ruleSet := ruleParser.GetRuleSet()
-
-	// --- 3. Load the full package graph using the RuleSet ---
-	slog.Debug("Loading full package graph...")
-	walker := analyzer.NewPackageWalker()
-	
-	dependencyPaths := make([]string, 0)
-	seenPaths := make(map[string]bool)
-	seenPaths[initialPkg.PkgPath] = true // The initial package is always needed
-
-	for sourcePkg, targetPkg := range ruleSet.PackagePairs {
-		if !seenPaths[sourcePkg] {
-			dependencyPaths = append(dependencyPaths, sourcePkg)
-			seenPaths[sourcePkg] = true
-		}
-		if !seenPaths[targetPkg] {
-			dependencyPaths = append(dependencyPaths, targetPkg)
-			seenPaths[targetPkg] = true
-		}
-	}
-	// Add package paths from TypePairs as dependencies
-	for fqn := range ruleSet.TypePairs {
-		pkgPath := fqn[:strings.LastIndex(fqn, ".")]
-		if !seenPaths[pkgPath] {
-			dependencyPaths = append(dependencyPaths, pkgPath)
-			seenPaths[pkgPath] = true
-		}
-	}
-    // Add package paths from PackageAliases as dependencies
-    for _, path := range ruleSet.PackageAliases {
-        if !seenPaths[path] {
-            dependencyPaths = append(dependencyPaths, path)
-            seenPaths[path] = true
-        }
-    }
-
-	pkgs, err := walker.LoadFullGraph(initialPkg.PkgPath, dependencyPaths...)
-	if err != nil {
-		slog.Error("Failed to load full package graph", "error", err)
-		os.Exit(1)
-	}
-	if packages.PrintErrors(pkgs) > 0 {
-		slog.Error("Full package graph contains errors")
+		slog.Error("Failed to analyze types", "error", err)
 		os.Exit(1)
 	}
 
 	// --- 4. Generate Code ---
 	slog.Debug("Generating code...")
-	gen := generator.NewGenerator(walker, ruleSet)
-	mainGeneratedCode, err := gen.Generate()
+	gen := generator.NewGenerator(cfg)
+	mainGeneratedCode, err := gen.Generate(typeInfos)
 	if err != nil {
 		slog.Error("Code generation failed", "error", err)
 		os.Exit(1)
@@ -160,8 +100,8 @@ func main() {
 	// --- 4. Write Main Output ---
 	mainOutputFile := *output
 	if mainOutputFile == "" {
-		// Default to <package_name>.gen.go
-		mainOutputFile = filepath.Join(sourceDir, strings.ToLower(initialPkg.Name)+".gen.go")
+		// Default to <package_name>.gen.go, using the package name from the config.
+		mainOutputFile = filepath.Join(sourceDir, strings.ToLower(cfg.GenerationContext.PackageName)+".gen.go")
 	}
 	slog.Info("Writing main generated code", "file", mainOutputFile)
 	err = os.WriteFile(mainOutputFile, mainGeneratedCode, 0644)
