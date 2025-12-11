@@ -3,7 +3,11 @@ package generator
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
+
+	"github.com/origadmin/abgen/internal/analyzer"
+	"github.com/origadmin/abgen/internal/config"
 )
 
 func TestGenerator_CodeGeneration(t *testing.T) {
@@ -102,77 +106,43 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 		},
 	}
 
-	// Sort test cases by priority and category for consistent execution order
-	sortedTestCases := make([]struct {
-		name           string
-		directivePath  string
-		goldenFileName string
-		dependencies   []string
-		priority       string
-		category       string
-	}, len(testCases))
-	copy(sortedTestCases, testCases)
-
-	// Simple sort: P0 first, then P1, then P2; within each priority, sort by category
-	for i := 0; i < len(sortedTestCases); i++ {
-		for j := i + 1; j < len(sortedTestCases); j++ {
-			priorityOrder := map[string]int{"P0": 0, "P1": 1, "P2": 2}
-			if priorityOrder[sortedTestCases[i].priority] > priorityOrder[sortedTestCases[j].priority] {
-				sortedTestCases[i], sortedTestCases[j] = sortedTestCases[j], sortedTestCases[i]
-			} else if priorityOrder[sortedTestCases[i].priority] == priorityOrder[sortedTestCases[j].priority] &&
-				sortedTestCases[i].category > sortedTestCases[j].category {
-				sortedTestCases[i], sortedTestCases[j] = sortedTestCases[j], sortedTestCases[i]
-			}
+	// Sort test cases for consistent execution order
+	sort.Slice(testCases, func(i, j int) bool {
+		priorityOrder := map[string]int{"P0": 0, "P1": 1, "P2": 2}
+		if priorityOrder[testCases[i].priority] != priorityOrder[testCases[j].priority] {
+			return priorityOrder[testCases[i].priority] < priorityOrder[testCases[j].priority]
 		}
-	}
+		return testCases[i].category < testCases[j].category
+	})
 
-	for _, tc := range sortedTestCases {
+	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Logf("Running test: %s (Priority: %s, Category: %s)", tc.name, tc.priority, tc.category)
 
-			// Step 1: Initialize test adapter
-			adapter := NewTestAdapter()
-
-			// Step 2: Load initial package to discover directives
-			initialPkg, err := adapter.LoadInitialPackage(tc.directivePath)
+			// Step 1: Parse config from the directive path using the new high-level API.
+			parser := config.NewParser()
+			cfg, err := parser.Parse(tc.directivePath)
 			if err != nil {
-				t.Fatalf("Failed to load initial package from %s: %v", tc.directivePath, err)
+				t.Fatalf("config.Parser.Parse() failed: %v", err)
 			}
 
-			// Step 3: Discover directives from the initial package
-			directives, err := adapter.DiscoverDirectives(initialPkg)
+			// Step 2: Analyze types using the new high-level API.
+			typeAnalyzer := analyzer.NewTypeAnalyzer()
+			packagePaths := cfg.RequiredPackages()
+			typeFQNs := cfg.RequiredTypeFQNs()
+			typeInfos, err := typeAnalyzer.Analyze(packagePaths, typeFQNs)
 			if err != nil {
-				t.Fatalf("Failed to discover directives in %s: %v", tc.directivePath, err)
+				t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed: %v", err)
 			}
 
-			// Step 4: Extract dependencies from directives.
-			// The 'dependencies' field in the test case can be used as additional hints if needed,
-			// but the primary source should be the directives themselves.
-			// For now, we'll just use the dependencies extracted from directives.
-			dependencyPaths := adapter.ExtractDependencies(directives)
-
-			// Step 5: Load full graph including dependencies
-			// The LoadFullGraph method will ensure all necessary packages are loaded and analyzed.
-			_, err = adapter.LoadFullGraph(tc.directivePath, dependencyPaths...)
-			if err != nil {
-				t.Fatalf("Failed to load full package graph for %s with dependencies %v: %v", tc.directivePath, dependencyPaths, err)
-			}
-
-			// Step 6: Parse directives into a Config
-			cfg, err := adapter.ParseDirectives(directives, initialPkg)
-			if err != nil {
-				t.Fatalf("Failed to parse directives into Config for %s: %v", tc.directivePath, err)
-			}
-
-			// Step 7: Run the generator.
-			// The NewGenerator should now take the analyzer.TypeAnalyzer and the config.Config.
-			g := NewGenerator(adapter.GetAnalyzer(), cfg)
-			generatedCode, err := g.Generate()
+			// Step 3: Run the generator with the results.
+			g := NewGenerator(cfg)
+			generatedCode, err := g.Generate(typeInfos)
 			if err != nil {
 				t.Fatalf("Generate() failed for test case %s: %v", tc.name, err)
 			}
 
-			// Step 8: Snapshot testing - compare against a "golden" file.
+			// Step 4: Snapshot testing - compare against a "golden" file.
 			goldenFile := filepath.Join(tc.directivePath, tc.goldenFileName)
 			if os.Getenv("UPDATE_GOLDEN_FILES") != "" {
 				err = os.WriteFile(goldenFile, generatedCode, 0644)
@@ -180,6 +150,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 					t.Fatalf("Failed to update golden file %s: %v", goldenFile, err)
 				}
 				t.Logf("Updated golden file: %s", goldenFile)
+				return // Skip comparison when updating
 			}
 
 			expectedCode, err := os.ReadFile(goldenFile)
@@ -188,11 +159,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			}
 
 			if string(generatedCode) != string(expectedCode) {
-				// Save generated code to file for debugging
-				generatedFile := filepath.Join(tc.directivePath, "generated.go")
-				os.WriteFile(generatedFile, generatedCode, 0644)
-				t.Logf("Generated code saved to: %s", generatedFile)
-				t.Errorf("Generated code does not match the golden file %s", goldenFile)
+				generatedFile := filepath.Join(tc.directivePath, "expected.golden")
+				_ = os.WriteFile(generatedFile, generatedCode, 0644)
+				t.Errorf("Generated code does not match the golden file %s. The generated output was saved to %s for inspection.", goldenFile, generatedFile)
 			}
 		})
 	}

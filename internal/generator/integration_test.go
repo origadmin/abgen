@@ -8,6 +8,8 @@ import (
 
 	"github.com/sergi/go-diff/diffmatchpatch"
 
+	"github.com/origadmin/abgen/internal/analyzer"
+	"github.com/origadmin/abgen/internal/config"
 	"github.com/origadmin/abgen/internal/generator"
 )
 
@@ -44,70 +46,80 @@ func TestGenerator_Golden(t *testing.T) {
 			t.Run(subDir.Name(), func(t *testing.T) {
 				t.Parallel() // Run test cases in parallel
 
+				// Set the current working directory to the test case path
+				originalWD, err := os.Getwd()
+				if err != nil {
+					t.Fatalf("Failed to get current working directory: %v", err)
+				}
+				err = os.Chdir(casePath)
+				if err != nil {
+					t.Fatalf("Failed to change directory to %s: %v", casePath, err)
+				}
+				defer func() {
+					_ = os.Chdir(originalWD) // Change back after test
+				}()
+
 				directivesFile := filepath.Join(casePath, "directives.go")
 				goldenFile := filepath.Join(casePath, "expected.golden")
-
 				if _, err := os.Stat(directivesFile); os.IsNotExist(err) {
-					t.Skip("No directives.go file found, skipping.")
+					t.Skipf("No directives.go file found in %s, skipping.", casePath)
 				}
 				if _, err := os.Stat(goldenFile); os.IsNotExist(err) {
-					t.Skip("No expected.golden file found, skipping.")
+					t.Skipf("No expected.golden file found in %s, skipping.", casePath)
 				}
-
-				// 1. Initialize test adapter
-				adapter := generator.NewTestAdapter()
-
-				// 2. Load initial package to discover directives
-				initialPkg, err := adapter.LoadInitialPackage(casePath)
+				// 1. Parse configuration using the new high-level API.
+				parser := config.NewParser()
+				cfg, err := parser.Parse(".") // Parse config for the current directory (casePath)
 				if err != nil {
-					t.Fatalf("Failed to load initial package from %s: %v", casePath, err)
+					t.Fatalf("config.Parser.Parse() failed for %s: %v", casePath, err)
 				}
+				// Override generation context package path for the test, as Parse might resolve it differently
+				cfg.GenerationContext.PackagePath = strings.ReplaceAll(casePath, string(filepath.Separator), "/")
+				if !strings.HasPrefix(cfg.GenerationContext.PackagePath, "github.com/origadmin/abgen/") {
+					// This is a hack for test execution context. Adjust this if testdata is moved.
+					cfg.GenerationContext.PackagePath = strings.Replace(cfg.GenerationContext.PackagePath, "../../", "github.com/origadmin/abgen/", 1)
+					cfg.GenerationContext.PackagePath = strings.Replace(cfg.GenerationContext.PackagePath, "testdata/", "testdata", 1)
+				}
+				cfg.GenerationContext.PackageName = strings.ReplaceAll(filepath.Base(casePath), "-", "") // Example: simplebilateral -> simplebilateral
 
-				// 3. Discover directives from the initial package
-				directives, err := adapter.DiscoverDirectives(initialPkg)
+				// 2. Analyze types using the new high-level API.
+				typeAnalyzer := analyzer.NewTypeAnalyzer()
+				packagePaths := cfg.RequiredPackages()
+				typeFQNs := cfg.RequiredTypeFQNs()
+				typeInfos, err := typeAnalyzer.Analyze(packagePaths, typeFQNs)
 				if err != nil {
-					t.Fatalf("Failed to discover directives in %s: %v", casePath, err)
+					t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed for %s: %v", casePath, err)
 				}
-
-				// 4. Extract dependencies from directives
-				dependencyPaths := adapter.ExtractDependencies(directives)
-
-				// 5. Load full graph including dependencies
-				_, err = adapter.LoadFullGraph(initialPkg.PkgPath, dependencyPaths...)
-				if err != nil {
-					t.Fatalf("Failed to load full package graph for %s: %v", casePath, err)
-				}
-
-				// 6. Parse directives into a Config
-				cfg, err := adapter.ParseDirectives(directives, initialPkg)
-				if err != nil {
-					t.Fatalf("Failed to parse directives into Config for %s: %v", casePath, err)
-				}
-
-				// 7. Run the generator
-				gen := generator.NewGenerator(adapter.GetAnalyzer(), cfg)
-				generatedBytes, err := gen.Generate()
+				// 3. Run the generator with the results.
+				gen := generator.NewGenerator(cfg) // NewGenerator only needs the Config
+				generatedBytes, err := gen.Generate(typeInfos)
 				if err != nil {
 					t.Fatalf("Generator failed: %v", err)
 				}
-
+				if os.Getenv("UPDATE_GOLDEN_FILES") != "" {
+					err = os.WriteFile(goldenFile, generatedBytes, 0644)
+					if err != nil {
+						t.Fatalf("Failed to update golden file %s: %v", goldenFile, err) // Fixed: changed generatedCode to generatedBytes
+					}
+					t.Logf("Updated golden file: %s", goldenFile)
+				}
 				// 8. Read the golden file
 				goldenBytes, err := os.ReadFile(goldenFile)
 				if err != nil {
 					t.Fatalf("Failed to read golden file: %v", err)
 				}
-
 				// 9. Compare generated output with the golden file
 				// Normalize line endings for comparison
 				generatedStr := strings.ReplaceAll(string(generatedBytes), "\r\n", "\n")
 				goldenStr := strings.ReplaceAll(string(goldenBytes), "\r\n", "\n")
 
 				if generatedStr != goldenStr {
-					dmp := diffmatchpatch.New()
+					dmp := diffmatchpatch.New() // Fixed: use imported diffmatchpatch
 					diffs := dmp.DiffMain(goldenStr, generatedStr, false)
-					t.Errorf("Generated code does not match golden file.\n\n%s", dmp.DiffPrettyText(diffs))
+					t.Errorf("Generated code does not match golden file %s.\n\n%s", goldenFile, dmp.DiffPrettyText(diffs)) // Added goldenFile to error message
 				}
 			})
 		}
+
 	}
 }
