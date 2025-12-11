@@ -8,16 +8,26 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// DirectiveParser is responsible for discovering abgen directives from Go source files.
-type DirectiveParser struct{}
-
-// NewDirectiveParser creates a new instance of DirectiveParser.
-func NewDirectiveParser() *DirectiveParser {
-	return &DirectiveParser{}
+// Parser is responsible for parsing abgen directives and building a Config object.
+type Parser struct {
+	config *Config
 }
 
-// DiscoverDirectives scans the provided package for //go:abgen: comments and extracts them.
-func (dp *DirectiveParser) DiscoverDirectives(pkg *packages.Package) ([]string, error) {
+// NewParser creates a new instance of a Parser.
+func NewParser() *Parser {
+	return &Parser{
+		config: NewConfig(),
+	}
+}
+
+// ParseDirectives scans and parses all abgen directives from a given package.
+func (p *Parser) ParseDirectives(pkg *packages.Package) (*Config, error) {
+	if pkg == nil {
+		return nil, fmt.Errorf("package context cannot be nil")
+	}
+	p.config.GenerationContext.PackageName = pkg.Name
+	p.config.GenerationContext.PackagePath = pkg.ID
+
 	var directives []string
 	for _, file := range pkg.Syntax {
 		for _, commentGroup := range file.Comments {
@@ -28,347 +38,163 @@ func (dp *DirectiveParser) DiscoverDirectives(pkg *packages.Package) ([]string, 
 			}
 		}
 	}
+
 	if len(directives) == 0 {
 		return nil, fmt.Errorf("no abgen directives found in package %s", pkg.ID)
 	}
-	return directives, nil
-}
-
-// ExtractDependencies extracts package import paths from directives.
-// This method is a simplified placeholder and might need more sophisticated parsing
-// depending on the directive format for dependencies.
-func (dp *DirectiveParser) ExtractDependencies(directives []string) []string {
-	// This is a simplified implementation. A more robust solution would parse
-	// specific directive types that declare dependencies.
-	// For now, we'll look for 'package:path' directives.
-	var dependencies []string
-	for _, d := range directives {
-		if strings.HasPrefix(d, "//go:abgen:package:path=") {
-			// Example: //go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/ent,alias=ent
-			parts := strings.SplitN(d, "=", 2)
-			if len(parts) == 2 {
-				pathAndAlias := strings.SplitN(parts[1], ",", 2)
-				dependencies = append(dependencies, pathAndAlias[0])
-			}
-		}
-		// Add other directive types that might declare dependencies if needed
-	}
-	return dependencies
-}
-
-// RuleParser holds the state for the parsing process of abgen rules.
-
-type RuleParser struct {
-
-	ruleSet *RuleSet
-
-}
-
-
-
-// NewRuleParser creates a new RuleParser instance.
-
-func NewRuleParser() *RuleParser {
-
-	return &RuleParser{
-
-		ruleSet: NewRuleSet(),
-
-	}
-
-}
-
-
-
-// Parse parses a single directive string and updates the ruleset.
-
-func (rp *RuleParser) Parse(directive string) error {
-
-	// Remove the //go:abgen: prefix if present
-
-	if strings.HasPrefix(directive, "//go:abgen:") {
-
-		directive = strings.TrimPrefix(directive, "//go:abgen:")
-
-	}
-
-
-
-	parts := strings.SplitN(directive, "=", 2) // Use SplitN for robustness
-
-	key := parts[0]
-
-	var value string
-
-	if len(parts) > 1 {
-
-		value = strings.Trim(parts[1], `"`)
-
-	}
-
-
-
-	// Parse based on the exact key
-
-	switch key {
-
-	case "package:path":
-
-		rp.parsePackagePath(value)
-
-	case "pair:packages":
-
-		rp.parsePackagePairs(value)
-
-	case "convert:source:suffix":
-
-		rp.ruleSet.NamingRules.SourceSuffix = value
-
-	case "convert:target:suffix":
-
-		rp.ruleSet.NamingRules.TargetSuffix = value
-
-	case "convert:source:prefix":
-
-		rp.ruleSet.NamingRules.SourcePrefix = value
-
-	case "convert:target:prefix":
-
-		rp.ruleSet.NamingRules.TargetPrefix = value
-
-	case "convert:direction":
-
-		// This requires type context, simplified for now
-
-		rp.ruleSet.BehaviorRules.Direction["*"] = value
-
-	case "convert:alias:generate":
-
-		rp.ruleSet.BehaviorRules.GenerateAlias = (value == "true")
-
-	case "convert:ignore":
-
-		rp.parseIgnoreRule(value)
-
-	case "convert:remap":
-
-		rp.parseRemapRule(value)
-
-	case "convert":
-
-		rp.parseConvertRule(value)
-
-	}
-
-
-
-	return nil
-
-}
-
-
-
-// ParseDirectives parses multiple directives and sets the generation context.
-
-func (rp *RuleParser) ParseDirectives(directives []string, pkg *packages.Package) error {
-
-	if pkg == nil {
-
-		return fmt.Errorf("package context cannot be nil")
-
-	}
-
-	rp.ruleSet.Context.PackageName = pkg.Name
-
-	rp.ruleSet.Context.PackagePath = pkg.ID
-
-
 
 	for _, directive := range directives {
-
-		if err := rp.Parse(directive); err != nil {
-
-			return err
-
+		if err := p.parse(directive); err != nil {
+			return nil, err
 		}
+	}
 
+	return p.config, nil
+}
+
+// parse processes a single directive string and updates the configuration.
+func (p *Parser) parse(directive string) error {
+	if !strings.HasPrefix(directive, "//go:abgen:") {
+		return nil // Not a valid directive
+	}
+	directive = strings.TrimPrefix(directive, "//go:abgen:")
+
+	parts := strings.SplitN(directive, "=", 2)
+	key := parts[0]
+	var value string
+	if len(parts) > 1 {
+		value = strings.Trim(parts[1], `"`)
+	}
+
+	switch key {
+	case "package:path":
+		p.parsePackagePath(value)
+	case "pair:packages":
+		p.parsePackagePairs(value)
+	case "convert:source:suffix":
+		p.config.NamingRules.SourceSuffix = value
+	case "convert:target:suffix":
+		p.config.NamingRules.TargetSuffix = value
+	case "convert:source:prefix":
+		p.config.NamingRules.SourcePrefix = value
+	case "convert:target:prefix":
+		p.config.NamingRules.TargetPrefix = value
+	case "convert:alias:generate":
+		p.config.GlobalBehaviorRules.GenerateAlias = (value == "true")
+	case "convert":
+		p.parseConvertRule(value)
+	// Note: Field-level rules like ignore/remap and direction are now part of 'convert'
+	default:
+		// Potentially handle unknown directives, e.g., log a warning.
 	}
 
 	return nil
-
 }
 
-
-
-// GetRuleSet returns the final, consolidated RuleSet.
-
-func (rp *RuleParser) GetRuleSet() *RuleSet {
-
-	return rp.ruleSet
-
-}
-
-
-
-// parsePackagePath parses package path directives.
-
-func (rp *RuleParser) parsePackagePath(value string) {
-
-	pathAliasParts := strings.Split(value, ",")
-
-	path := pathAliasParts[0]
-
+// parsePackagePath parses "package:path" directives and adds to PackageAliases.
+func (p *Parser) parsePackagePath(value string) {
+	parts := strings.Split(value, ",")
+	path := parts[0]
 	alias := ""
-
-	if len(pathAliasParts) > 1 && strings.HasPrefix(pathAliasParts[1], "alias=") {
-
-		alias = strings.TrimPrefix(pathAliasParts[1], "alias=")
-
+	if len(parts) > 1 && strings.HasPrefix(parts[1], "alias=") {
+		alias = strings.TrimPrefix(parts[1], "alias=")
 	} else {
-
 		alias = path[strings.LastIndex(path, "/")+1:]
-
 	}
-
-	rp.ruleSet.PackageAliases[alias] = path
-
+	p.config.PackageAliases[alias] = path
 }
 
+// resolvePackagePath tries to resolve an identifier as an alias, falling back to treating it as a full path.
+func (p *Parser) resolvePackagePath(identifier string) string {
+	if path, ok := p.config.PackageAliases[identifier]; ok {
+		return path // It's an alias, return the corresponding path.
+	}
+	return identifier // Not an alias, assume it's a full package path.
+}
 
-
-// parsePackagePairs parses package pairing directives.
-
-func (rp *RuleParser) parsePackagePairs(value string) {
-
+// parsePackagePairs parses "pair:packages" directives.
+func (p *Parser) parsePackagePairs(value string) {
 	pair := strings.Split(value, ",")
-
-	if len(pair) == 2 {
-
-		sourceAlias, targetAlias := pair[0], pair[1]
-
-		if sourcePath, ok := rp.ruleSet.PackageAliases[sourceAlias]; ok {
-
-			if targetPath, ok := rp.ruleSet.PackageAliases[targetAlias]; ok {
-
-				rp.ruleSet.PackagePairs[sourcePath] = targetPath
-
-			}
-
-		}
-
-	}
-
-}
-
-
-
-// parseIgnoreRule parses field ignore rules.
-
-func (rp *RuleParser) parseIgnoreRule(value string) {
-
-	parts := strings.Split(value, "#")
-
-	if len(parts) != 2 {
-
-		return
-
-	}
-
-	typeName, fieldStr := parts[0], parts[1]
-
-	fields := strings.Split(fieldStr, ",")
-
-
-
-	if _, ok := rp.ruleSet.FieldRules.Ignore[typeName]; !ok {
-
-		rp.ruleSet.FieldRules.Ignore[typeName] = make(map[string]struct{})
-
-	}
-
-	for _, field := range fields {
-
-		rp.ruleSet.FieldRules.Ignore[typeName][field] = struct{}{}
-
-	}
-
-}
-
-
-
-// parseRemapRule parses field remap rules.
-
-func (rp *RuleParser) parseRemapRule(value string) {
-
-	parts := strings.Split(value, "#")
-
-	if len(parts) != 2 {
-
-		return
-
-	}
-
-	typeName, remapStr := parts[0], parts[1]
-
-
-
-	remapParts := strings.Split(remapStr, ":")
-
-	if len(remapParts) != 2 {
-
-		return
-
-	}
-
-	sourceField, targetField := remapParts[0], remapParts[1]
-
-
-
-	if _, ok := rp.ruleSet.FieldRules.Remap[typeName]; !ok {
-
-		rp.ruleSet.FieldRules.Remap[typeName] = make(map[string]string)
-
-	}
-
-	rp.ruleSet.FieldRules.Remap[typeName][sourceField] = targetField
-
-}
-
-
-
-// parseConvertRule parses explicit type conversion directives.
-
-func (rp *RuleParser) parseConvertRule(value string) {
-
-	pair := strings.Split(value, ",")
-
 	if len(pair) != 2 {
-
 		return
-
 	}
+	sourceIdentifier, targetIdentifier := strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1])
 
-	sourceType, targetType := strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1])
+	sourcePath := p.resolvePackagePath(sourceIdentifier)
+	targetPath := p.resolvePackagePath(targetIdentifier)
 
-
-
-	// Resolve the FQN of the source type. It might have an alias.
-
-	parts := strings.Split(sourceType, ".")
-
-	if len(parts) == 2 {
-
-		alias, typeName := parts[0], parts[1]
-
-		if sourcePath, ok := rp.ruleSet.PackageAliases[alias]; ok {
-
-			fqn := sourcePath + "." + typeName
-
-			rp.ruleSet.TypePairs[fqn] = targetType
-
-		}
-
+	if sourcePath != "" && targetPath != "" {
+		p.config.PackagePairs = append(p.config.PackagePairs, &PackagePair{SourcePath: sourcePath, TargetPath: targetPath})
 	}
-
 }
 
+// parseConvertRule parses "convert" directives using a key-value format.
+func (p *Parser) parseConvertRule(value string) {
+	parts := strings.Split(value, ",")
+	
+	var sourceTypeStr, targetTypeStr string
+	
+	rule := &ConversionRule{
+		Direction: DirectionOneway, // Default direction
+		FieldRules: FieldRuleSet{
+			Ignore: make(map[string]struct{}),
+			Remap:  make(map[string]string),
+		},
+	}
+
+	for _, part := range parts {
+		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		key, val := kv[0], kv[1]
+
+		switch key {
+		case "source":
+			sourceTypeStr = val
+		case "target":
+			targetTypeStr = val
+		case "direction":
+			if val == "both" {
+				rule.Direction = DirectionBoth
+			}
+		case "ignore":
+			for _, field := range strings.Split(val, ";") {
+				rule.FieldRules.Ignore[field] = struct{}{}
+			}
+		case "remap":
+			for _, remapPair := range strings.Split(val, ";") {
+				fromTo := strings.SplitN(remapPair, ":", 2)
+				if len(fromTo) == 2 {
+					rule.FieldRules.Remap[fromTo[0]] = fromTo[1]
+				}
+			}
+		}
+	}
+
+	if sourceTypeStr == "" || targetTypeStr == "" {
+		return
+	}
+
+	rule.SourceType = p.resolveTypeFQN(sourceTypeStr)
+	rule.TargetType = p.resolveTypeFQN(targetTypeStr)
+
+	p.config.ConversionRules = append(p.config.ConversionRules, rule)
+}
+
+// resolveTypeFQN resolves a type string (e.g., "alias.TypeName" or "path/to/pkg.TypeName") to a fully-qualified name.
+func (p *Parser) resolveTypeFQN(typeStr string) string {
+	lastDot := strings.LastIndex(typeStr, ".")
+	if lastDot == -1 {
+		// It's a local type in the current package.
+		return typeStr
+	}
+
+	packageIdentifier := typeStr[:lastDot]
+	typeName := typeStr[lastDot+1:]
+
+	// The identifier could be an alias or a full package path.
+	packagePath := p.resolvePackagePath(packageIdentifier)
+	
+	return packagePath + "." + typeName
+}

@@ -1,137 +1,93 @@
-// Package config defines the rule models for the abgen system.
-// It contains the data structures that hold parsed directive information.
+// Package config defines the data structures for abgen's configuration and rules.
 package config
 
-// GenerationContext holds information about the target package for generation.
-type GenerationContext struct {
-	// PackageName is the name of the package for the generated file (e.g., "users").
-	PackageName string
-	// PackagePath is the import path of the package (e.g., "github.com/my/project/users").
-	PackagePath string
+// Global constants for the application.
+const (
+	Application = "abgen"
+	Description = "Auto generate conversion code between structs"
+	WebSite     = "https://github.com/origadmin/abgen"
+	UI          = "abgen"
+)
+
+// Config holds the complete, parsed configuration for a generation task.
+// It is designed to be stateless and serializable.
+type Config struct {
+	// GenerationContext holds information about the target package for generation.
+	GenerationContext GenerationContext
+	// PackageAliases maps a package alias to its full import path. It enforces a one-to-one relationship.
+	PackageAliases map[string]string
+	// PackagePairs defines the source-to-target package mappings.
+	PackagePairs []*PackagePair
+	// ConversionRules defines the type-level conversion rules.
+	ConversionRules []*ConversionRule
+	// NamingRules defines how to name generated types and functions.
+	NamingRules NamingRule
+	// GlobalBehaviorRules defines global conversion behaviors.
+	GlobalBehaviorRules BehaviorRule
 }
 
-// RuleSet holds all the rules parsed from directives.
-type RuleSet struct {
-	// Context holds information about the package where code is being generated.
-	Context GenerationContext
+// GenerationContext holds information about the package where code is being generated.
+type GenerationContext struct {
+	PackageName string // e.g., "users"
+	PackagePath string // e.g., "github.com/my/project/users"
+}
 
-			// PackagePairs maps source package paths to target package paths.
+// PackagePair represents a pairing between a source and a target package.
+type PackagePair struct {
+	SourcePath string
+	TargetPath string
+}
 
-			PackagePairs map[string]string
+// ConversionRule defines a conversion between a source and a target type.
+type ConversionRule struct {
+	SourceType string // Fully-qualified type name
+	TargetType string // Fully-qualified type name
+	Direction  ConversionDirection
+	FieldRules FieldRuleSet
+}
 
-		
-
-			// TypePairs maps a source type FQN to a target type name.
-
-			TypePairs map[string]string
-
-		
-
-			// PackageAliases maps a package alias to its full import path.
-
-			PackageAliases map[string]string
-
-		
-
-			// NamingRules defines how to name types and functions.
-
-			NamingRules NamingRuleSet
-
-		
-
-			// BehaviorRules defines conversion behaviors.
-
-			BehaviorRules BehaviorRuleSet
-
-		
-
-			// FieldRules defines field-specific rules.
-
-			FieldRules FieldRuleSet
-
-		}
-
-		
-
-		// NewRuleSet creates a new empty RuleSet.
-
-		func NewRuleSet() *RuleSet {
-
-			return &RuleSet{
-
-				Context:        GenerationContext{},
-
-				PackagePairs:   make(map[string]string),
-
-				TypePairs:      make(map[string]string),
-
-				PackageAliases: make(map[string]string),
-
-				NamingRules: NamingRuleSet{
-
-					SourcePrefix: "",
-
-					SourceSuffix: "",
-
-					TargetPrefix: "",
-
-					TargetSuffix: "",
-
-				},
-
-				BehaviorRules: BehaviorRuleSet{
-
-					GenerateAlias: false,
-
-					Direction:     make(map[string]string),
-
-				},
-
-				FieldRules: FieldRuleSet{
-
-					Ignore: make(map[string]map[string]struct{}),
-
-					Remap:  make(map[string]map[string]string),
-
-				},
-
-			}
-
-		}
-
-// NamingRuleSet defines naming conventions for generated types and functions.
-type NamingRuleSet struct {
-	// SourcePrefix is the prefix to add to source type names.
+// NamingRule defines naming conventions for generated types and functions.
+type NamingRule struct {
 	SourcePrefix string
-	// SourceSuffix is the suffix to add to source type names.
 	SourceSuffix string
-	// TargetPrefix is the prefix to add to target type names.
 	TargetPrefix string
-	// TargetSuffix is the suffix to add to target type names.
 	TargetSuffix string
 }
 
-// BehaviorRuleSet defines conversion behaviors.
-type BehaviorRuleSet struct {
-	// GenerateAlias indicates whether to generate type aliases.
+// BehaviorRule defines conversion behaviors.
+type BehaviorRule struct {
 	GenerateAlias bool
-	// Direction maps type pairs to conversion direction ("to", "from", "both").
-	Direction map[string]string
 }
 
-// FieldRuleSet defines field-specific rules.
+// FieldRuleSet defines field-specific rules for a given type conversion.
 type FieldRuleSet struct {
-	// Ignore maps type names to sets of field names to ignore.
-	Ignore map[string]map[string]struct{}
-	// Remap maps type names to field remapping rules (source field -> target field).
-	Remap map[string]map[string]string
+	Ignore map[string]struct{}      // Fields to ignore
+	Remap  map[string]string        // Fields to remap (source -> target)
 }
 
 // ConversionDirection represents the direction of conversion.
 type ConversionDirection string
 
 const (
-	DirectionTo   ConversionDirection = "to"
-	DirectionFrom ConversionDirection = "from"
-	DirectionBoth ConversionDirection = "both"
+	DirectionBoth   ConversionDirection = "both"
+	DirectionOneway ConversionDirection = "oneway"
 )
+
+// NewConfig creates a new, empty configuration object.
+func NewConfig() *Config {
+	return &Config{
+		GenerationContext: GenerationContext{},
+		PackageAliases:    make(map[string]string),
+		PackagePairs:      []*PackagePair{},
+		ConversionRules:   []*ConversionRule{},
+		NamingRules: NamingRule{
+			SourcePrefix: "",
+			SourceSuffix: "",
+			TargetPrefix: "",
+			TargetSuffix: "",
+		},
+		GlobalBehaviorRules: BehaviorRule{
+			GenerateAlias: false,
+		},
+	}
+}
