@@ -29,18 +29,18 @@ type (
 	UserPB            = UserPB
 )
 
-// ConvertDepartmentToDepartment converts Department to DepartmentPB
-func ConvertDepartmentToDepartment(from Department) DepartmentPB {
+// ConvertDepartmentToDepartmentPB converts Department to DepartmentPB
+func ConvertDepartmentToDepartmentPB(from Department) DepartmentPB {
 	to := &DepartmentPB{}
 
 	to.Id = ConvertIntToInt32(from.ID)
 	to.Name = from.Name
-	to.Edges = ConvertDepartmentEdgesToDepartmentEdges(from.Edges)
+	to.Edges = ConvertDepartmentEdgesToDepartmentEdgesPB(from.Edges)
 	return to
 }
 
-// ConvertDepartmentEdgesToDepartmentEdges converts DepartmentEdges to DepartmentEdgesPB
-func ConvertDepartmentEdgesToDepartmentEdges(from DepartmentEdges) DepartmentEdgesPB {
+// ConvertDepartmentEdgesToDepartmentEdgesPB converts DepartmentEdges to DepartmentEdgesPB
+func ConvertDepartmentEdgesToDepartmentEdgesPB(from DepartmentEdges) DepartmentEdgesPB {
 	to := &DepartmentEdgesPB{}
 
 	to.Users = from.Users
@@ -51,13 +51,13 @@ func ConvertDepartmentEdgesToDepartmentEdges(from DepartmentEdges) DepartmentEdg
 	return to
 }
 
-// ConvertGenderToGender converts Gender to GenderPB
-func ConvertGenderToGender(from Gender) GenderPB {
+// ConvertGenderToGenderPB converts Gender to GenderPB
+func ConvertGenderToGenderPB(from Gender) GenderPB {
 	return GenderPB(from)
 }
 
-// ConvertPositionToPosition converts Position to PositionPB
-func ConvertPositionToPosition(from Position) PositionPB {
+// ConvertPositionToPositionPB converts Position to PositionPB
+func ConvertPositionToPositionPB(from Position) PositionPB {
 	to := &PositionPB{}
 
 	to.Id = ConvertIntToInt32(from.ID)
@@ -65,8 +65,8 @@ func ConvertPositionToPosition(from Position) PositionPB {
 	return to
 }
 
-// ConvertRoleToRole converts Role to RolePB
-func ConvertRoleToRole(from Role) RolePB {
+// ConvertRoleToRolePB converts Role to RolePB
+func ConvertRoleToRolePB(from Role) RolePB {
 	to := &RolePB{}
 
 	to.Id = ConvertIntToInt32(from.ID)
@@ -74,22 +74,22 @@ func ConvertRoleToRole(from Role) RolePB {
 	return to
 }
 
-// ConvertUserToUser converts User to UserPB
-func ConvertUserToUser(from User) UserPB {
+// ConvertUserToUserPB converts User to UserPB
+func ConvertUserToUserPB(from User) UserPB {
 	to := &UserPB{}
 
 	to.Id = ConvertIntToInt32(from.ID)
 	to.Username = from.Username
 	to.Age = ConvertIntToInt32(from.Age)
-	to.Gender = ConvertGenderToGender(from.Gender)
+	to.Gender = ConvertGenderToGenderPB(from.Gender)
 	to.Status = ConvertStringToInt32(from.Status)
 	to.CreatedAt = ConvertTimeToString(from.CreatedAt)
-	to.Edges = ConvertUserEdgesToUserEdges(from.Edges)
+	to.Edges = ConvertUserEdgesToUserEdgesPB(from.Edges)
 	return to
 }
 
-// ConvertUserDepartmentToUserDepartment converts UserDepartment to UserDepartmentPB
-func ConvertUserDepartmentToUserDepartment(from UserDepartment) UserDepartmentPB {
+// ConvertUserDepartmentToUserDepartmentPB converts UserDepartment to UserDepartmentPB
+func ConvertUserDepartmentToUserDepartmentPB(from UserDepartment) UserDepartmentPB {
 	to := &UserDepartmentPB{}
 
 	to.UserId = ConvertIntToInt32(from.UserID)
@@ -97,26 +97,26 @@ func ConvertUserDepartmentToUserDepartment(from UserDepartment) UserDepartmentPB
 	return to
 }
 
-// ConvertUserEdgesToUserEdges converts UserEdges to UserEdgesPB
-func ConvertUserEdgesToUserEdges(from UserEdges) UserEdgesPB {
+// ConvertUserEdgesToUserEdgesPB converts UserEdges to UserEdgesPB
+func ConvertUserEdgesToUserEdgesPB(from UserEdges) UserEdgesPB {
 	to := &UserEdgesPB{}
 
 	to.Roles = from.Roles
 	return to
 }
 
-// ConvertDepartmentToDepartment converts DepartmentPB to Department
-func ConvertDepartmentToDepartment(from DepartmentPB) Department {
+// ConvertDepartmentPBToDepartment converts DepartmentPB to Department
+func ConvertDepartmentPBToDepartment(from DepartmentPB) Department {
 	to := &Department{}
 
 	to.ID = ConvertInt32ToInt(from.Id)
 	to.Name = from.Name
-	to.Edges = ConvertDepartmentEdgesToDepartmentEdges(from.Edges)
+	to.Edges = ConvertDepartmentEdgesPBToDepartmentEdges(from.Edges)
 	return to
 }
 
-// ConvertDepartmentEdgesToDepartmentEdges converts DepartmentEdgesPB to DepartmentEdges
-func ConvertDepartmentEdgesToDepartmentEdges(from DepartmentEdgesPB) DepartmentEdges {
+// ConvertDepartmentEdgesPBToDepartmentEdges converts DepartmentEdgesPB to DepartmentEdges
+func ConvertDepartmentEdgesPBToDepartmentEdges(from DepartmentEdgesPB) DepartmentEdges {
 	to := &DepartmentEdges{}
 
 	to.Users = from.Users
@@ -127,13 +127,13 @@ func ConvertDepartmentEdgesToDepartmentEdges(from DepartmentEdgesPB) DepartmentE
 	return to
 }
 
-// ConvertGenderToGender converts GenderPB to Gender
-func ConvertGenderToGender(from GenderPB) Gender {
+// ConvertGenderPBToGender converts GenderPB to Gender
+func ConvertGenderPBToGender(from GenderPB) Gender {
 	return Gender(from)
 }
 
-// ConvertPositionToPosition converts PositionPB to Position
-func ConvertPositionToPosition(from PositionPB) Position {
+// ConvertPositionPBToPosition converts PositionPB to Position
+func ConvertPositionPBToPosition(from PositionPB) Position {
 	to := &Position{}
 
 	to.ID = ConvertInt32ToInt(from.Id)
@@ -141,8 +141,8 @@ func ConvertPositionToPosition(from PositionPB) Position {
 	return to
 }
 
-// ConvertRoleToRole converts RolePB to Role
-func ConvertRoleToRole(from RolePB) Role {
+// ConvertRolePBToRole converts RolePB to Role
+func ConvertRolePBToRole(from RolePB) Role {
 	to := &Role{}
 
 	to.ID = ConvertInt32ToInt(from.Id)
@@ -150,22 +150,22 @@ func ConvertRoleToRole(from RolePB) Role {
 	return to
 }
 
-// ConvertUserToUser converts UserPB to User
-func ConvertUserToUser(from UserPB) User {
+// ConvertUserPBToUser converts UserPB to User
+func ConvertUserPBToUser(from UserPB) User {
 	to := &User{}
 
 	to.ID = ConvertInt32ToInt(from.Id)
 	to.Username = from.Username
 	to.Age = ConvertInt32ToInt(from.Age)
-	to.Gender = ConvertGenderToGender(from.Gender)
+	to.Gender = ConvertGenderPBToGender(from.Gender)
 	to.Status = ConvertInt32ToString(from.Status)
 	to.CreatedAt = ConvertStringToTime(from.CreatedAt)
-	to.Edges = ConvertUserEdgesToUserEdges(from.Edges)
+	to.Edges = ConvertUserEdgesPBToUserEdges(from.Edges)
 	return to
 }
 
-// ConvertUserDepartmentToUserDepartment converts UserDepartmentPB to UserDepartment
-func ConvertUserDepartmentToUserDepartment(from UserDepartmentPB) UserDepartment {
+// ConvertUserDepartmentPBToUserDepartment converts UserDepartmentPB to UserDepartment
+func ConvertUserDepartmentPBToUserDepartment(from UserDepartmentPB) UserDepartment {
 	to := &UserDepartment{}
 
 	to.UserID = ConvertInt32ToInt(from.UserId)
@@ -173,8 +173,8 @@ func ConvertUserDepartmentToUserDepartment(from UserDepartmentPB) UserDepartment
 	return to
 }
 
-// ConvertUserEdgesToUserEdges converts UserEdgesPB to UserEdges
-func ConvertUserEdgesToUserEdges(from UserEdgesPB) UserEdges {
+// ConvertUserEdgesPBToUserEdges converts UserEdgesPB to UserEdges
+func ConvertUserEdgesPBToUserEdges(from UserEdgesPB) UserEdges {
 	to := &UserEdges{}
 
 	to.Roles = from.Roles

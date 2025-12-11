@@ -47,6 +47,8 @@ func (c *TypeConverter) ConvertToModel(info *analyzer.TypeInfo) *model.Type {
 		modelType.Kind = model.TypeKindStruct
 	case analyzer.Slice:
 		modelType.Kind = model.TypeKindSlice
+	case analyzer.Array:
+		modelType.Kind = model.TypeKindArray
 	case analyzer.Pointer:
 		modelType.Kind = model.TypeKindPointer
 	case analyzer.Primitive:

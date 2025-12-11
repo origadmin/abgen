@@ -49,10 +49,19 @@ func (n *Namer) GetTypeName(info *analyzer.TypeInfo) string {
 
 // GetFunctionName returns the function name for converting between two types.
 func (n *Namer) GetFunctionName(sourceType, targetType *model.Type) string {
-	// For function names, we need to use the effective names with naming rules applied
+	// 根据文档规范：Convert + [SourceTypeName] + To + [TargetTypeName]
 	sourceName := n.getTypeDisplayName(sourceType)
 	targetName := n.getTypeDisplayName(targetType)
-	return "Convert" + strings.Title(sourceName) + "To" + strings.Title(targetName)
+	
+	// 对于基本类型，直接使用类型名
+	if sourceType.Kind == model.TypeKindPrimitive {
+		sourceName = strings.Title(sourceType.Name)
+	}
+	if targetType.Kind == model.TypeKindPrimitive {
+		targetName = strings.Title(targetType.Name)
+	}
+	
+	return "Convert" + sourceName + "To" + targetName
 }
 
 // getSourceNamingRules returns the naming rules for the source package.
@@ -98,40 +107,64 @@ func (n *Namer) getSimpleTypeName(t *model.Type) string {
 }
 
 // getTypeDisplayName returns the display name for a type, applying naming rules if applicable.
-// This is used for function naming to ensure the names reflect the actual type names used in the generated code.
+// 根据规范文档实现类型命名规则
 func (n *Namer) getTypeDisplayName(t *model.Type) string {
 	if t == nil {
 		return ""
 	}
 	
-	name := t.Name
+	name := n.getSimpleTypeName(t)
 	
-	// Apply naming rules based on package path
+	// 根据规范：如果源类型和目标类型都没有定义任何Prefix和Suffix，自动添加Source/Target后缀
 	if t.ImportPath != "" {
-		// Check if this is a source package
 		sourcePrefix, sourceSuffix := n.getSourceNamingRules(t.ImportPath)
+		targetPrefix, targetSuffix := n.getTargetNamingRules(t.ImportPath)
+		
+		// 检查是否为源包
 		if sourcePrefix != "" || sourceSuffix != "" {
-			// This is a source type, apply source naming rules
 			name = sourcePrefix + name + sourceSuffix
+		} else if targetPrefix != "" || targetSuffix != "" {
+			// 检查是否为目标包
+			name = targetPrefix + name + targetSuffix
 		} else {
-			// Check if this is a target package
-			targetPrefix, targetSuffix := n.getTargetNamingRules(t.ImportPath)
-			if targetPrefix != "" || targetSuffix != "" {
-				// This is a target type, apply target naming rules
-				name = targetPrefix + name + targetSuffix
+			// 检查是否需要自动添加Source/Target后缀
+			// 只有在源类型和目标类型都没有定义任何Prefix和Suffix时才自动添加
+			needsSourceSuffix := n.packageNeedsSourceSuffix(t.ImportPath)
+			needsTargetSuffix := n.packageNeedsTargetSuffix(t.ImportPath)
+			
+			if needsSourceSuffix && !strings.HasSuffix(name, "Source") {
+				name = name + "Source"
+			} else if needsTargetSuffix && !strings.HasSuffix(name, "Target") {
+				name = name + "Target"
 			}
 		}
 	}
 	
-	// Remove pointer and slice prefixes for display name
-	if t.IsPointer {
-		name = strings.TrimPrefix(name, "*")
-	}
-	if t.Kind == model.TypeKindSlice {
-		name = strings.TrimPrefix(name, "[]")
-	}
-	
 	return name
+}
+
+// 检查包是否需要Source后缀（简化实现）
+func (n *Namer) packageNeedsSourceSuffix(pkgPath string) bool {
+	// 检查是否为任何包对中的源包，且没有定义source命名规则
+	for sourcePkg := range n.ruleSet.PackagePairs {
+		if pkgPath == sourcePkg {
+			sourcePrefix, sourceSuffix := n.getSourceNamingRules(pkgPath)
+			return sourcePrefix == "" && sourceSuffix == ""
+		}
+	}
+	return false
+}
+
+// 检查包是否需要Target后缀（简化实现）
+func (n *Namer) packageNeedsTargetSuffix(pkgPath string) bool {
+	// 检查是否为任何包对中的目标包，且没有定义target命名规则
+	for _, targetPkg := range n.ruleSet.PackagePairs {
+		if pkgPath == targetPkg {
+			targetPrefix, targetSuffix := n.getTargetNamingRules(pkgPath)
+			return targetPrefix == "" && targetSuffix == ""
+		}
+	}
+	return false
 }
 
 // GetAliasName returns the alias name for a given model.Type, applying target naming rules.

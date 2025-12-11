@@ -280,7 +280,18 @@ func (g *Generator) generateConversionFunction(task *model.ConversionTask) {
 	targetParam := g.getTypeString(targetType)
 
 	g.buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceParam, targetParam))
-	g.buf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceParam, targetParam))
+	// 根据类型确定是否使用指针
+	sourceParamType := sourceParam
+	targetParamType := targetParam
+	
+	if sourceType.Kind == model.TypeKindStruct && !sourceType.IsPointer {
+		sourceParamType = "*" + sourceParam
+	}
+	if targetType.Kind == model.TypeKindStruct && !targetType.IsPointer {
+		targetParamType = "*" + targetParam
+	}
+	
+	g.buf.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", funcName, sourceParamType, targetParamType))
 
 	if sourceType.IsPointer {
 		g.buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n")
@@ -291,6 +302,12 @@ func (g *Generator) generateConversionFunction(task *model.ConversionTask) {
 		g.generateStructToStructConversion(sourceType, targetType)
 	case sourceType.Kind == model.TypeKindSlice && targetType.Kind == model.TypeKindSlice:
 		g.generateSliceToSliceConversion(sourceType, targetType)
+	case sourceType.Kind == model.TypeKindArray && targetType.Kind == model.TypeKindArray:
+		g.generateArrayToArrayConversion(sourceType, targetType)
+	case sourceType.Kind == model.TypeKindArray && targetType.Kind == model.TypeKindSlice:
+		g.generateArrayToSliceConversion(sourceType, targetType)
+	case sourceType.Kind == model.TypeKindSlice && targetType.Kind == model.TypeKindArray:
+		g.generateSliceToArrayConversion(sourceType, targetType)
 	default:
 		g.generateBasicConversion(sourceType, targetType)
 	}
@@ -300,7 +317,10 @@ func (g *Generator) generateConversionFunction(task *model.ConversionTask) {
 
 func (g *Generator) generateStructToStructConversion(source, target *model.Type) {
 	targetTypeName := g.getTypeString(target)
-	g.buf.WriteString(fmt.Sprintf("\tto := &%s{}\n\n", targetTypeName))
+	if !strings.HasPrefix(targetTypeName, "*") {
+		targetTypeName = "*" + targetTypeName
+	}
+	g.buf.WriteString(fmt.Sprintf("\tto := %s{}\n\n", targetTypeName))
 
 	for _, sourceField := range source.Fields {
 		targetFieldName := g.getTargetFieldName(sourceField.Name)
@@ -328,13 +348,64 @@ func (g *Generator) generateSliceToSliceConversion(source, target *model.Type) {
 	g.buf.WriteString("\t}\n\treturn to\n")
 }
 
+func (g *Generator) generateArrayToArrayConversion(source, target *model.Type) {
+	targetTypeName := g.getTypeString(target)
+	
+	g.buf.WriteString(fmt.Sprintf("\tif len(from) == 0 {\n\t\treturn %s{}\n\t}\n", targetTypeName))
+	g.buf.WriteString(fmt.Sprintf("\tto := %s{}\n", targetTypeName))
+	g.buf.WriteString("\tfor i := 0; i < len(from) && i < len(to); i++ {\n")
+	elemFuncName := g.getFunctionName(source.ElementType, target.ElementType)
+	g.buf.WriteString(fmt.Sprintf("\t\tto[i] = %s(from[i])\n", elemFuncName))
+	g.buf.WriteString("\t}\n\treturn to\n")
+}
+
+func (g *Generator) generateArrayToSliceConversion(source, target *model.Type) {
+	targetTypeName := g.getTypeString(target)
+	g.buf.WriteString(fmt.Sprintf("\tif len(from) == 0 {\n\t\treturn nil\n\t}\n"))
+	g.buf.WriteString(fmt.Sprintf("\tto := make(%s, len(from))\n", targetTypeName))
+	g.buf.WriteString("\tfor i, item := range from {\n")
+	elemFuncName := g.getFunctionName(source.ElementType, target.ElementType)
+	g.buf.WriteString(fmt.Sprintf("\t\to[i] = %s(item)\n", elemFuncName))
+	g.buf.WriteString("\t}\n\treturn to\n")
+}
+
+func (g *Generator) generateSliceToArrayConversion(source, target *model.Type) {
+	targetTypeName := g.getTypeString(target)
+	g.buf.WriteString(fmt.Sprintf("\tif from == nil {\n\t\treturn %s{}\n\t}\n", targetTypeName))
+	g.buf.WriteString(fmt.Sprintf("\tto := %s{}\n", targetTypeName))
+	g.buf.WriteString("\tminLen := len(from)\n")
+	g.buf.WriteString("\tif minLen > len(to) {\n\t\tminLen = len(to)\n\t}\n")
+	g.buf.WriteString("\tfor i := 0; i < minLen; i++ {\n")
+	elemFuncName := g.getFunctionName(source.ElementType, target.ElementType)
+	g.buf.WriteString(fmt.Sprintf("\t\tto[i] = %s(from[i])\n", elemFuncName))
+	g.buf.WriteString("\t}\n\treturn to\n")
+}
+
 func (g *Generator) generateBasicConversion(source, target *model.Type) {
 	targetTypeName := g.getTypeString(target)
+	
+	// 检查是否为相同类型
+	if g.isSameType(source, target) {
+		g.buf.WriteString(fmt.Sprintf("\treturn %s(from)\n", targetTypeName))
+		return
+	}
+	
+	// 检查是否为可识别的基本类型转换
 	if g.canDirectConvert(source, target) {
 		g.buf.WriteString(fmt.Sprintf("\treturn %s(from)\n", targetTypeName))
+		return
+	}
+	
+	// 对于不支持的转换，生成有意义的实现而不是panic
+	if source.Kind == model.TypeKindPrimitive && target.Kind == model.TypeKindPrimitive {
+		// 基本类型之间尝试类型转换
+		g.buf.WriteString(fmt.Sprintf("\treturn %s(from)\n", targetTypeName))
 	} else {
+		// 生成stub提示用户实现
 		g.buf.WriteString(fmt.Sprintf("\t// TODO: Implement conversion from %s to %s\n", source.Name, target.Name))
-		g.buf.WriteString("\tpanic(\"conversion not implemented\")\n")
+		g.buf.WriteString("\t// For complex types, please implement this conversion manually\n")
+		g.buf.WriteString(fmt.Sprintf("\t// Expected: %s -> %s\n", source.Name, target.Name))
+		g.buf.WriteString("\tpanic(\"conversion not implemented: please implement manually\")\n")
 	}
 }
 
@@ -349,12 +420,13 @@ func (g *Generator) generateFieldAssignment(sourceField, targetField *model.Fiel
 		return
 	}
 
-	// Handle slice conversions for fields
-	if sourceType.Kind == model.TypeKindSlice && targetType.Kind == model.TypeKindSlice {
-		// Ensure a top-level slice conversion function will be generated for this type pair
+	// Handle slice and array conversions for fields
+	if (sourceType.Kind == model.TypeKindSlice || sourceType.Kind == model.TypeKindArray) &&
+		(targetType.Kind == model.TypeKindSlice || targetType.Kind == model.TypeKindArray) {
+		// Ensure a top-level conversion function will be generated for this type pair
 		g.AddTask(sourceType, targetType, false, "")
-		sliceConvFunc := g.getFunctionName(sourceType, targetType)
-		g.buf.WriteString(fmt.Sprintf("\t%s = %s(%s)\n", targetAccess, sliceConvFunc, sourceAccess))
+		convFunc := g.getFunctionName(sourceType, targetType)
+		g.buf.WriteString(fmt.Sprintf("\t%s = %s(%s)\n", targetAccess, convFunc, sourceAccess))
 		return
 	}
 
@@ -364,6 +436,12 @@ func (g *Generator) generateFieldAssignment(sourceField, targetField *model.Fiel
 		g.buf.WriteString(fmt.Sprintf("\t%s = %s(%s)\n", targetAccess, convFuncName, sourceAccess))
 	} else {
 		g.buf.WriteString(fmt.Sprintf("\t// TODO: Convert %s field %s\n", sourceType.Name, sourceField.Name))
+		// 添加转换任务
+		g.AddTask(sourceType, targetType, false, "")
+		convFunc := g.getFunctionName(sourceType, targetType)
+		if convFunc != "" {
+			g.buf.WriteString(fmt.Sprintf("\t%s = %s(%s)\n", targetAccess, convFunc, sourceAccess))
+		}
 	}
 }
 
