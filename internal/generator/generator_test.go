@@ -49,6 +49,19 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 		// Note: multi_source test is skipped - definition does not match current implementation requirements
 		// Note: multi_target test is skipped - golden file not available and definition needs refinement
 
+		// === 02_basic_conversions: Basic Struct Conversion ===
+		{
+			name:           "simple_struct_conversion",
+			directivePath:  "../../testdata/02_basic_conversions/simple_struct",
+			goldenFileName: "expected.golden",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/source",
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/target",
+			},
+			priority: "P0",
+			category: "basic_conversions",
+		},
+
 		// === 04_type_aliases: Type Alias Handling ===
 		{
 			name:           "auto_generate_aliases",

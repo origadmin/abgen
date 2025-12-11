@@ -1,4 +1,3 @@
-// Package config defines the data structures for abgen's configuration and rules.
 package config
 
 import (
@@ -32,8 +31,9 @@ type Config struct {
 
 // GenerationContext holds information about the package where code is being generated.
 type GenerationContext struct {
-	PackageName string // e.g., "users"
-	PackagePath string // e.g., "github.com/my/project/users"
+	PackageName   string // e.g., "users"
+	PackagePath   string // e.g., "github.com/my/project/users"
+	DirectivePath string // The path to the directory containing the directive file
 }
 
 // PackagePair represents a pairing between a source and a target package.

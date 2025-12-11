@@ -1,4 +1,3 @@
-// Package config provides directive parsing capabilities for abgen.
 package config
 
 import (
@@ -24,6 +23,9 @@ func NewParser() *Parser {
 // directory, loads the initial package, discovers directives, and builds a
 // complete Config object.
 func (p *Parser) Parse(sourceDir string) (*Config, error) {
+	// Set the directive path in the generation context
+	p.config.GenerationContext.DirectivePath = sourceDir
+
 	// 1. Load the initial package to find directives
 	initialLoaderCfg := &packages.Config{
 		Mode:  packages.NeedName | packages.NeedSyntax | packages.NeedFiles | packages.NeedModule,
