@@ -5,6 +5,7 @@ import (
 	"go/types"
 	"log/slog"
 	"strings"
+	"sync"
 )
 
 // TypeKind defines the kind of a Go type.
@@ -38,18 +39,21 @@ type TypeInfo struct {
 	Fields       []*FieldInfo
 	Methods      []*MethodInfo
 	Original     types.Object
+	
+	// Cache for package name extraction
+	packageNameMu sync.RWMutex
+	packageName   string
 }
 
-// GetName returns the base name of the type.
-func (ti *TypeInfo) GetName() string {
-	if ti == nil {
-		return ""
-	}
-	return ti.Name
-}
-
+// String returns a string representation of the type.
 func (ti *TypeInfo) String() string {
-	return ti.Name
+	if ti == nil {
+		return "nil"
+	}
+	if ti.IsNamedType() {
+		return ti.FQN()
+	}
+	return ti.GoTypeString()
 }
 
 // IsNamedType returns true if the type has a name and an import path, and is not a primitive.
@@ -68,6 +72,81 @@ func (ti *TypeInfo) FQN() string {
 	return ""
 }
 
+// IsValid checks if the TypeInfo contains valid data.
+func (ti *TypeInfo) IsValid() bool {
+	if ti == nil {
+		return false
+	}
+	
+	// Basic validation
+	if ti.Kind == Unknown {
+		return false
+	}
+	
+	// Type-specific validation
+	switch ti.Kind {
+	case Array:
+		return ti.ArrayLen > 0 && ti.Underlying != nil
+	case Map:
+		return ti.KeyType != nil && ti.Underlying != nil
+	case Pointer, Slice:
+		return ti.Underlying != nil
+	case Struct, Interface, Chan, Func:
+		return true // These can exist without underlying types
+	case Named:
+		return ti.IsNamedType()
+	default:
+		return ti.Kind == Primitive && ti.Name != ""
+	}
+}
+
+// Equals checks if two TypeInfo objects represent the same type.
+func (ti *TypeInfo) Equals(other *TypeInfo) bool {
+	if ti == nil && other == nil {
+		return true
+	}
+	if ti == nil || other == nil {
+		return false
+	}
+	
+	// Quick check for basic properties
+	if ti.Name != other.Name || 
+	   ti.ImportPath != other.ImportPath || 
+	   ti.Kind != other.Kind ||
+	   ti.IsAlias != other.IsAlias {
+		return false
+	}
+	
+	// For named types (Kind == Named), FQN comparison is sufficient
+	if ti.Kind == Named && other.Kind == Named {
+		return ti.FQN() == other.FQN()
+	}
+	
+	// For complex types, compare structure
+	switch ti.Kind {
+	case Array:
+		return ti.ArrayLen == other.ArrayLen && 
+		       ti.Underlying.Equals(other.Underlying)
+	case Map:
+		return ti.KeyType.Equals(other.KeyType) && 
+		       ti.Underlying.Equals(other.Underlying)
+	case Pointer, Slice:
+		return ti.Underlying.Equals(other.Underlying)
+	case Struct:
+		if len(ti.Fields) != len(other.Fields) {
+			return false
+		}
+		for i, field := range ti.Fields {
+			if !field.Equals(other.Fields[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
+}
+
 // GoTypeString reconstructs the Go type string from the TypeInfo, suitable for code generation.
 func (ti *TypeInfo) GoTypeString() string {
 	if ti == nil {
@@ -78,6 +157,21 @@ func (ti *TypeInfo) GoTypeString() string {
 
 
 	return ti.buildTypeStringFromUnderlying()
+}
+
+// buildQualifiedTypeName builds the qualified type name with package prefix if needed.
+func (ti *TypeInfo) buildQualifiedTypeName(sb *strings.Builder) {
+	if ti.Name == "" {
+		sb.WriteString("interface{}")
+		return
+	}
+	
+	if ti.ImportPath != "" {
+		packageName := ti.getPackageName()
+		sb.WriteString(packageName)
+		sb.WriteString(".")
+	}
+	sb.WriteString(ti.Name)
 }
 
 func (ti *TypeInfo) buildTypeStringFromUnderlying() string {
@@ -118,41 +212,63 @@ func (ti *TypeInfo) buildTypeStringFromUnderlying() string {
 		} else {
 			sb.WriteString("interface{}")
 		}
+	case Chan:
+		if ti.Name != "" {
+			ti.buildQualifiedTypeName(&sb)
+		} else {
+			sb.WriteString("chan interface{}")
+		}
+	case Func:
+		if ti.Name != "" {
+			ti.buildQualifiedTypeName(&sb)
+		} else {
+			sb.WriteString("func()")
+		}
 	case Named:
 		// For named types, we should show the type name, not the underlying type
 		// This preserves the semantic meaning of the defined type
-		if ti.Name != "" {
-			// For defined types from other packages, include the package name
-			if ti.ImportPath != "" {
-				// Extract package name from import path
-				lastSlash := strings.LastIndex(ti.ImportPath, "/")
-				packageName := ti.ImportPath[lastSlash+1:]
-				sb.WriteString(packageName)
-				sb.WriteString(".")
-			}
-			sb.WriteString(ti.Name)
-		} else {
-			sb.WriteString("interface{}")
-		}
-	case Primitive, Struct, Interface, Chan, Func:
-		if ti.Name != "" {
-			// For named types from other packages, include the package name
-			if ti.ImportPath != "" {
-				// Extract package name from import path
-				lastSlash := strings.LastIndex(ti.ImportPath, "/")
-				packageName := ti.ImportPath[lastSlash+1:]
-				sb.WriteString(packageName)
-				sb.WriteString(".")
-			}
-			sb.WriteString(ti.Name)
-		} else {
-			sb.WriteString("interface{}")
-		}
+		ti.buildQualifiedTypeName(&sb)
+	case Primitive, Struct, Interface:
+		ti.buildQualifiedTypeName(&sb)
 	default:
 		sb.WriteString("unknown")
 	}
 
 	return sb.String()
+}
+
+// getPackageName extracts and caches the package name from import path.
+func (ti *TypeInfo) getPackageName() string {
+	if ti.ImportPath == "" {
+		return ""
+	}
+	
+	// Use read lock first
+	ti.packageNameMu.RLock()
+	if ti.packageName != "" {
+		defer ti.packageNameMu.RUnlock()
+		return ti.packageName
+	}
+	ti.packageNameMu.RUnlock()
+	
+	// Acquire write lock for initialization
+	ti.packageNameMu.Lock()
+	defer ti.packageNameMu.Unlock()
+	
+	// Double-check after acquiring write lock
+	if ti.packageName != "" {
+		return ti.packageName
+	}
+	
+	// Extract package name
+	lastSlash := strings.LastIndex(ti.ImportPath, "/")
+	if lastSlash == -1 {
+		ti.packageName = ti.ImportPath
+	} else {
+		ti.packageName = ti.ImportPath[lastSlash+1:]
+	}
+	
+	return ti.packageName
 }
 
 // FieldInfo represents a single field within a struct.
@@ -162,6 +278,22 @@ type FieldInfo struct {
 	Tag        string
 	IsEmbedded bool
 	// IsExported bool // Removed IsExported field
+}
+
+// Equals checks if two FieldInfo objects are equal.
+func (fi *FieldInfo) Equals(other *FieldInfo) bool {
+	if fi == nil && other == nil {
+		return true
+	}
+	if fi == nil || other == nil {
+		return false
+	}
+	
+	return fi.Name == other.Name &&
+	       fi.Tag == other.Tag &&
+	       fi.IsEmbedded == other.IsEmbedded &&
+	       ((fi.Type == nil && other.Type == nil) || 
+	        (fi.Type != nil && other.Type != nil && fi.Type.Equals(other.Type)))
 }
 
 // MethodInfo represents a single method of a type.
