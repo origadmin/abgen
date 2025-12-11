@@ -22,6 +22,7 @@ const (
 	Slice
 	Array
 	Pointer
+	Defined // For defined types (type T U)
 )
 
 // TypeInfo represents the detailed information of a resolved Go type.
@@ -74,15 +75,7 @@ func (ti *TypeInfo) GoTypeString() string {
 		return "nil"
 	}
 
-	underlyingName := "nil"
-	underlyingKind := Unknown
-	underlyingAddr := "nil"
-	if ti.Underlying != nil { 
-		underlyingName = ti.Underlying.Name
-		underlyingKind = ti.Underlying.Kind
-		underlyingAddr = fmt.Sprintf("%p", ti.Underlying)
-	}
-	slog.Debug("GoTypeString", "ti_addr", fmt.Sprintf("%p", ti), "ti_name", ti.Name, "ti_kind", ti.Kind, "ti_underlying_name", underlyingName, "ti_underlying_kind", underlyingKind, "ti_underlying_addr", underlyingAddr)
+
 
 	return ti.buildTypeStringFromUnderlying()
 }
@@ -125,8 +118,32 @@ func (ti *TypeInfo) buildTypeStringFromUnderlying() string {
 		} else {
 			sb.WriteString("interface{}")
 		}
+	case Defined:
+		// For defined types, we should show the type name, not the underlying type
+		// This preserves the semantic meaning of the defined type
+		if ti.Name != "" {
+			// For defined types from other packages, include the package name
+			if ti.ImportPath != "" {
+				// Extract package name from import path
+				lastSlash := strings.LastIndex(ti.ImportPath, "/")
+				packageName := ti.ImportPath[lastSlash+1:]
+				sb.WriteString(packageName)
+				sb.WriteString(".")
+			}
+			sb.WriteString(ti.Name)
+		} else {
+			sb.WriteString("interface{}")
+		}
 	case Primitive, Struct, Interface, Chan, Func:
 		if ti.Name != "" {
+			// For named types from other packages, include the package name
+			if ti.ImportPath != "" {
+				// Extract package name from import path
+				lastSlash := strings.LastIndex(ti.ImportPath, "/")
+				packageName := ti.ImportPath[lastSlash+1:]
+				sb.WriteString(packageName)
+				sb.WriteString(".")
+			}
 			sb.WriteString(ti.Name)
 		} else {
 			sb.WriteString("interface{}")
@@ -180,6 +197,8 @@ func (k TypeKind) String() string {
 		return "Array"
 	case Pointer:
 		return "Pointer"
+	case Defined:
+		return "Defined"
 	default:
 		return "Unknown"
 	}

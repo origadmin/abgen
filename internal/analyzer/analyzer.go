@@ -26,6 +26,16 @@ func NewTypeAnalyzer() *TypeAnalyzer {
 	}
 }
 
+// SetPackages sets the packages for testing purposes
+func (a *TypeAnalyzer) SetPackages(pkgs []*packages.Package) {
+	a.pkgs = pkgs
+}
+
+// Find is a public wrapper for the find method
+func (a *TypeAnalyzer) Find(fqn string) (*model.TypeInfo, error) {
+	return a.find(fqn)
+}
+
 // Analyze is the main entry point for the analysis phase.
 func (a *TypeAnalyzer) Analyze(cfg *config.Config) (map[string]*model.TypeInfo, error) {
 	seedPaths := a.collectSeedPaths(cfg)
@@ -161,28 +171,20 @@ func (a *TypeAnalyzer) resolveType(typ types.Type) *model.TypeInfo {
 
 		// For type aliases, we need to resolve the underlying type to get its actual type info
 		underlyingType := t.Underlying()
-
-		// For type aliases, try to find the original named type if possible
 		underlyingInfo := a.resolveType(underlyingType)
 
-		// Try to find the original named type that this alias refers to
-		if underlyingInfo != nil && underlyingInfo.Kind == model.Struct {
-			if originalTypeInfo := a.findOriginalNamedType(underlyingType); originalTypeInfo != nil {
-				// Copy structure from the resolved underlying but keep the identity
-				originalTypeInfo.Kind = underlyingInfo.Kind
-				originalTypeInfo.Fields = underlyingInfo.Fields
-				originalTypeInfo.KeyType = underlyingInfo.KeyType
-				originalTypeInfo.ArrayLen = underlyingInfo.ArrayLen
-				originalTypeInfo.Underlying = underlyingInfo.Underlying
-				info.Underlying = originalTypeInfo
-			} else {
-				info.Underlying = underlyingInfo
-			}
+		// For type aliases, try to find the original named type if possible
+		if originalTypeInfo := a.findOriginalNamedType(underlyingType); originalTypeInfo != nil {
+			// Use the original named type as underlying
+			info.Underlying = originalTypeInfo
+			slog.Debug("resolveType: Alias found original", "original.Name", originalTypeInfo.Name, "original.ImportPath", originalTypeInfo.ImportPath)
 		} else {
+			// Fallback to the resolved underlying type
 			info.Underlying = underlyingInfo
+			slog.Debug("resolveType: Alias using resolved underlying", "underlyingInfo.Name", func() string { if underlyingInfo != nil { return underlyingInfo.Name } else { return "nil" } }())
 		}
 
-		// Copy structural information from the underlying type.
+		// Copy structural information from the underlying type for the alias itself
 		if info.Underlying != nil {
 			info.Kind = info.Underlying.Kind
 			info.Fields = info.Underlying.Fields
@@ -206,18 +208,43 @@ func (a *TypeAnalyzer) resolveType(typ types.Type) *model.TypeInfo {
 		underlyingInfo := a.resolveType(t.Underlying())
 		info.Underlying = underlyingInfo
 
-		// Copy structural information from the underlying type.
-		// This ensures aliases and defined types correctly reflect their base structure.
+		// For defined types, determine if it's a struct definition or type definition
+		// For aliases, copy structural information from the underlying type.
 		if underlyingInfo != nil {
-			info.Kind = underlyingInfo.Kind
-			info.Fields = underlyingInfo.Fields
-			info.KeyType = underlyingInfo.KeyType
-			info.ArrayLen = underlyingInfo.ArrayLen
+			if info.IsAlias {
+				// Aliases should reflect their base structure
+				info.Kind = underlyingInfo.Kind
+				info.Fields = underlyingInfo.Fields
+				info.KeyType = underlyingInfo.KeyType
+				info.ArrayLen = underlyingInfo.ArrayLen
+			} else {
+				// For defined types, check if the underlying type is a struct
+				if underlyingInfo.Kind == model.Struct {
+					// This is a struct definition, should be treated as Struct
+					info.Kind = model.Struct
+					info.Fields = underlyingInfo.Fields
+					info.KeyType = underlyingInfo.KeyType
+					info.ArrayLen = underlyingInfo.ArrayLen
+				} else {
+					// This is a type definition of non-struct type
+					info.Kind = model.Defined
+					// Keep underlying info separate
+				}
+			}
 		}
 
 	case *types.Pointer:
 		info.Kind = model.Pointer
-		info.Underlying = a.resolveType(t.Elem())
+		underlyingInfo := a.resolveType(t.Elem())
+		info.Underlying = underlyingInfo
+		
+		slog.Debug("resolveType: Pointer", "elem", t.Elem().String(), "underlyingInfo.Name", func() string { if underlyingInfo != nil { return underlyingInfo.Name } else { return "nil" } }())
+		
+		// If the pointer element is a named type, we can infer the pointer's name
+		if underlyingInfo != nil && underlyingInfo.Name != "" {
+			// For pointers, we don't set a name since they are anonymous types
+			// The name should be represented by the underlying type
+		}
 	case *types.Slice:
 		info.Kind = model.Slice
 		info.Underlying = a.resolveType(t.Elem())
