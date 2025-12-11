@@ -42,7 +42,11 @@ func NewGenerator(analyzer *analyzer.TypeAnalyzer, config *config.Config) *Gener
 // Generate produces the Go source code for the conversions.
 func (g *Generator) Generate() ([]byte, error) {
 	// 1. Analyze types from config
-	typeInfos, err := g.analyzer.Analyze(g.config)
+	packagePaths := g.config.RequiredPackages()
+	fqns := g.config.RequiredTypeFQNs() // This method needs to be added to config.Config
+
+	typeInfos, err := g.analyzer.Analyze(packagePaths, fqns)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to analyze types: %w", err)
 	}
@@ -69,7 +73,7 @@ func (g *Generator) Generate() ([]byte, error) {
 // CustomStubs generates custom conversion stubs for complex conversions.
 func (g *Generator) CustomStubs() []byte {
 	var stubBuf bytes.Buffer
-	
+
 	stubBuf.WriteString("package ")
 	stubBuf.WriteString(g.getPackageName())
 	stubBuf.WriteString("\n\n")
@@ -117,7 +121,7 @@ func (g *Generator) writeAliases(typeInfos map[string]*model.TypeInfo) {
 	}
 	g.buf.WriteString("// Local type aliases for external types.\n")
 	g.buf.WriteString("type (\n")
-	
+
 	// To ensure consistent output, sort the aliases by alias name
 	type aliasPair struct {
 		aliasName string // The local alias name, e.g., "DepartmentPB"
@@ -159,7 +163,7 @@ func (g *Generator) writeConversionFunctions(typeInfos map[string]*model.TypeInf
 	for _, rule := range rules {
 		sourceInfo, sourceExists := typeInfos[rule.SourceType]
 		targetInfo, targetExists := typeInfos[rule.TargetType]
-		
+
 		if !sourceExists {
 			slog.Warn("Source type not found", "type", rule.SourceType)
 			continue
@@ -189,21 +193,21 @@ func (g *Generator) getTypeString(info *model.TypeInfo) string {
 	if info == nil {
 		return "interface{}"
 	}
-	
+
 	if info.IsNamedType() {
 		pkgAlias := g.importMgr.GetAlias(info.ImportPath)
 		return pkgAlias + "." + info.Name
 	}
-	
+
 	return info.GoTypeString()
 }
 
 func (g *Generator) generateConversionFunction(sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule) {
 	funcName := g.namer.GetFunctionName(sourceInfo, targetInfo)
-	
+
 	g.buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceInfo.FQN(), targetInfo.FQN()))
 	g.buf.WriteString(fmt.Sprintf("func %s(source %s) %s {\n", funcName, g.getTypeString(sourceInfo), g.getTypeString(targetInfo)))
-	
+
 	if g.converter.IsStruct(sourceInfo) && g.converter.IsStruct(targetInfo) {
 		g.generateStructToStructConversion(sourceInfo, targetInfo, rule)
 	} else if g.converter.IsSlice(sourceInfo) && g.converter.IsSlice(targetInfo) {
@@ -212,26 +216,26 @@ func (g *Generator) generateConversionFunction(sourceInfo, targetInfo *model.Typ
 		// Default simple conversion
 		g.buf.WriteString("\treturn target\n")
 	}
-	
+
 	g.buf.WriteString("}\n\n")
 }
 
 func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule) {
 	g.buf.WriteString("\ttarget := " + g.getTypeString(targetInfo) + "{\n")
-	
+
 	// Generate field assignments
 	for _, sourceField := range sourceInfo.Fields {
 		// Check if field should be ignored
 		if _, shouldIgnore := rule.FieldRules.Ignore[sourceField.Name]; shouldIgnore {
 			continue
 		}
-		
+
 		// Check if field should be remapped
 		targetFieldName := sourceField.Name
 		if remappedName, shouldRemap := rule.FieldRules.Remap[sourceField.Name]; shouldRemap {
 			targetFieldName = remappedName
 		}
-		
+
 		// Find corresponding target field
 		var targetField *model.FieldInfo
 		for _, tf := range targetInfo.Fields {
@@ -240,12 +244,12 @@ func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *mod
 				break
 			}
 		}
-		
+
 		if targetField != nil {
 			g.buf.WriteString(fmt.Sprintf("\t\t%s: source.%s,\n", targetFieldName, sourceField.Name))
 		}
 	}
-	
+
 	g.buf.WriteString("\t}\n")
 	g.buf.WriteString("\treturn target\n")
 }
@@ -253,7 +257,7 @@ func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *mod
 func (g *Generator) generateSliceToSliceConversion(sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule) {
 	sourceElem := g.converter.GetElementType(sourceInfo)
 	targetElem := g.converter.GetElementType(targetInfo)
-	
+
 	if sourceElem != nil && targetElem != nil {
 		funcName := g.namer.GetFunctionName(sourceElem, targetElem)
 		g.buf.WriteString("\tif source == nil {\n")
@@ -272,7 +276,7 @@ func (g *Generator) generateSliceToSliceConversion(sourceInfo, targetInfo *model
 // populateAliases populates the aliasMap with all referenced types from conversion rules.
 func (g *Generator) populateAliases(typeInfos map[string]*model.TypeInfo) {
 	slog.Debug("populateAliases", "conversionRules", len(g.config.ConversionRules))
-	
+
 	// Create aliases for all packages defined in config
 	for _, importPath := range g.config.PackageAliases {
 		g.importMgr.Add(importPath)
@@ -281,11 +285,11 @@ func (g *Generator) populateAliases(typeInfos map[string]*model.TypeInfo) {
 	// Process all conversion rules to create type aliases
 	for _, rule := range g.config.ConversionRules {
 		slog.Debug("Processing rule", "source", rule.SourceType, "target", rule.TargetType)
-		
+
 		// Add source and target types to aliases map
 		sourceInfo, sourceExists := typeInfos[rule.SourceType]
 		targetInfo, targetExists := typeInfos[rule.TargetType]
-		
+
 		if sourceExists && sourceInfo.IsNamedType() {
 			sourceAlias := g.namer.GetTypeName(sourceInfo)
 			g.aliasMap[rule.SourceType] = sourceAlias
@@ -293,7 +297,7 @@ func (g *Generator) populateAliases(typeInfos map[string]*model.TypeInfo) {
 		} else {
 			slog.Debug("Source type not found", "fqn", rule.SourceType, "exists", sourceExists, "named", sourceExists && sourceInfo.IsNamedType())
 		}
-		
+
 		if targetExists && targetInfo.IsNamedType() {
 			targetAlias := g.namer.GetTypeName(targetInfo)
 			g.aliasMap[rule.TargetType] = targetAlias

@@ -134,6 +134,27 @@ func (c *Config) RequiredPackages() []string {
 	return paths
 }
 
+// RequiredTypeFQNs gathers all unique fully-qualified type names (FQNs)
+// mentioned in the conversion rules.
+func (c *Config) RequiredTypeFQNs() []string {
+	fqnMap := make(map[string]struct{})
+
+	for _, rule := range c.ConversionRules {
+		if rule.SourceType != "" {
+			fqnMap[rule.SourceType] = struct{}{}
+		}
+		if rule.TargetType != "" {
+			fqnMap[rule.TargetType] = struct{}{}
+		}
+	}
+
+	fqns := make([]string, 0, len(fqnMap))
+	for fqn := range fqnMap {
+		fqns = append(fqns, fqn)
+	}
+	return fqns
+}
+
 // getPkgPath extracts the package path from a fully-qualified type name.
 func getPkgPath(fqn string) string {
 	lastDot := strings.LastIndex(fqn, ".")
