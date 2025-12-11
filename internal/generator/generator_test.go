@@ -4,9 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/origadmin/abgen/internal/analyzer"
-	"github.com/origadmin/abgen/internal/config"
 )
 
 func TestGenerator_CodeGeneration(t *testing.T) {
@@ -133,18 +130,17 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Logf("Running test: %s (Priority: %s, Category: %s)", tc.name, tc.priority, tc.category)
 
-			// Step 1: Initialize analyzer.PackageWalker
-			walker := analyzer.NewPackageWalker()
+			// Step 1: Initialize test adapter
+			adapter := NewTestAdapter()
 
 			// Step 2: Load initial package to discover directives
-			initialPkg, err := walker.LoadInitialPackage(tc.directivePath)
+			initialPkg, err := adapter.LoadInitialPackage(tc.directivePath)
 			if err != nil {
 				t.Fatalf("Failed to load initial package from %s: %v", tc.directivePath, err)
 			}
 
 			// Step 3: Discover directives from the initial package
-			directiveParser := config.NewDirectiveParser()
-			directives, err := directiveParser.DiscoverDirectives(initialPkg)
+			directives, err := adapter.DiscoverDirectives(initialPkg)
 			if err != nil {
 				t.Fatalf("Failed to discover directives in %s: %v", tc.directivePath, err)
 			}
@@ -153,26 +149,24 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			// The 'dependencies' field in the test case can be used as additional hints if needed,
 			// but the primary source should be the directives themselves.
 			// For now, we'll just use the dependencies extracted from directives.
-			dependencyPaths := directiveParser.ExtractDependencies(directives)
+			dependencyPaths := adapter.ExtractDependencies(directives)
 
 			// Step 5: Load full graph including dependencies
 			// The LoadFullGraph method will ensure all necessary packages are loaded and analyzed.
-			_, err = walker.LoadFullGraph(tc.directivePath, dependencyPaths...)
+			_, err = adapter.LoadFullGraph(tc.directivePath, dependencyPaths...)
 			if err != nil {
 				t.Fatalf("Failed to load full package graph for %s with dependencies %v: %v", tc.directivePath, dependencyPaths, err)
 			}
 
-			// Step 6: Parse directives into a RuleSet
-			ruleParser := config.NewRuleParser()
-			err = ruleParser.ParseDirectives(directives, initialPkg) // Corrected: Call ParseDirectives with package context
+			// Step 6: Parse directives into a Config
+			cfg, err := adapter.ParseDirectives(directives, initialPkg)
 			if err != nil {
-				t.Fatalf("Failed to parse directives into RuleSet for %s: %v", tc.directivePath, err)
+				t.Fatalf("Failed to parse directives into Config for %s: %v", tc.directivePath, err)
 			}
-			ruleSet := ruleParser.GetRuleSet() // Corrected: Get RuleSet after parsing
 
 			// Step 7: Run the generator.
-			// The NewGenerator should now take the analyzer.PackageWalker and the config.RuleSet.
-			g := NewGenerator(walker, ruleSet)
+			// The NewGenerator should now take the analyzer.TypeAnalyzer and the config.Config.
+			g := NewGenerator(adapter.GetAnalyzer(), cfg)
 			generatedCode, err := g.Generate()
 			if err != nil {
 				t.Fatalf("Generate() failed for test case %s: %v", tc.name, err)
@@ -194,8 +188,11 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			}
 
 			if string(generatedCode) != string(expectedCode) {
-				t.Errorf("Generated code does not match the golden file %s.\n---EXPECTED---\n%s\n---GOT---\n%s",
-					goldenFile, string(expectedCode), string(generatedCode))
+				// Save generated code to file for debugging
+				generatedFile := filepath.Join(tc.directivePath, "generated.go")
+				os.WriteFile(generatedFile, generatedCode, 0644)
+				t.Logf("Generated code saved to: %s", generatedFile)
+				t.Errorf("Generated code does not match the golden file %s", goldenFile)
 			}
 		})
 	}

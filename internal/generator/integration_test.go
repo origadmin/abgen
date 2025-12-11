@@ -8,8 +8,6 @@ import (
 
 	"github.com/sergi/go-diff/diffmatchpatch"
 
-	"github.com/origadmin/abgen/internal/analyzer"
-	"github.com/origadmin/abgen/internal/config"
 	"github.com/origadmin/abgen/internal/generator"
 )
 
@@ -56,41 +54,38 @@ func TestGenerator_Golden(t *testing.T) {
 					t.Skip("No expected.golden file found, skipping.")
 				}
 
-				// 1. Initialize analyzer.PackageWalker
-				walker := analyzer.NewPackageWalker()
+				// 1. Initialize test adapter
+				adapter := generator.NewTestAdapter()
 
 				// 2. Load initial package to discover directives
-				initialPkg, err := walker.LoadInitialPackage(casePath)
+				initialPkg, err := adapter.LoadInitialPackage(casePath)
 				if err != nil {
 					t.Fatalf("Failed to load initial package from %s: %v", casePath, err)
 				}
 
 				// 3. Discover directives from the initial package
-				directiveParser := config.NewDirectiveParser()
-				directives, err := directiveParser.DiscoverDirectives(initialPkg)
+				directives, err := adapter.DiscoverDirectives(initialPkg)
 				if err != nil {
 					t.Fatalf("Failed to discover directives in %s: %v", casePath, err)
 				}
 
 				// 4. Extract dependencies from directives
-				dependencyPaths := directiveParser.ExtractDependencies(directives)
+				dependencyPaths := adapter.ExtractDependencies(directives)
 
 				// 5. Load full graph including dependencies
-				_, err = walker.LoadFullGraph(initialPkg.PkgPath, dependencyPaths...)
+				_, err = adapter.LoadFullGraph(initialPkg.PkgPath, dependencyPaths...)
 				if err != nil {
 					t.Fatalf("Failed to load full package graph for %s: %v", casePath, err)
 				}
 
-				// 6. Parse directives into a RuleSet
-				ruleParser := config.NewRuleParser()
-				err = ruleParser.ParseDirectives(directives, initialPkg)
+				// 6. Parse directives into a Config
+				cfg, err := adapter.ParseDirectives(directives, initialPkg)
 				if err != nil {
-					t.Fatalf("Failed to parse directives into RuleSet for %s: %v", casePath, err)
+					t.Fatalf("Failed to parse directives into Config for %s: %v", casePath, err)
 				}
-				ruleSet := ruleParser.GetRuleSet()
 
 				// 7. Run the generator
-				gen := generator.NewGenerator(walker, ruleSet)
+				gen := generator.NewGenerator(adapter.GetAnalyzer(), cfg)
 				generatedBytes, err := gen.Generate()
 				if err != nil {
 					t.Fatalf("Generator failed: %v", err)

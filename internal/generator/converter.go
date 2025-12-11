@@ -1,87 +1,69 @@
-// Package generator provides utilities for converting between different type representations.
+// Package generator provides utilities for type conversions.
 package generator
 
 import (
-	"github.com/origadmin/abgen/internal/analyzer"
 	"github.com/origadmin/abgen/internal/model"
 )
 
-// TypeConverter handles conversion from analyzer.TypeInfo to model.Type.
+// TypeConverter handles type conversions and utility functions.
+// This is now a utility class that works directly with model.TypeInfo.
 type TypeConverter struct {
-	cache map[*analyzer.TypeInfo]*model.Type
+	// Cache can be added if needed for performance optimization
 }
 
 // NewTypeConverter creates a new TypeConverter.
 func NewTypeConverter() *TypeConverter {
-	return &TypeConverter{
-		cache: make(map[*analyzer.TypeInfo]*model.Type),
-	}
+	return &TypeConverter{}
 }
 
-// ConvertToModel converts analyzer.TypeInfo to model.Type.
-func (c *TypeConverter) ConvertToModel(info *analyzer.TypeInfo) *model.Type {
+// IsPointer checks if the given TypeInfo represents a pointer type.
+func (c *TypeConverter) IsPointer(info *model.TypeInfo) bool {
+	return info != nil && info.Kind == model.Pointer
+}
+
+// GetElementType returns the element type for pointers, slices, and arrays.
+func (c *TypeConverter) GetElementType(info *model.TypeInfo) *model.TypeInfo {
 	if info == nil {
 		return nil
 	}
 	
-	// Check cache
-	if result, exists := c.cache[info]; exists {
-		return result
-	}
-	
-	// Create new model type
-	modelType := &model.Type{
-		Name:       info.Name,
-		ImportPath: info.ImportPath,
-		IsPointer:  info.Kind == analyzer.Pointer,
-		Fields:     make([]*model.Field, 0),
-	}
-
-	
-	// IMPORTANT: Add to cache immediately to prevent infinite recursion for self-referencing types
-	c.cache[info] = modelType 
-	
-	// Convert kind
 	switch info.Kind {
-	case analyzer.Struct:
-		modelType.Kind = model.TypeKindStruct
-	case analyzer.Slice:
-		modelType.Kind = model.TypeKindSlice
-	case analyzer.Array:
-		modelType.Kind = model.TypeKindArray
-	case analyzer.Pointer:
-		modelType.Kind = model.TypeKindPointer
-	case analyzer.Primitive:
-		modelType.Kind = model.TypeKindPrimitive
-	case analyzer.Interface:
-		modelType.Kind = model.TypeKindInterface
-	case analyzer.Map:
-		modelType.Kind = model.TypeKindMap
+	case model.Pointer, model.Slice, model.Array:
+		return info.Underlying
 	default:
-		modelType.Kind = model.TypeKindUnknown
+		return nil
 	}
-	
-	// Convert element type for slices, pointers, maps (use Underlying field)
-	if info.Underlying != nil {
-		modelType.ElementType = c.ConvertToModel(info.Underlying)
+}
+
+// GetKeyType returns the key type for maps.
+func (c *TypeConverter) GetKeyType(info *model.TypeInfo) *model.TypeInfo {
+	if info != nil && info.Kind == model.Map {
+		return info.KeyType
 	}
-	
-	// Convert key type for maps
-	if info.KeyType != nil {
-		modelType.KeyType = c.ConvertToModel(info.KeyType)
-	}
-	
-	// Convert fields for structs
-	for _, field := range info.Fields {
-		modelField := &model.Field{
-			Name:       field.Name,
-			Type:       c.ConvertToModel(field.Type),
-			Tag:        field.Tag,
-			IsEmbedded: field.IsEmbedded,
-		}
-		modelType.Fields = append(modelType.Fields, modelField)
-	}
-	
-	// No need to insert into cache again here, it's already there
-	return modelType
+	return nil
+}
+
+// IsStruct checks if the given TypeInfo represents a struct type.
+func (c *TypeConverter) IsStruct(info *model.TypeInfo) bool {
+	return info != nil && info.Kind == model.Struct
+}
+
+// IsSlice checks if the given TypeInfo represents a slice type.
+func (c *TypeConverter) IsSlice(info *model.TypeInfo) bool {
+	return info != nil && info.Kind == model.Slice
+}
+
+// IsArray checks if the given TypeInfo represents an array type.
+func (c *TypeConverter) IsArray(info *model.TypeInfo) bool {
+	return info != nil && info.Kind == model.Array
+}
+
+// IsMap checks if the given TypeInfo represents a map type.
+func (c *TypeConverter) IsMap(info *model.TypeInfo) bool {
+	return info != nil && info.Kind == model.Map
+}
+
+// IsPrimitive checks if the given TypeInfo represents a primitive type.
+func (c *TypeConverter) IsPrimitive(info *model.TypeInfo) bool {
+	return info != nil && info.Kind == model.Primitive
 }
