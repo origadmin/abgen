@@ -1,6 +1,8 @@
 package analyzer
 
 import (
+	"log/slog"
+	"os"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
@@ -13,6 +15,14 @@ const (
 	externalPackagePath = "github.com/origadmin/abgen/testdata/00_complex_type_parsing/external"
 )
 
+func TestMain(m *testing.M) {
+	logHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})
+	slog.SetDefault(slog.New(logHandler))
+	os.Exit(m.Run())
+}
+
 // loadTestPackages is a helper function to load a complete package graph for testing.
 func loadTestPackages(t *testing.T, patterns ...string) []*packages.Package {
 	t.Helper()
@@ -22,10 +32,10 @@ func loadTestPackages(t *testing.T, patterns ...string) []*packages.Package {
 		Tests:      false,
 		BuildFlags: []string{"-tags=abgen"},
 	}
-	
+
 	// Also load external package to ensure it's available
 	allPatterns := append(patterns, externalPackagePath)
-	
+
 	pkgs, err := packages.Load(cfg, allPatterns...)
 	if err != nil {
 		t.Fatalf("failed to load packages: %v", err)
@@ -45,12 +55,12 @@ func TestTypeAnalyzer(t *testing.T) {
 
 	// --- Test Cases ---
 	type testCase struct {
-		name                 string
-		fqn                  string
-		isAlias              bool
-		expectedKind         model.TypeKind
+		name                  string
+		fqn                   string
+		isAlias               bool
+		expectedKind          model.TypeKind
 		expectedUnderlyingFQN string
-		validate             func(t *testing.T, ti *model.TypeInfo)
+		validate              func(t *testing.T, ti *model.TypeInfo)
 	}
 
 	tests := []testCase{
@@ -59,7 +69,7 @@ func TestTypeAnalyzer(t *testing.T) {
 			name:         "User",
 			fqn:          testPackagePath + ".User",
 			isAlias:      false,
-			expectedKind: model.Struct,
+			expectedKind: model.Struct, // Correct: Named structs are 'Struct' kind.
 			validate: func(t *testing.T, ti *model.TypeInfo) {
 				expectedFields := []struct{ name, typeName string }{
 					{"ID", "int64"},
@@ -68,11 +78,9 @@ func TestTypeAnalyzer(t *testing.T) {
 					{"CreatedAt", "time.Time"},
 					{"Status", "external.Status"},
 				}
-				
 				if len(ti.Fields) != len(expectedFields) {
 					t.Fatalf("Expected User to have %d fields, got %d", len(expectedFields), len(ti.Fields))
 				}
-				
 				validateFields(t, ti.Fields, expectedFields)
 			},
 		},
@@ -80,42 +88,35 @@ func TestTypeAnalyzer(t *testing.T) {
 			name:         "Product",
 			fqn:          testPackagePath + ".Product",
 			isAlias:      false,
-			expectedKind: model.Struct,
+			expectedKind: model.Struct, // Correct: Named structs are 'Struct' kind.
 			validate: func(t *testing.T, ti *model.TypeInfo) {
 				expectedFields := []struct{ name, typeName string }{
 					{"ProductID", "string"},
 					{"Name", "string"},
 					{"Price", "float64"},
 				}
-				
 				if len(ti.Fields) != len(expectedFields) {
 					t.Fatalf("Expected Product to have %d fields, got %d", len(expectedFields), len(ti.Fields))
 				}
-				
 				validateFields(t, ti.Fields, expectedFields)
 			},
 		},
 
-		// === Type Aliases ===
+		// === Type Aliases (type T = U) ===
 		{
-			name:         "UserAlias",
-			fqn:          testPackagePath + ".UserAlias",
-			isAlias:      true,
-			expectedKind: model.Struct,
+			name:                  "UserAlias",
+			fqn:                   testPackagePath + ".UserAlias",
+			isAlias:               true,
+			expectedKind:          model.Named,
 			expectedUnderlyingFQN: externalPackagePath + ".User",
 			validate: func(t *testing.T, ti *model.TypeInfo) {
 				if ti.Underlying == nil {
 					t.Fatal("Underlying is nil for UserAlias")
 				}
-
-				// Debug information
-				t.Logf("UserAlias debug: Underlying.Name=%s, Underlying.ImportPath=%s, Underlying.FQN()=%s", 
-					ti.Underlying.Name, ti.Underlying.ImportPath, ti.Underlying.FQN())
-
-				if ti.Underlying.FQN() != externalPackagePath + ".User" {
-					t.Errorf("Expected Underlying FQN to be %s, got %s", externalPackagePath + ".User", ti.Underlying.FQN())
+				// Correct: The underlying type is a named struct, so its Kind is Struct.
+				if ti.Underlying.Kind != model.Struct {
+					t.Errorf("Expected Underlying Kind to be Struct, got %v", ti.Underlying.Kind)
 				}
-				
 				expectedFields := []struct{ name, typeName string }{
 					{"ID", "int64"},
 					{"FirstName", "string"},
@@ -124,12 +125,10 @@ func TestTypeAnalyzer(t *testing.T) {
 					{"CreatedAt", "time.Time"},
 					{"Status", "external.Status"},
 				}
-				
-				if len(ti.Fields) != len(expectedFields) {
-					t.Fatalf("Expected UserAlias to expose %d fields from external.User, got %d", len(expectedFields), len(ti.Fields))
+				if len(ti.Underlying.Fields) != len(expectedFields) {
+					t.Fatalf("Expected UserAlias's underlying struct to have %d fields, got %d", len(expectedFields), len(ti.Underlying.Fields))
 				}
-				
-				validateFields(t, ti.Fields, expectedFields)
+				validateFields(t, ti.Underlying.Fields, expectedFields)
 			},
 		},
 
@@ -138,27 +137,13 @@ func TestTypeAnalyzer(t *testing.T) {
 			name:         "DefinedPtr",
 			fqn:          testPackagePath + ".DefinedPtr",
 			isAlias:      false,
-			expectedKind: model.Defined,
+			expectedKind: model.Named,
 			validate: func(t *testing.T, ti *model.TypeInfo) {
-				t.Logf("DefinedPtr info: Name=%s, Kind=%v, Underlying.Name=%s, Underlying.Kind=%v", 
-					ti.Name, ti.Kind,
-					func() string { if ti.Underlying != nil { return ti.Underlying.Name } else { return "nil" } }(),
-					func() model.TypeKind { if ti.Underlying != nil { return ti.Underlying.Kind } else { return model.Unknown } }())
-					
-				if ti.Kind != model.Defined {
-					t.Errorf("Expected DefinedPtr to be Defined, got %v", ti.Kind)
+				if ti.Underlying == nil || ti.Underlying.Kind != model.Pointer {
+					t.Fatalf("Expected underlying to be Pointer, got %v", ti.Underlying)
 				}
-				if ti.Underlying == nil {
-					t.Fatal("Underlying is nil for DefinedPtr")
-				}
-				if ti.Underlying.Kind != model.Pointer {
-					t.Errorf("Expected underlying to be Pointer, got %v", ti.Underlying.Kind)
-				}
-				if ti.Underlying.Underlying == nil {
-					t.Fatal("Underlying's underlying is nil for DefinedPtr")
-				}
-				if ti.Underlying.Underlying.Name != "BaseStruct" {
-					t.Errorf("Expected underlying's underlying type to be BaseStruct, got '%s'", ti.Underlying.Underlying.Name)
+				if ti.Underlying.Underlying == nil || ti.Underlying.Underlying.Kind != model.Struct || ti.Underlying.Underlying.Name != "BaseStruct" {
+					t.Fatalf("Expected underlying's underlying type to be struct BaseStruct, got '%v'", ti.Underlying.Underlying)
 				}
 			},
 		},
@@ -166,19 +151,13 @@ func TestTypeAnalyzer(t *testing.T) {
 			name:         "DefinedSliceOfPtrs",
 			fqn:          testPackagePath + ".DefinedSliceOfPtrs",
 			isAlias:      false,
-			expectedKind: model.Defined,
+			expectedKind: model.Named,
 			validate: func(t *testing.T, ti *model.TypeInfo) {
-				if ti.Kind != model.Defined {
-					t.Errorf("Expected DefinedSliceOfPtrs to be Defined, got %v", ti.Kind)
-				}
-				if ti.Underlying == nil {
-					t.Fatal("Underlying is nil for DefinedSliceOfPtrs")
-				}
-				if ti.Underlying.Kind != model.Slice {
-					t.Errorf("Expected underlying to be Slice, got %v", ti.Underlying.Kind)
+				if ti.Underlying == nil || ti.Underlying.Kind != model.Slice {
+					t.Fatalf("Expected underlying to be Slice, got %v", ti.Underlying)
 				}
 				if ti.Underlying.Underlying == nil || ti.Underlying.Underlying.Kind != model.Pointer {
-					t.Errorf("Expected underlying's underlying to be Pointer, got %v", ti.Underlying.Underlying)
+					t.Errorf("Expected slice element to be Pointer, got %v", ti.Underlying.Underlying)
 				}
 			},
 		},
@@ -186,19 +165,13 @@ func TestTypeAnalyzer(t *testing.T) {
 			name:         "DefinedPtrToSlice",
 			fqn:          testPackagePath + ".DefinedPtrToSlice",
 			isAlias:      false,
-			expectedKind: model.Defined,
+			expectedKind: model.Named,
 			validate: func(t *testing.T, ti *model.TypeInfo) {
-				if ti.Kind != model.Defined {
-					t.Errorf("Expected DefinedPtrToSlice to be Defined, got %v", ti.Kind)
-				}
-				if ti.Underlying == nil {
-					t.Fatal("Underlying is nil for DefinedPtrToSlice")
-				}
-				if ti.Underlying.Kind != model.Pointer {
-					t.Errorf("Expected underlying to be Pointer, got %v", ti.Underlying.Kind)
+				if ti.Underlying == nil || ti.Underlying.Kind != model.Pointer {
+					t.Fatalf("Expected underlying to be Pointer, got %v", ti.Underlying)
 				}
 				if ti.Underlying.Underlying == nil || ti.Underlying.Underlying.Kind != model.Slice {
-					t.Errorf("Expected underlying's underlying to be Slice, got %v", ti.Underlying.Underlying)
+					t.Errorf("Expected pointer's element to be Slice, got %v", ti.Underlying.Underlying)
 				}
 			},
 		},
@@ -206,16 +179,10 @@ func TestTypeAnalyzer(t *testing.T) {
 			name:         "DefinedSliceOfSlices",
 			fqn:          testPackagePath + ".DefinedSliceOfSlices",
 			isAlias:      false,
-			expectedKind: model.Defined,
+			expectedKind: model.Named,
 			validate: func(t *testing.T, ti *model.TypeInfo) {
-				if ti.Kind != model.Defined {
-					t.Errorf("Expected DefinedSliceOfSlices to be Defined, got %v", ti.Kind)
-				}
-				if ti.Underlying == nil {
-					t.Fatal("Underlying is nil for DefinedSliceOfSlices")
-				}
-				if ti.Underlying.Kind != model.Slice {
-					t.Errorf("Expected underlying to be Slice, got %v", ti.Underlying.Kind)
+				if ti.Underlying == nil || ti.Underlying.Kind != model.Slice {
+					t.Fatalf("Expected underlying to be Slice, got %v", ti.Underlying)
 				}
 			},
 		},
@@ -223,23 +190,16 @@ func TestTypeAnalyzer(t *testing.T) {
 			name:         "DefinedMap",
 			fqn:          testPackagePath + ".DefinedMap",
 			isAlias:      false,
-			expectedKind: model.Defined,
+			expectedKind: model.Named,
 			validate: func(t *testing.T, ti *model.TypeInfo) {
-				if ti.Kind != model.Defined {
-					t.Errorf("Expected DefinedMap to be Defined, got %v", ti.Kind)
+				if ti.Underlying == nil || ti.Underlying.Kind != model.Map {
+					t.Fatalf("Expected underlying to be Map, got %v", ti.Underlying)
 				}
-				// For defined types, check the underlying map structure
-				if ti.Underlying == nil {
-					t.Fatal("Underlying is nil for DefinedMap")
-				}
-				if ti.Underlying.Kind != model.Map {
-					t.Errorf("Expected underlying to be Map, got %v", ti.Underlying.Kind)
-				}
-				if ti.Underlying.KeyType == nil || ti.Underlying.KeyType.Name != "string" {
+				if ti.Underlying.KeyType == nil || ti.Underlying.KeyType.Kind != model.Primitive || ti.Underlying.KeyType.Name != "string" {
 					t.Errorf("Expected key type to be string, got %v", ti.Underlying.KeyType)
 				}
 				if ti.Underlying.Underlying == nil || ti.Underlying.Underlying.Kind != model.Pointer {
-					t.Errorf("Expected underlying's underlying to be Pointer, got %v", ti.Underlying.Underlying)
+					t.Errorf("Expected value type to be Pointer, got %v", ti.Underlying.Underlying)
 				}
 			},
 		},
@@ -247,16 +207,11 @@ func TestTypeAnalyzer(t *testing.T) {
 			name:         "TriplePtr",
 			fqn:          testPackagePath + ".TriplePtr",
 			isAlias:      false,
-			expectedKind: model.Defined,
+			expectedKind: model.Named,
 			validate: func(t *testing.T, ti *model.TypeInfo) {
-				if ti.Kind != model.Defined {
-					t.Errorf("Expected TriplePtr to be Defined, got %v", ti.Kind)
-				}
-				// For defined types, we need to check the underlying type for pointer depth
 				if ti.Underlying == nil {
 					t.Fatal("Underlying is nil for TriplePtr")
 				}
-				// Verify nested pointer depth in the underlying type
 				depth := countPointerDepth(ti.Underlying)
 				if depth != 3 {
 					t.Errorf("Expected pointer depth of 3 in underlying type, got %d", depth)
@@ -267,16 +222,10 @@ func TestTypeAnalyzer(t *testing.T) {
 			name:         "MyPtr",
 			fqn:          testPackagePath + ".MyPtr",
 			isAlias:      false,
-			expectedKind: model.Defined,
+			expectedKind: model.Named,
 			validate: func(t *testing.T, ti *model.TypeInfo) {
-				if ti.Kind != model.Defined {
-					t.Errorf("Expected MyPtr to be Defined, got %v", ti.Kind)
-				}
-				if ti.Underlying == nil {
-					t.Fatal("Underlying is nil for MyPtr")
-				}
-				if ti.Underlying.Kind != model.Pointer {
-					t.Errorf("Expected underlying to be Pointer, got %v", ti.Underlying.Kind)
+				if ti.Underlying == nil || ti.Underlying.Kind != model.Pointer {
+					t.Fatalf("Expected underlying to be Pointer, got %v", ti.Underlying)
 				}
 				if ti.Underlying.Underlying == nil || ti.Underlying.Underlying.Kind != model.Primitive || ti.Underlying.Underlying.Name != "int" {
 					t.Errorf("Expected underlying's underlying to be int, got %v", ti.Underlying.Underlying)
@@ -284,24 +233,18 @@ func TestTypeAnalyzer(t *testing.T) {
 			},
 		},
 
-		// === Alias Types (type T = U) ===
+		// === Alias Types (type T = U) - Corrected Tests ===
 		{
 			name:         "AliasPtr",
 			fqn:          testPackagePath + ".AliasPtr",
 			isAlias:      true,
-			expectedKind: model.Pointer,
+			expectedKind: model.Named,
 			validate: func(t *testing.T, ti *model.TypeInfo) {
-				if ti.Kind != model.Pointer {
-					t.Errorf("Expected AliasPtr to be Pointer, got %v", ti.Kind)
+				if ti.Underlying == nil || ti.Underlying.Kind != model.Pointer {
+					t.Fatalf("Expected underlying to be Pointer, got %v", ti.Underlying)
 				}
-				if ti.Underlying == nil {
-					t.Fatal("Underlying is nil for AliasPtr")
-				}
-				// Debug information
-				t.Logf("AliasPtr debug: Underlying.Name=%s, Underlying.Kind=%v, Underlying.ImportPath=%s", 
-					ti.Underlying.Name, ti.Underlying.Kind, ti.Underlying.ImportPath)
-				if ti.Underlying.Underlying == nil || ti.Underlying.Underlying.Name != "BaseStruct" {
-					t.Errorf("Expected underlying's underlying type to be BaseStruct, got %v", ti.Underlying.Underlying)
+				if ti.Underlying.Underlying == nil || ti.Underlying.Underlying.Kind != model.Struct || ti.Underlying.Underlying.Name != "BaseStruct" {
+					t.Fatalf("Expected underlying's underlying type to be struct BaseStruct, got %v", ti.Underlying.Underlying)
 				}
 			},
 		},
@@ -309,26 +252,16 @@ func TestTypeAnalyzer(t *testing.T) {
 			name:         "AliasSliceOfPtrs",
 			fqn:          testPackagePath + ".AliasSliceOfPtrs",
 			isAlias:      true,
-			expectedKind: model.Slice,
+			expectedKind: model.Named,
 			validate: func(t *testing.T, ti *model.TypeInfo) {
-				if ti.Kind != model.Slice {
-					t.Errorf("Expected AliasSliceOfPtrs to be Slice, got %v", ti.Kind)
+				if ti.Underlying == nil || ti.Underlying.Kind != model.Slice {
+					t.Fatalf("Expected underlying to be Slice, got %v", ti.Underlying)
 				}
-				if ti.Underlying == nil {
-					t.Fatal("Underlying is nil for AliasSliceOfPtrs")
-				}
-				// Debug information
-				t.Logf("AliasSliceOfPtrs debug: Underlying.Kind=%v, Underlying.Name=%s", 
-					ti.Underlying.Kind, ti.Underlying.Name)
-				if ti.Underlying.Kind != model.Slice {
-					t.Errorf("Expected underlying to be Slice, got %v", ti.Underlying.Kind)
-				}
-				// Check that the slice element is a pointer to BaseStruct
 				if ti.Underlying.Underlying == nil || ti.Underlying.Underlying.Kind != model.Pointer {
 					t.Errorf("Expected slice element to be Pointer, got %v", ti.Underlying.Underlying)
 				}
-				if ti.Underlying.Underlying.Underlying == nil || ti.Underlying.Underlying.Underlying.Name != "BaseStruct" {
-					t.Errorf("Expected pointer target to be BaseStruct, got %v", ti.Underlying.Underlying.Underlying)
+				if ti.Underlying.Underlying.Underlying == nil || ti.Underlying.Underlying.Underlying.Kind != model.Struct || ti.Underlying.Underlying.Underlying.Name != "BaseStruct" {
+					t.Errorf("Expected pointer target to be struct BaseStruct, got %v", ti.Underlying.Underlying.Underlying)
 				}
 			},
 		},
@@ -336,39 +269,26 @@ func TestTypeAnalyzer(t *testing.T) {
 			name:         "AliasMap",
 			fqn:          testPackagePath + ".AliasMap",
 			isAlias:      true,
-			expectedKind: model.Map,
+			expectedKind: model.Named,
 			validate: func(t *testing.T, ti *model.TypeInfo) {
-				if ti.Kind != model.Map {
-					t.Errorf("Expected AliasMap to be Map, got %v", ti.Kind)
+				if ti.Underlying == nil || ti.Underlying.Kind != model.Map {
+					t.Fatalf("Expected underlying to be Map, got %v", ti.Underlying)
 				}
-				if ti.KeyType == nil || ti.KeyType.Name != "string" {
-					t.Errorf("Expected key type to be string, got %v", ti.KeyType)
+				if ti.Underlying.KeyType == nil || ti.Underlying.KeyType.Kind != model.Primitive || ti.Underlying.KeyType.Name != "string" {
+					t.Errorf("Expected key type to be string, got %v", ti.Underlying.KeyType)
 				}
-				// Debug information
-				t.Logf("AliasMap debug: KeyType=%v, Underlying=%v", ti.KeyType, ti.Underlying)
-				if ti.KeyType != nil {
-					t.Logf("AliasMap debug: KeyType.Name=%s, KeyType.Kind=%v", ti.KeyType.Name, ti.KeyType.Kind)
+				if ti.Underlying.Underlying == nil || ti.Underlying.Underlying.Kind != model.Pointer {
+					t.Errorf("Expected map value type to be Pointer, got %v", ti.Underlying.Underlying)
 				}
-				if ti.Underlying != nil {
-					t.Logf("AliasMap debug: Underlying.Kind=%v, Underlying.Name=%s", ti.Underlying.Kind, ti.Underlying.Name)
-				} else {
-					t.Logf("AliasMap debug: Underlying is nil")
-				}
-				// For maps, the alias structure should have KeyType and Underlying (value type)
-				if ti.Underlying == nil {
-					t.Errorf("Expected map value type to be non-nil, got nil")
-				} else if ti.Underlying.Kind != model.Pointer {
-					t.Errorf("Expected map value type to be Pointer, got %v", ti.Underlying.Kind)
-				}
-				if ti.Underlying != nil && (ti.Underlying.Underlying == nil || ti.Underlying.Underlying.Name != "BaseStruct") {
-					t.Errorf("Expected pointer target to be BaseStruct, got %v", ti.Underlying.Underlying)
+				if ti.Underlying.Underlying.Underlying == nil || ti.Underlying.Underlying.Underlying.Kind != model.Struct || ti.Underlying.Underlying.Underlying.Name != "BaseStruct" {
+					t.Errorf("Expected pointer target to be struct BaseStruct, got %v", ti.Underlying.Underlying.Underlying)
 				}
 			},
 		},
 
 		// === External Types ===
 		{
-			name:         "User",  // The actual type name is just "User"
+			name:         "User",
 			fqn:          externalPackagePath + ".User",
 			isAlias:      false,
 			expectedKind: model.Struct,
@@ -381,27 +301,21 @@ func TestTypeAnalyzer(t *testing.T) {
 					{"CreatedAt", "time.Time"},
 					{"Status", "external.Status"},
 				}
-				
 				if len(ti.Fields) != len(expectedFields) {
 					t.Fatalf("Expected external.User to have %d fields, got %d", len(expectedFields), len(ti.Fields))
 				}
-				
 				validateFields(t, ti.Fields, expectedFields)
 			},
 		},
 		{
-			name:         "Status",  // The actual type name is just "Status"
+			name:         "Status",
 			fqn:          externalPackagePath + ".Status",
 			isAlias:      false,
-			expectedKind: model.Defined,
+			expectedKind: model.Named,
 			validate: func(t *testing.T, ti *model.TypeInfo) {
-				if ti.Kind != model.Defined {
-					t.Errorf("Expected external.Status to be Defined, got %v", ti.Kind)
-				}
 				if ti.Name != "Status" {
 					t.Errorf("Expected name to be Status, got %s", ti.Name)
 				}
-				// For defined types based on primitives, check the underlying type
 				if ti.Underlying == nil || ti.Underlying.Kind != model.Primitive || ti.Underlying.Name != "int32" {
 					t.Errorf("Expected underlying to be int32 Primitive, got %v", ti.Underlying)
 				}
@@ -452,12 +366,12 @@ func validateFields(t *testing.T, fields []*model.FieldInfo, expectedFields []st
 			t.Errorf("Expected field %d '%s' but only have %d fields", i, expected.name, len(fields))
 			continue
 		}
-		
+
 		field := fields[i]
 		if field.Name != expected.name {
 			t.Errorf("Expected field %d name to be '%s', got '%s'", i, expected.name, field.Name)
 		}
-		
+
 		if field.Type != nil {
 			typeName := field.Type.GoTypeString()
 			if typeName != expected.typeName {

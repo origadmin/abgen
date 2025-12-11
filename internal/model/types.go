@@ -22,7 +22,7 @@ const (
 	Slice
 	Array
 	Pointer
-	Defined // For defined types (type T U)
+	Named     // For any type introduced with the 'type' keyword
 )
 
 // TypeInfo represents the detailed information of a resolved Go type.
@@ -118,8 +118,8 @@ func (ti *TypeInfo) buildTypeStringFromUnderlying() string {
 		} else {
 			sb.WriteString("interface{}")
 		}
-	case Defined:
-		// For defined types, we should show the type name, not the underlying type
+	case Named:
+		// For named types, we should show the type name, not the underlying type
 		// This preserves the semantic meaning of the defined type
 		if ti.Name != "" {
 			// For defined types from other packages, include the package name
@@ -197,8 +197,8 @@ func (k TypeKind) String() string {
 		return "Array"
 	case Pointer:
 		return "Pointer"
-	case Defined:
-		return "Defined"
+	case Named:
+		return "Named"
 	default:
 		return "Unknown"
 	}
