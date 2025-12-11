@@ -166,35 +166,15 @@ func (a *TypeAnalyzer) resolveType(typ types.Type) *model.TypeInfo {
 		info.Original = obj
 		info.IsAlias = true
 
-		slog.Debug("resolveType: Alias", "name", info.Name, "importPath", info.ImportPath, "underlying", t.Underlying().String())
+		slog.Debug("resolveType: Alias", "name", info.Name, "importPath", info.ImportPath, "rhs", t.Rhs().String())
 
-		// For a type alias (type T = U), we need to find the TypeInfo for U
-		underlyingType := t.Underlying()
-		var underlyingInfo *model.TypeInfo
-		
-		// Check if the underlying type is a named type
-		if named, ok := underlyingType.(*types.Named); ok {
-			// This is a named type, we should look it up properly
-			namedObj := named.Obj()
-			fqn := namedObj.Pkg().Path() + "." + namedObj.Name()
-			slog.Debug("resolveType: Alias - looking up named type", "fqn", fqn)
-			foundInfo, err := a.find(fqn)
-			if err != nil {
-				slog.Debug("resolveType: Alias - failed to find named type", "fqn", fqn, "error", err)
-				// Fall back to resolving the type directly
-				underlyingInfo = a.resolveType(underlyingType)
-			} else {
-				underlyingInfo = foundInfo
-			}
-		} else {
-			// Not a named type, resolve directly
-			underlyingInfo = a.resolveType(underlyingType)
-		}
+		// For a type alias (type T = U), we use Rhs() to get the aliased type
+		// Rhs() returns the type on the right-hand side of the alias declaration
+		underlyingInfo := a.resolveType(t.Rhs())
 		
 		if underlyingInfo != nil {
 			info.Kind = model.Named
 			info.Underlying = underlyingInfo
-			slog.Debug("resolveType: Alias - result", "underlyingInfo.FQN", underlyingInfo.FQN(), "underlyingInfo.Name", underlyingInfo.Name, "underlyingInfo.ImportPath", underlyingInfo.ImportPath)
 		}
 
 	case *types.Named:
