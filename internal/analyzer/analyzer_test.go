@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	testPackagePath     = "github.com/origadmin/abgen/testdata/01_type_analysis/01_complex_types/source"
-	externalPackagePath = "github.com/origadmin/abgen/testdata/01_type_analysis/01_complex_types/external"
+	testPackagePath     = "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types"
+	externalPackagePath = "github.com/origadmin/abgen/testdata/00_complex_type_parsing/external"
 )
 
 // loadTestPackages is a helper function to load a complete package graph for testing.
@@ -22,7 +22,11 @@ func loadTestPackages(t *testing.T, patterns ...string) []*packages.Package {
 		Tests:      false,
 		BuildFlags: []string{"-tags=abgen"},
 	}
-	pkgs, err := packages.Load(cfg, patterns...)
+	
+	// Also load external package to ensure it's available
+	allPatterns := append(patterns, externalPackagePath)
+	
+	pkgs, err := packages.Load(cfg, allPatterns...)
 	if err != nil {
 		t.Fatalf("failed to load packages: %v", err)
 	}
@@ -71,6 +75,7 @@ func TestTypeAnalyzer(t *testing.T) {
 				if ti.Underlying == nil {
 					t.Fatal("Underlying is nil for UserAlias")
 				}
+
 				if ti.Underlying.FQN() != externalPackagePath + ".User" {
 					t.Errorf("Expected Underlying FQN to be %s, got %s", externalPackagePath + ".User", ti.Underlying.FQN())
 				}
@@ -114,6 +119,8 @@ func TestTypeAnalyzer(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Find failed for %s: %v", tt.name, err)
 			}
+
+
 
 			if ti.Name != tt.name {
 				t.Errorf("Expected Name to be %s, got %s", tt.name, ti.Name)
