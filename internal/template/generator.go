@@ -6,7 +6,7 @@ import (
 	"embed"
 	"text/template"
 
-	"github.com/origadmin/abgen/internal/types"
+	"github.com/origadmin/abgen/internal/model"
 )
 
 //go:embed *.tpl
@@ -39,10 +39,10 @@ func (m *Manager) Render(templateName string, data interface{}) ([]byte, error) 
 
 // Data is the top-level struct passed to the template.
 type Data struct {
-	PackageName    string
-	Imports        []types.Import // Use types.Import
-	TypeAliases    []string
-	Funcs          []*Function
+	PackageName     string
+	Types           []model.TypeInfo // Use model.TypeInfo
+	TypeAliases     []string
+	Funcs           []*Function
 	CustomRuleFuncs []string // Add this field
 }
 
@@ -53,5 +53,5 @@ type Function struct {
 	TargetType    string
 	SourcePointer string
 	TargetPointer string
-	Conversions   []types.FieldConversion
+	Conversions   []model.Field
 }

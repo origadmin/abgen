@@ -14,9 +14,9 @@ type User struct {
 type Status int32
 
 const (
-	Status_UNKNOWN Status = 0
-	Status_ACTIVE  Status = 1
-	Status_INACTIVE Status = 2
+	Unknown  Status = 0
+	Active   Status = 1
+	Inactive Status = 2
 )
 
 type Order struct {
