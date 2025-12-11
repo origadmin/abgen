@@ -36,7 +36,7 @@ func TestParser_ParseDirectives_NamingRules(t *testing.T) {
 
 	// We need to manually call the internal parse method for this unit test
 	for _, d := range directives {
-		p.parse(d)
+		p.parseSingleDirective(d)
 	}
 
 	cfg := p.config
@@ -63,7 +63,7 @@ func TestParser_PackageAlias_Override(t *testing.T) {
 	}
 
 	for _, d := range directives {
-		p.parse(d)
+		p.parseSingleDirective(d)
 	}
 
 	cfg := p.config
@@ -84,7 +84,7 @@ func TestParser_ParseDirectives_CumulativePackagePairs(t *testing.T) {
 	}
 
 	for _, d := range directives {
-		p.parse(d)
+		p.parseSingleDirective(d)
 	}
 
 	cfg := p.config
@@ -118,7 +118,7 @@ func TestParser_ParseDirectives_ConversionRule(t *testing.T) {
 	}
 
 	for _, d := range directives {
-		p.parse(d)
+		p.parseSingleDirective(d)
 	}
 
 	cfg := p.config
@@ -166,7 +166,7 @@ func TestParser_SupportsFullPath(t *testing.T) {
 	}
 
 	for _, d := range directives {
-		p.parse(d)
+		p.parseSingleDirective(d)
 	}
 
 	cfg := p.config
@@ -197,7 +197,6 @@ func TestParser_SupportsFullPath(t *testing.T) {
 		t.Errorf("TargetType = %s, want %s", rule.TargetType, expectedRule.TargetType)
 	}
 }
-
 
 func TestNewParser(t *testing.T) {
 	p := NewParser()

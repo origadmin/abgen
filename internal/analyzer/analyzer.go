@@ -37,42 +37,32 @@ func (a *TypeAnalyzer) Find(fqn string) (*model.TypeInfo, error) {
 }
 
 // Analyze is the main entry point for the analysis phase.
-func (a *TypeAnalyzer) Analyze(cfg *config.Config) (map[string]*model.TypeInfo, error) {
-	seedPaths := a.collectSeedPaths(cfg)
+func (a *TypeAnalyzer) Analyze(packagePaths []string, fqns []string) (map[string]*model.TypeInfo, error) {
+	slog.Debug("Starting analysis", "package_count", len(packagePaths), "type_count", len(fqns))
 
+	// 1. Load the full graph of packages.
 	loadCfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedModule |
 			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
 		Tests:      false,
 		BuildFlags: []string{"-tags=abgen"},
 	}
-
-	pkgs, err := packages.Load(loadCfg, seedPaths...)
+	pkgs, err := packages.Load(loadCfg, packagePaths...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load package graph: %w", err)
 	}
-	if packages.PrintErrors(pkgs) > 0 {
-		return nil, fmt.Errorf("packages contain errors")
-	}
-	a.pkgs = pkgs
+	a.pkgs = pkgs // Store the loaded packages.
 
+	// 2. Resolve all requested types.
 	resolvedTypes := make(map[string]*model.TypeInfo)
-	for _, rule := range cfg.ConversionRules {
-		if _, ok := resolvedTypes[rule.SourceType]; !ok {
-			info, err := a.find(rule.SourceType)
+	for _, fqn := range fqns {
+		if _, ok := resolvedTypes[fqn]; !ok {
+			info, err := a.find(fqn)
 			if err != nil {
-				slog.Warn("could not resolve source type", "fqn", rule.SourceType, "error", err)
+				slog.Warn("could not resolve source type", "fqn", fqn, "error", err)
 				continue
 			}
-			resolvedTypes[rule.SourceType] = info
-		}
-		if _, ok := resolvedTypes[rule.TargetType]; !ok {
-			info, err := a.find(rule.TargetType)
-			if err != nil {
-				slog.Warn("could not resolve target type", "fqn", rule.TargetType, "error", err)
-				continue
-			}
-			resolvedTypes[rule.TargetType] = info
+			resolvedTypes[fqn] = info
 		}
 	}
 
@@ -171,7 +161,7 @@ func (a *TypeAnalyzer) resolveType(typ types.Type) *model.TypeInfo {
 		// For a type alias (type T = U), we use Rhs() to get the aliased type
 		// Rhs() returns the type on the right-hand side of the alias declaration
 		underlyingInfo := a.resolveType(t.Rhs())
-		
+
 		if underlyingInfo != nil {
 			info.Kind = model.Named
 			info.Underlying = underlyingInfo

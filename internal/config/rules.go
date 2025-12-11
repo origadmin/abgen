@@ -1,6 +1,10 @@
 // Package config defines the data structures for abgen's configuration and rules.
 package config
 
+import (
+	"strings"
+)
+
 // Global constants for the application.
 const (
 	Application = "abgen"
@@ -61,8 +65,8 @@ type BehaviorRule struct {
 
 // FieldRuleSet defines field-specific rules for a given type conversion.
 type FieldRuleSet struct {
-	Ignore map[string]struct{}      // Fields to ignore
-	Remap  map[string]string        // Fields to remap (source -> target)
+	Ignore map[string]struct{} // Fields to ignore
+	Remap  map[string]string   // Fields to remap (source -> target)
 }
 
 // ConversionDirection represents the direction of conversion.
@@ -90,4 +94,51 @@ func NewConfig() *Config {
 			GenerateAlias: false,
 		},
 	}
+}
+
+// RequiredPackages gathers all unique package paths from the configuration
+// that need to be loaded for analysis.
+func (c *Config) RequiredPackages() []string {
+	pathMap := make(map[string]struct{})
+
+	// Add the package where the code is being generated.
+	if c.GenerationContext.PackagePath != "" {
+		pathMap[c.GenerationContext.PackagePath] = struct{}{}
+	}
+
+	// Add all package aliases.
+	for _, path := range c.PackageAliases {
+		pathMap[path] = struct{}{}
+	}
+
+	// Add all package pairs.
+	for _, pair := range c.PackagePairs {
+		pathMap[pair.SourcePath] = struct{}{}
+		pathMap[pair.TargetPath] = struct{}{}
+	}
+
+	// Add packages from all types mentioned in conversion rules.
+	for _, rule := range c.ConversionRules {
+		if pkgPath := getPkgPath(rule.SourceType); pkgPath != "" {
+			pathMap[pkgPath] = struct{}{}
+		}
+		if pkgPath := getPkgPath(rule.TargetType); pkgPath != "" {
+			pathMap[pkgPath] = struct{}{}
+		}
+	}
+
+	paths := make([]string, 0, len(pathMap))
+	for path := range pathMap {
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+// getPkgPath extracts the package path from a fully-qualified type name.
+func getPkgPath(fqn string) string {
+	lastDot := strings.LastIndex(fqn, ".")
+	if lastDot == -1 {
+		return ""
+	}
+	return fqn[:lastDot]
 }
