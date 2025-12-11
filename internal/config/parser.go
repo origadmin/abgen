@@ -20,8 +20,34 @@ func NewParser() *Parser {
 	}
 }
 
-// ParseDirectives scans and parses all abgen directives from a given package.
-func (p *Parser) ParseDirectives(pkg *packages.Package) (*Config, error) {
+// Parse is the main entry point for configuration parsing. It takes a source
+// directory, loads the initial package, discovers directives, and builds a
+// complete Config object.
+func (p *Parser) Parse(sourceDir string) (*Config, error) {
+	// 1. Load the initial package to find directives
+	initialLoaderCfg := &packages.Config{
+		Mode:  packages.NeedName | packages.NeedSyntax | packages.NeedFiles | packages.NeedModule,
+		Dir:   sourceDir,
+		Tests: false,
+	}
+	initialPkgs, err := packages.Load(initialLoaderCfg, ".")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load initial package at %s: %w", sourceDir, err)
+	}
+	if packages.PrintErrors(initialPkgs) > 0 {
+		return nil, fmt.Errorf("initial package at %s contains errors", sourceDir)
+	}
+	if len(initialPkgs) == 0 {
+		return nil, fmt.Errorf("no initial package found at %s", sourceDir)
+	}
+	initialPkg := initialPkgs[0]
+
+	// 2. Discover and parse directives from the loaded package
+	return p.parseDirectives(initialPkg)
+}
+
+// parseDirectives scans and parses all abgen directives from a given package.
+func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 	if pkg == nil {
 		return nil, fmt.Errorf("package context cannot be nil")
 	}
@@ -44,7 +70,7 @@ func (p *Parser) ParseDirectives(pkg *packages.Package) (*Config, error) {
 	}
 
 	for _, directive := range directives {
-		if err := p.parse(directive); err != nil {
+		if err := p.parseSingleDirective(directive); err != nil {
 			return nil, err
 		}
 	}
@@ -53,7 +79,7 @@ func (p *Parser) ParseDirectives(pkg *packages.Package) (*Config, error) {
 }
 
 // parse processes a single directive string and updates the configuration.
-func (p *Parser) parse(directive string) error {
+func (p *Parser) parseSingleDirective(directive string) error {
 	if !strings.HasPrefix(directive, "//go:abgen:") {
 		return nil // Not a valid directive
 	}
@@ -131,9 +157,9 @@ func (p *Parser) parsePackagePairs(value string) {
 // parseConvertRule parses "convert" directives using a key-value format.
 func (p *Parser) parseConvertRule(value string) {
 	parts := strings.Split(value, ",")
-	
+
 	var sourceTypeStr, targetTypeStr string
-	
+
 	rule := &ConversionRule{
 		Direction: DirectionOneway, // Default direction
 		FieldRules: FieldRuleSet{
@@ -195,6 +221,6 @@ func (p *Parser) resolveTypeFQN(typeStr string) string {
 
 	// The identifier could be an alias or a full package path.
 	packagePath := p.resolvePackagePath(packageIdentifier)
-	
+
 	return packagePath + "." + typeName
 }
