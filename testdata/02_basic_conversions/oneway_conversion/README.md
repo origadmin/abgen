@@ -10,20 +10,20 @@ This test case involves a simple source struct (`source.User`) and its correspon
 The input consists of `directive.go` with the following abgen directives:
 
 ```go
-//go:abgen:package:path=github.com/origadmin/abgen/testdata/02_basic_conversions/single_way_conversion/source,alias=source
-//go:abgen:package:path=github.com/origadmin/abgen/testdata/02_basic_conversions/single_way_conversion/target,alias=target
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/source,alias=source
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/target,alias=target
 
 //go:abgen:convert="source=source.User,target=target.UserDTO,direction=oneway"
 ```
 
 ## Expected Output
-`abgen` should generate a `single_way_conversion.gen.go` file containing only one conversion function:
+`abgen` should generate a `oneway_conversion.gen.go` file containing only one conversion function:
 - `ConvertUserToUserDTO(from *User) *UserDTO`
 
 The function should correctly map fields between the source and target types and include a `nil` check for the source pointer. No `ConvertUserDTOToUser` function should be generated.
 
 ## Validation Points
-- [x] `single_way_conversion.gen.go` is generated.
+- [x] `oneway_conversion.gen.go` is generated.
 - [x] Only `ConvertUserToUserDTO` function is generated.
 - [x] `ConvertUserToUserDTO` function uses pointer parameters.
 - [x] The generated function includes a `nil` check for the source pointer.

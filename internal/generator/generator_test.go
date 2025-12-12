@@ -168,12 +168,12 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 
 		},
 		{
-			name:          "single_way_conversion",
-			directivePath: "../../testdata/02_basic_conversions/single_way_conversion",
+			name:          "oneway_conversion",
+			directivePath: "../../testdata/02_basic_conversions/oneway_conversion",
 			// goldenFileName: "expected.golden", // REMOVED
 			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/single_way_conversion/source",
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/single_way_conversion/target",
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/source",
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/target",
 			},
 			priority: "P0",
 			category: "basic_conversions",
