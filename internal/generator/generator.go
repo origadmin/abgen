@@ -25,15 +25,15 @@ type Generator struct {
 
 // NewGenerator creates a new Generator instance.
 func NewGenerator(config *config.Config) *Generator {
-		g := &Generator{
-			config:    config,
-			importMgr: NewImportManager(),
-			processed: make(map[string]bool),
-			aliasMap:  make(map[string]string),
-		}
-		g.namer = NewNamer(config, g.aliasMap) // Pass aliasMap to Namer
-		g.converter = NewTypeConverter()
-		return g
+	g := &Generator{
+		config:    config,
+		importMgr: NewImportManager(),
+		processed: make(map[string]bool),
+		aliasMap:  make(map[string]string),
+	}
+	g.namer = NewNamer(config, g.aliasMap) // Pass aliasMap to Namer
+	g.converter = NewTypeConverter()
+	return g
 }
 
 // Generate produces the Go source code for the conversions. It takes the pre-analyzed type information.
@@ -396,6 +396,16 @@ func (g *Generator) populateAliases(typeInfos map[string]*model.TypeInfo) {
 		sourceInfo := typeInfos[rule.SourceType]
 		targetInfo := typeInfos[rule.TargetType]
 
+		// **PANIC FIX**: Add nil check before dereferencing sourceInfo or targetInfo.
+		if sourceInfo == nil {
+			slog.Warn("Skipping alias generation for rule due to unresolved source type", "sourceFQN", rule.SourceType)
+			continue
+		}
+		if targetInfo == nil {
+			slog.Warn("Skipping alias generation for rule due to unresolved target type", "targetFQN", rule.TargetType)
+			continue
+		}
+
 		// Determine aliases for source and target types
 		sourceAlias := sourceInfo.Name
 		targetAlias := targetInfo.Name
@@ -405,7 +415,7 @@ func (g *Generator) populateAliases(typeInfos map[string]*model.TypeInfo) {
 			sourceAlias = sourceInfo.Name + "Source"
 			targetAlias = targetInfo.Name + "Target"
 		}
-		
+
 		// If explicit local alias is defined in config, use it (overrides auto-generated)
 		if g.config.LocalAliases[sourceInfo.FQN()] != "" {
 			sourceAlias = g.config.LocalAliases[sourceInfo.FQN()]
