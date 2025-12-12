@@ -4,31 +4,24 @@ import (
 	"strings"
 )
 
-// Global constants for the application.
-const (
-	Application = "abgen"
-	Description = "Auto generate conversion code between structs"
-	WebSite     = "https://github.com/origadmin/abgen"
-	UI          = "abgen"
-)
-
 // Config holds the complete, parsed configuration for a generation task.
 type Config struct {
 	GenerationContext   GenerationContext
 	PackageAliases      map[string]string
 	LocalAliases        map[string]string
+	ExistingAliases     map[string]string
 	PackagePairs        []*PackagePair
 	ConversionRules     []*ConversionRule
-	CustomFunctionRules map[string]string // New: Stores sourceFQN->targetFQN to funcName mappings
+	CustomFunctionRules map[string]string
 	NamingRules         NamingRule
 	GlobalBehaviorRules BehaviorRule
 }
 
 // GenerationContext holds information about the package where code is being generated.
 type GenerationContext struct {
-	PackageName   string // e.g., "users"
-	PackagePath   string // e.g., "github.com/my/project/users"
-	DirectivePath string // The path to the directory containing the directive file
+	PackageName   string
+	PackagePath   string
+	DirectivePath string
 }
 
 // PackagePair represents a pairing between a source and a target package.
@@ -39,11 +32,11 @@ type PackagePair struct {
 
 // ConversionRule defines a conversion between a source and a target type.
 type ConversionRule struct {
-	SourceType string // Fully-qualified type name
-	TargetType string // Fully-qualified type name
+	SourceType string
+	TargetType string
 	Direction  ConversionDirection
 	FieldRules FieldRuleSet
-	CustomFunc string // The name of the custom conversion function to use.
+	CustomFunc string
 }
 
 // NamingRule defines naming conventions for generated types and functions.
@@ -61,8 +54,8 @@ type BehaviorRule struct {
 
 // FieldRuleSet defines field-specific rules for a given type conversion.
 type FieldRuleSet struct {
-	Ignore map[string]struct{} // Fields to ignore
-	Remap  map[string]string   // Fields to remap (source -> target)
+	Ignore map[string]struct{}
+	Remap  map[string]string
 }
 
 // ConversionDirection represents the direction of conversion.
@@ -79,18 +72,12 @@ func NewConfig() *Config {
 		GenerationContext:   GenerationContext{},
 		PackageAliases:      make(map[string]string),
 		LocalAliases:        make(map[string]string),
+		ExistingAliases:     make(map[string]string),
 		PackagePairs:        []*PackagePair{},
 		ConversionRules:     []*ConversionRule{},
-		CustomFunctionRules: make(map[string]string), // Initialize the new map
-		NamingRules: NamingRule{
-			SourcePrefix: "",
-			SourceSuffix: "",
-			TargetPrefix: "",
-			TargetSuffix: "",
-		},
-		GlobalBehaviorRules: BehaviorRule{
-			GenerateAlias: false,
-		},
+		CustomFunctionRules: make(map[string]string),
+		NamingRules:         NamingRule{},
+		GlobalBehaviorRules: BehaviorRule{},
 	}
 }
 
@@ -106,7 +93,7 @@ func (c *Config) RequiredPackages() []string {
 	}
 	for _, pair := range c.PackagePairs {
 		pathMap[pair.SourcePath] = struct{}{}
-		pathMap[pair.TargetPath] = struct{}{}
+		pathMap[pair.TargetPath] = struct{}{} // FIX: Corrected typo
 	}
 	for _, rule := range c.ConversionRules {
 		if pkgPath := getPkgPath(rule.SourceType); pkgPath != "" {
@@ -116,7 +103,6 @@ func (c *Config) RequiredPackages() []string {
 			pathMap[pkgPath] = struct{}{}
 		}
 	}
-	// Also include packages from custom function rules
 	for key := range c.CustomFunctionRules {
 		parts := strings.Split(key, "->")
 		if len(parts) == 2 {

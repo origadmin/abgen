@@ -2,10 +2,20 @@ package config
 
 import (
 	"fmt"
+	"go/ast"
+	"go/token"
+	"go/types"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
+
+// defaultPackageAliases provides a set of commonly used packages.
+var defaultPackageAliases = map[string]string{
+	"time": "time",
+	"uuid": "github.com/google/uuid",
+	"json": "encoding/json",
+}
 
 // Parser is responsible for parsing abgen directives and building a Config object.
 type Parser struct {
@@ -14,21 +24,21 @@ type Parser struct {
 
 // NewParser creates a new instance of a Parser.
 func NewParser() *Parser {
+	config := NewConfig()
+	for alias, path := range defaultPackageAliases {
+		config.PackageAliases[alias] = path
+	}
 	return &Parser{
-		config: NewConfig(),
+		config: config,
 	}
 }
 
-// Parse is the main entry point for configuration parsing. It takes a source
-// directory, loads the initial package, discovers directives, and builds a
-// complete Config object.
+// Parse is the main entry point for configuration parsing.
 func (p *Parser) Parse(sourceDir string) (*Config, error) {
-	// Set the directive path in the generation context
 	p.config.GenerationContext.DirectivePath = sourceDir
 
-	// 1. Load the initial package to find directives
 	initialLoaderCfg := &packages.Config{
-		Mode:  packages.NeedName | packages.NeedSyntax | packages.NeedFiles | packages.NeedModule,
+		Mode:  packages.NeedName | packages.NeedSyntax | packages.NeedFiles | packages.NeedModule | packages.NeedTypes | packages.NeedTypesInfo, // FIX: Added packages.NeedTypesInfo
 		Dir:   sourceDir,
 		Tests: false,
 	}
@@ -44,11 +54,10 @@ func (p *Parser) Parse(sourceDir string) (*Config, error) {
 	}
 	initialPkg := initialPkgs[0]
 
-	// 2. Discover and parse directives from the loaded package
 	return p.parseDirectives(initialPkg)
 }
 
-// parseDirectives scans and parses all abgen directives from a given package.
+// parseDirectives scans and parses all abgen directives and existing type aliases.
 func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 	if pkg == nil {
 		return nil, fmt.Errorf("package context cannot be nil")
@@ -58,6 +67,10 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 
 	var directives []string
 	for _, file := range pkg.Syntax {
+		// Parse existing type aliases
+		p.parseExistingAliases(file, pkg.TypesInfo)
+
+		// Collect directives
 		for _, commentGroup := range file.Comments {
 			for _, comment := range commentGroup.List {
 				if strings.HasPrefix(comment.Text, "//go:abgen:") {
@@ -77,19 +90,40 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 		}
 	}
 
-	// Final step: merge custom function rules into conversion rules
 	p.mergeCustomFuncRules()
 
 	return p.config, nil
 }
 
-// parse processes a single directive string and updates the configuration.
-func (p *Parser) parseSingleDirective(directive string) error {
-	if !strings.HasPrefix(directive, "//go:abgen:") {
-		return nil // Not a valid directive
+// parseExistingAliases scans a file for `type X = Y` declarations.
+func (p *Parser) parseExistingAliases(file *ast.File, info *types.Info) {
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok || typeSpec.Assign == 0 { // Not a type alias
+				continue
+			}
+			
+			aliasName := typeSpec.Name.Name
+			
+			// Get the fully qualified name of the original type
+			obj := info.TypeOf(typeSpec.Type)
+			if named, ok := obj.(*types.Named); ok && named.Obj() != nil && named.Obj().Pkg() != nil {
+				fqn := named.Obj().Pkg().Path() + "." + named.Obj().Name()
+				p.config.ExistingAliases[aliasName] = fqn
+			}
+		}
 	}
-	directive = strings.TrimPrefix(directive, "//go:abgen:")
+}
 
+
+// parseSingleDirective processes a single directive string.
+func (p *Parser) parseSingleDirective(directive string) error {
+	directive = strings.TrimPrefix(directive, "//go:abgen:")
 	parts := strings.SplitN(directive, "=", 2)
 	key := parts[0]
 	var value string
@@ -111,22 +145,19 @@ func (p *Parser) parseSingleDirective(directive string) error {
 	case "convert:target:prefix":
 		p.config.NamingRules.TargetPrefix = value
 	case "convert:alias:generate":
-		p.config.GlobalBehaviorRules.GenerateAlias = (value == "true")
+		p.config.GlobalBehaviorRules.GenerateAlias = value == "true"
 	case "convert":
 		p.parseConvertRule(value)
 	case "convert:rule":
 		p.parseCustomFuncRule(value)
-	default:
 	}
-
 	return nil
 }
 
-// parsePackagePath parses "package:path" directives and adds to PackageAliases.
 func (p *Parser) parsePackagePath(value string) {
 	parts := strings.Split(value, ",")
 	path := parts[0]
-	alias := ""
+	var alias string
 	if len(parts) > 1 && strings.HasPrefix(parts[1], "alias=") {
 		alias = strings.TrimPrefix(parts[1], "alias=")
 	} else {
@@ -135,48 +166,41 @@ func (p *Parser) parsePackagePath(value string) {
 	p.config.PackageAliases[alias] = path
 }
 
-// resolvePackagePath tries to resolve an identifier as an alias, falling back to treating it as a full path.
 func (p *Parser) resolvePackagePath(identifier string) string {
 	if path, ok := p.config.PackageAliases[identifier]; ok {
-		return path // It's an alias, return the corresponding path.
+		return path
 	}
-	return identifier // Not an alias, assume it's a full package path.
+	return identifier
 }
 
-// parsePackagePairs parses "pair:packages" directives.
 func (p *Parser) parsePackagePairs(value string) {
 	pair := strings.Split(value, ",")
 	if len(pair) != 2 {
 		return
 	}
 	sourceIdentifier, targetIdentifier := strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1])
-
 	sourcePath := p.resolvePackagePath(sourceIdentifier)
 	targetPath := p.resolvePackagePath(targetIdentifier)
-
 	if sourcePath != "" && targetPath != "" {
 		p.config.PackagePairs = append(p.config.PackagePairs, &PackagePair{SourcePath: sourcePath, TargetPath: targetPath})
 	}
 }
 
-// parseConvertRule parses "convert" directives and creates a new ConversionRule.
 func (p *Parser) parseConvertRule(value string) {
 	parts := strings.Split(value, ",")
 	rule := &ConversionRule{
-		Direction: DirectionBoth, // Default direction
+		Direction: DirectionBoth,
 		FieldRules: FieldRuleSet{
 			Ignore: make(map[string]struct{}),
 			Remap:  make(map[string]string),
 		},
 	}
-
 	for _, part := range parts {
 		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
 		if len(kv) != 2 {
 			continue
 		}
 		key, val := kv[0], kv[1]
-
 		switch key {
 		case "source":
 			rule.SourceType = p.resolveTypeFQN(val)
@@ -199,17 +223,14 @@ func (p *Parser) parseConvertRule(value string) {
 			}
 		}
 	}
-
 	if rule.SourceType != "" && rule.TargetType != "" {
 		p.config.ConversionRules = append(p.config.ConversionRules, rule)
 	}
 }
 
-// parseCustomFuncRule parses "convert:rule" and stores it in a temporary map.
 func (p *Parser) parseCustomFuncRule(value string) {
 	parts := strings.Split(value, ",")
 	var source, target, funcName string
-
 	for _, part := range parts {
 		kv := strings.SplitN(strings.TrimSpace(part), ":", 2)
 		if len(kv) != 2 {
@@ -225,7 +246,6 @@ func (p *Parser) parseCustomFuncRule(value string) {
 			funcName = val
 		}
 	}
-
 	if source != "" && target != "" && funcName != "" {
 		sourceFQN := p.resolveTypeFQN(source)
 		targetFQN := p.resolveTypeFQN(target)
@@ -234,7 +254,6 @@ func (p *Parser) parseCustomFuncRule(value string) {
 	}
 }
 
-// mergeCustomFuncRules applies the parsed custom function rules to the main conversion rules.
 func (p *Parser) mergeCustomFuncRules() {
 	for _, rule := range p.config.ConversionRules {
 		key := rule.SourceType + "->" + rule.TargetType
@@ -244,17 +263,13 @@ func (p *Parser) mergeCustomFuncRules() {
 	}
 }
 
-// resolveTypeFQN resolves a type string (e.g., "alias.TypeName" or "path/to/pkg.TypeName") to a fully-qualified name.
 func (p *Parser) resolveTypeFQN(typeStr string) string {
 	lastDot := strings.LastIndex(typeStr, ".")
 	if lastDot == -1 {
 		return typeStr
 	}
-
 	packageIdentifier := typeStr[:lastDot]
 	typeName := typeStr[lastDot+1:]
-
 	packagePath := p.resolvePackagePath(packageIdentifier)
-
 	return packagePath + "." + typeName
 }

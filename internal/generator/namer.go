@@ -1,19 +1,18 @@
 package generator
 
 import (
-	"github.com/iancoleman/strcase"
-
+	"fmt"
 	"github.com/origadmin/abgen/internal/config"
 	"github.com/origadmin/abgen/internal/model"
 )
 
-// Namer handles naming conventions for generated types and functions.
+// Namer is responsible for generating names for functions and type aliases.
 type Namer struct {
 	config   *config.Config
-	aliasMap map[string]string // Reference to the aliasMap in Generator
+	aliasMap map[string]string
 }
 
-// NewNamer creates a new Namer with the given configuration.
+// NewNamer creates a new Namer.
 func NewNamer(config *config.Config, aliasMap map[string]string) *Namer {
 	return &Namer{
 		config:   config,
@@ -21,32 +20,49 @@ func NewNamer(config *config.Config, aliasMap map[string]string) *Namer {
 	}
 }
 
-// GetTypeName returns the base type name or its generated alias for local usage.
-func (n *Namer) GetTypeName(info *model.TypeInfo) string {
-	if info == nil {
-		return ""
-	}
-	// Prioritize alias if it exists
-	if alias, ok := n.aliasMap[info.FQN()]; ok {
-		return alias
-	}
-	// Fallback to original name if no alias
-	return info.Name
+// GetFunctionName generates a name for a conversion function.
+func (n *Namer) GetFunctionName(source, target *model.TypeInfo) string {
+	sourceName := n.getAliasedOrBaseName(source)
+	targetName := n.getAliasedOrBaseName(target)
+	return fmt.Sprintf("Convert%sTo%s", sourceName, targetName)
 }
 
-// GetFunctionName returns the function name for converting between two types.
-func (n *Namer) GetFunctionName(sourceInfo, targetInfo *model.TypeInfo) string {
-	// Use the aliases for the function name parts
-	sourceName := n.GetTypeName(sourceInfo)
-	targetName := n.GetTypeName(targetInfo)
+// GetAlias generates a type alias based on the naming rules.
+func (n *Namer) GetAlias(info *model.TypeInfo, isSource, disambiguate bool) string {
+	baseName := info.Name
+	
+	// Check if a user-defined naming rule applies
+	hasSpecificRule := (isSource && (n.config.NamingRules.SourcePrefix != "" || n.config.NamingRules.SourceSuffix != "")) ||
+		(!isSource && (n.config.NamingRules.TargetPrefix != "" || n.config.NamingRules.TargetSuffix != ""))
 
-	// Ensure primitives are camel cased if not already (e.g. "int" -> "Int")
-	if sourceInfo.Kind == model.Primitive {
-		sourceName = strcase.ToCamel(sourceName)
-	}
-	if targetInfo.Kind == model.Primitive {
-		targetName = strcase.ToCamel(targetName)
+	var prefix, suffix string
+	if isSource {
+		prefix = n.config.NamingRules.SourcePrefix
+		suffix = n.config.NamingRules.SourceSuffix
+		// Only add "Source" for disambiguation if no specific rule for the pair exists.
+		if !hasSpecificRule && disambiguate {
+			suffix = "Source"
+		}
+	} else { // is Target
+		prefix = n.config.NamingRules.TargetPrefix
+		suffix = n.config.NamingRules.TargetSuffix
+		// Only add "Target" for disambiguation if no specific rule for the pair exists.
+		if !hasSpecificRule && disambiguate {
+			suffix = "Target"
+		}
 	}
 
-	return "Convert" + sourceName + "To" + targetName
+	return prefix + baseName + suffix
+}
+
+// getAliasedOrBaseName returns the alias if it exists, otherwise returns the base name.
+func (n *Namer) getAliasedOrBaseName(info *model.TypeInfo) string {
+	fqn := info.FQN()
+	if fqn == "" {
+		fqn = info.Name // Handle primitives
+	}
+	if alias, ok := n.aliasMap[fqn]; ok {
+		return alias
+	}
+	return info.Name
 }

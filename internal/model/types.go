@@ -45,6 +45,19 @@ type TypeInfo struct {
 	packageName   string
 }
 
+// UniqueKey returns a string that uniquely identifies the type.
+// For named types, it's the FQN. For primitives, it's the Name.
+func (ti *TypeInfo) UniqueKey() string {
+	if ti == nil {
+		return ""
+	}
+	if ti.IsNamedType() {
+		return ti.FQN()
+	}
+	// For primitives and other unnamed types, the name is sufficient.
+	return ti.Name
+}
+
 // String returns a string representation of the type.
 func (ti *TypeInfo) String() string {
 	if ti == nil {
