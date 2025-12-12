@@ -31,7 +31,7 @@ func NewGenerator(config *config.Config) *Generator {
 			processed: make(map[string]bool),
 			aliasMap:  make(map[string]string),
 		}
-		g.namer = NewNamer(config)
+		g.namer = NewNamer(config, g.aliasMap) // Pass aliasMap to Namer
 		g.converter = NewTypeConverter()
 		return g
 }
@@ -218,6 +218,15 @@ func (g *Generator) discoverImplicitConversionRules(typeInfos map[string]*model.
 		sourceTypes := typesByPackage[pair.SourcePath]
 		targetTypes := typesByPackage[pair.TargetPath]
 
+		// Sort sourceTypes for deterministic iteration
+		sort.Slice(sourceTypes, func(i, j int) bool {
+			return sourceTypes[i].FQN() < sourceTypes[j].FQN()
+		})
+		// Sort targetTypes for deterministic iteration
+		sort.Slice(targetTypes, func(i, j int) bool {
+			return targetTypes[i].FQN() < targetTypes[j].FQN()
+		})
+
 		slog.Debug("Source types found for package", "path", pair.SourcePath, "count", len(sourceTypes))
 		slog.Debug("Target types found for package", "path", pair.TargetPath, "count", len(targetTypes))
 
@@ -241,6 +250,13 @@ func (g *Generator) discoverImplicitConversionRules(typeInfos map[string]*model.
 			}
 		}
 	}
+	// Sort the entire ConversionRules slice after all implicit rules have been discovered
+	sort.Slice(g.config.ConversionRules, func(i, j int) bool {
+		if g.config.ConversionRules[i].SourceType != g.config.ConversionRules[j].SourceType {
+			return g.config.ConversionRules[i].SourceType < g.config.ConversionRules[j].SourceType
+		}
+		return g.config.ConversionRules[i].TargetType < g.config.ConversionRules[j].TargetType
+	})
 	slog.Debug("Finished discovering implicit conversion rules", "total_rules", len(g.config.ConversionRules))
 }
 
@@ -261,17 +277,19 @@ func (g *Generator) getTypeString(info *model.TypeInfo) string {
 		return "interface{}"
 	}
 
-	// Check if a local alias exists for the FQN
+	// Check if a local alias exists for the FQN, it takes precedence
 	if alias, ok := g.aliasMap[info.FQN()]; ok {
 		return alias
 	}
 
-	if info.IsNamedType() {
+	// If it's a named type from an external package, use the package alias
+	if info.IsNamedType() && info.ImportPath != "" && !g.isCurrentPackage(info.ImportPath) {
 		pkgAlias := g.importMgr.GetAlias(info.ImportPath)
 		return pkgAlias + "." + info.Name
 	}
 
-	return info.GoTypeString()
+	// Otherwise, return its simple name (e.g., local type, primitive)
+	return info.Name
 }
 
 func (g *Generator) generateConversionFunction(sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule) {
@@ -357,47 +375,61 @@ func (g *Generator) generateSliceToSliceConversion(sourceInfo, targetInfo *model
 
 // populateAliases populates the aliasMap with all referenced types from conversion rules.
 func (g *Generator) populateAliases(typeInfos map[string]*model.TypeInfo) {
-	slog.Debug("populateAliases", "conversionRules", len(g.config.ConversionRules))
+	slog.Debug("Populating aliases", "numRules", len(g.config.ConversionRules))
 
-	// Create aliases for all packages defined in config
-	for _, importPath := range g.config.PackageAliases {
-		g.importMgr.Add(importPath)
-	}
-
-	// Process all conversion rules to create type aliases
+	// First pass: Add all required package imports based on conversion rules
 	for _, rule := range g.config.ConversionRules {
-		slog.Debug("Processing rule", "source", rule.SourceType, "target", rule.TargetType)
-
-		// Add source and target types to aliases map
 		sourceInfo, sourceExists := typeInfos[rule.SourceType]
 		targetInfo, targetExists := typeInfos[rule.TargetType]
 
-		if sourceExists && sourceInfo.IsNamedType() {
-			sourceAlias := g.namer.GetTypeName(sourceInfo)
-			g.aliasMap[rule.SourceType] = sourceAlias
-			slog.Debug("Added source alias", "fqn", rule.SourceType, "alias", sourceAlias)
-		} else {
-			slog.Debug("Source type not found", "fqn", rule.SourceType, "exists", sourceExists, "named", sourceExists && sourceInfo.IsNamedType())
+		if sourceExists && sourceInfo.ImportPath != "" && !g.isCurrentPackage(sourceInfo.ImportPath) {
+			g.importMgr.Add(sourceInfo.ImportPath)
 		}
-
-		if targetExists && targetInfo.IsNamedType() {
-			targetAlias := g.namer.GetTypeName(targetInfo)
-			g.aliasMap[rule.TargetType] = targetAlias
-			slog.Debug("Added target alias", "fqn", rule.TargetType, "alias", targetAlias)
-		} else {
-			slog.Debug("Target type not found", "fqn", rule.TargetType, "exists", targetExists, "named", targetExists && targetInfo.IsNamedType())
+		if targetExists && targetInfo.ImportPath != "" && !g.isCurrentPackage(targetInfo.ImportPath) {
+			g.importMgr.Add(targetInfo.ImportPath)
 		}
 	}
 
-	slog.Debug("Final aliasMap", "size", len(g.aliasMap))
+	// Second pass: Determine and store aliases for types involved in conversion rules
+	// This pass handles disambiguation for types with same names from different packages
+	for _, rule := range g.config.ConversionRules {
+		sourceInfo := typeInfos[rule.SourceType]
+		targetInfo := typeInfos[rule.TargetType]
+
+		// Determine aliases for source and target types
+		sourceAlias := sourceInfo.Name
+		targetAlias := targetInfo.Name
+
+		// Apply disambiguation if types have the same name but different packages
+		if sourceInfo.Name == targetInfo.Name && sourceInfo.ImportPath != targetInfo.ImportPath {
+			sourceAlias = sourceInfo.Name + "Source"
+			targetAlias = targetInfo.Name + "Target"
+		}
+		
+		// If explicit local alias is defined in config, use it (overrides auto-generated)
+		if g.config.LocalAliases[sourceInfo.FQN()] != "" {
+			sourceAlias = g.config.LocalAliases[sourceInfo.FQN()]
+		}
+		if g.config.LocalAliases[targetInfo.FQN()] != "" {
+			targetAlias = g.config.LocalAliases[targetInfo.FQN()]
+		}
+
+		g.aliasMap[sourceInfo.FQN()] = sourceAlias
+		g.aliasMap[targetInfo.FQN()] = targetAlias
+	}
+
+	slog.Debug("Final aliasMap state", "size", len(g.aliasMap))
 	for fqn, alias := range g.aliasMap {
-		slog.Debug("Alias", "fqn", fqn, "alias", alias)
+		slog.Debug("Alias entry", "fqn", fqn, "alias", alias)
 	}
 
-	// Add all referenced types to import manager
+	// Add all other referenced types to import manager
 	for _, typeInfo := range typeInfos {
 		if typeInfo.IsNamedType() && typeInfo.ImportPath != "" && !g.isCurrentPackage(typeInfo.ImportPath) {
-			g.importMgr.Add(typeInfo.ImportPath)
+			// Only add to import manager if not already aliased and handled
+			if _, exists := g.aliasMap[typeInfo.FQN()]; !exists {
+				g.importMgr.Add(typeInfo.ImportPath)
+			}
 		}
 	}
 }

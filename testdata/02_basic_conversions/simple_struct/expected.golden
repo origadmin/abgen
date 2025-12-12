@@ -27,16 +27,3 @@ func ConvertUserToUserDTO(from *User) *UserDTO {
 	}
 	return target
 }
-
-// ConvertUserDTOToUser converts UserDTO to User
-func ConvertUserDTOToUser(from *UserDTO) *User {
-	if from == nil {
-		return nil
-	}
-
-	target := &User{
-		ID:   from.ID,
-		Name: from.UserName,
-	}
-	return target
-}

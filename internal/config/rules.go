@@ -19,6 +19,9 @@ type Config struct {
 	GenerationContext GenerationContext
 	// PackageAliases maps a package alias to its full import path. It enforces a one-to-one relationship.
 	PackageAliases map[string]string
+	// LocalAliases explicitly maps a Fully Qualified Name (FQN) to a custom local alias.
+	// This takes precedence over auto-generated aliases.
+	LocalAliases map[string]string
 	// PackagePairs defines the source-to-target package mappings.
 	PackagePairs []*PackagePair
 	// ConversionRules defines the type-level conversion rules.
@@ -82,6 +85,7 @@ func NewConfig() *Config {
 	return &Config{
 		GenerationContext: GenerationContext{},
 		PackageAliases:    make(map[string]string),
+		LocalAliases:      make(map[string]string), // Initialize the new field
 		PackagePairs:      []*PackagePair{},
 		ConversionRules:   []*ConversionRule{},
 		NamingRules: NamingRule{
