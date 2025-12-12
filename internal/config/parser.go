@@ -163,7 +163,7 @@ func (p *Parser) parseConvertRule(value string) {
 	var sourceTypeStr, targetTypeStr string
 
 	rule := &ConversionRule{
-		Direction: DirectionOneway, // Default direction
+		Direction: DirectionBoth, // Default direction
 		FieldRules: FieldRuleSet{
 			Ignore: make(map[string]struct{}),
 			Remap:  make(map[string]string),

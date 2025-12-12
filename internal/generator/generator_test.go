@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +13,15 @@ import (
 
 	"github.com/origadmin/abgen/internal/config"
 )
+
+func init() {
+	// Configure slog to debug mode for detailed testing information
+	slog.SetDefault(slog.New(
+		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		}),
+	))
+}
 
 func TestGenerator_CodeGeneration(t *testing.T) {
 
@@ -55,6 +65,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget`)
 				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource`)
 			},
+
+			// Write success file for inspection (only for 02_basic_conversions)
+
 		},
 		{
 			name:          "standard_trilateral",
@@ -76,6 +89,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget`)
 				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource`)
 			},
+
+			// Write success file for inspection (only for 02_basic_conversions)
+
 		},
 		// Note: multi_source and multi_target test cases have been removed for now as their definitions need refinement.
 
@@ -107,6 +123,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				assertContainsPattern(t, generatedStr, `		ID:       from.ID,`)
 				assertContainsPattern(t, generatedStr, `		UserName: from.Name,`)
 			},
+
+			// Write success file for inspection (only for 02_basic_conversions)
+
 		},
 		{
 			name:          "package_level_conversion",
@@ -144,6 +163,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				assertContainsPattern(t, generatedStr, `to := &UserSource{`) // For ConvertUserTargetToUserSource				assertContainsPattern(t, generatedStr, `ID:   from.ID,`)
 				assertContainsPattern(t, generatedStr, `Name: from.Name,`)
 			},
+
+			// Write success file for inspection (only for 02_basic_conversions)
+
 		},
 		{
 			name:          "single_way_conversion",
@@ -175,6 +197,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				// Assert reverse conversion function does NOT exist for 'oneway' direction
 				assertNotContainsPattern(t, generatedStr, `func ConvertUserDTOToUser`)
 			},
+
+			// Write success file for inspection (only for 02_basic_conversions)
+
 		},
 		{
 			name:          "id_to_id_field_conversion",
@@ -214,6 +239,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				assertContainsPattern(t, generatedStr, `Id:   from.ID,`) // Correct: target.Id = source.ID
 				assertContainsPattern(t, generatedStr, `Name: from.Name,`)
 			},
+
+			// Write success file for inspection (only for 02_basic_conversions)
+
 		},
 
 		// === 04_type_aliases: Type Alias Handling ===
@@ -250,6 +278,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				t.Log("TODO: Add specific assertions for enum_string_to_int")
 			},
+
+			// Write success file for inspection (only for 02_basic_conversions)
+
 		},
 		{
 			name:          "pointer_conversions",
@@ -264,6 +295,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				t.Log("TODO: Add specific assertions for pointer_conversions")
 			},
+
+			// Write success file for inspection (only for 02_basic_conversions)
+
 		},
 		{
 			name:          "map_conversions",
@@ -277,6 +311,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				t.Log("TODO: Add specific assertions for map_conversions")
 			},
+
+			// Write success file for inspection (only for 02_basic_conversions)
+
 		},
 		{
 			name:          "numeric_conversions",
@@ -290,6 +327,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				t.Log("TODO: Add specific assertions for numeric_conversions")
 			},
+
+			// Write success file for inspection (only for 02_basic_conversions)
+
 		},
 
 		// === 07_custom_rules: Custom Rules ===
@@ -305,6 +345,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				t.Log("TODO: Add specific assertions for custom_function_rules")
 			},
+
+			// Write success file for inspection (only for 02_basic_conversions)
+
 		},
 
 		// === 09_array_slice_fix: Array/Slice Conversion Fixes ===
@@ -379,9 +422,12 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				t.Run(tc.name+"_Assertions", func(st *testing.T) {
 					tc.assertFunc(st, generatedCode)
 					if st.Failed() {
-						actualOutputFile := filepath.Join(tc.directivePath, tc.name+".actual.gen.go")
+						actualOutputFile := filepath.Join(tc.directivePath, "failed.actual.gen.go")
 						_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
 						st.Logf("Assertion failed for '%s'. Generated output saved to %s for inspection.", tc.name, actualOutputFile)
+					} else {
+						actualOutputFile := filepath.Join(tc.directivePath, "success.actual.gen.go")
+						_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
 					}
 				})
 			}
@@ -404,7 +450,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				}
 
 				if string(generatedCode) != string(expectedCode) {
-					actualOutputFile := filepath.Join(tc.directivePath, tc.name+".actual.gen.go") // Save to a unique file
+					actualOutputFile := filepath.Join(tc.directivePath, "failed.actual.gen.go") // Save to a unique file
 					_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
 					t.Errorf("Generated code for '%s' does not match the golden file %s. The generated output was saved to %s for inspection.", tc.name, goldenFile, actualOutputFile)
 				}
@@ -413,6 +459,44 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDefaultDirectionBehavior tests that the default direction is 'both' when not explicitly specified
+func TestDefaultDirectionBehavior(t *testing.T) {
+	slog.Debug("Starting TestDefaultDirectionBehavior")
+
+	// Test case: simple_struct should generate both directions by default
+	testPath := "../../testdata/02_basic_conversions/simple_struct"
+
+	slog.Debug("Testing directory", "path", testPath)
+
+	// Parse configuration from the test directory
+	parser := config.NewParser()
+	config, err := parser.Parse(testPath)
+	if err != nil {
+		slog.Error("Failed to parse configuration", "error", err)
+		t.Fatalf("Failed to parse configuration: %v", err)
+	}
+
+	slog.Debug("Parsed configuration", "rules_count", len(config.ConversionRules))
+
+	// Assert that we have at least one conversion rule
+	if len(config.ConversionRules) == 0 {
+		t.Fatal("Expected at least one conversion rule, got none")
+	}
+
+	// Get the first conversion rule for testing
+	rule := config.ConversionRules[0]
+	slog.Debug("First rule", "source", rule.SourceType, "target", rule.TargetType, "direction", rule.Direction)
+
+	// The key assertion: direction should default to 'both'
+	if rule.Direction != "both" {
+		slog.Error("Direction should default to 'both'", "actual", rule.Direction)
+		t.Errorf("Expected direction to be 'both', got '%s'", rule.Direction)
+	}
+
+	slog.Debug("Direction assertion passed")
+	slog.Debug("TestDefaultDirectionBehavior completed successfully")
 }
 
 // assertContainsPattern checks if the generated code contains a specific regular expression pattern.
