@@ -77,6 +77,9 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 		}
 	}
 
+	// Final step: merge custom function rules into conversion rules
+	p.mergeCustomFuncRules()
+
 	return p.config, nil
 }
 
@@ -119,25 +122,6 @@ func (p *Parser) parseSingleDirective(directive string) error {
 	return nil
 }
 
-func (p *Parser) findOrCreateRule(sourceFQN, targetFQN string) *ConversionRule {
-	for _, rule := range p.config.ConversionRules {
-		if rule.SourceType == sourceFQN && rule.TargetType == targetFQN {
-			return rule
-		}
-	}
-	newRule := &ConversionRule{
-		SourceType: sourceFQN,
-		TargetType: targetFQN,
-		Direction:  DirectionBoth, // Default direction
-		FieldRules: FieldRuleSet{
-			Ignore: make(map[string]struct{}),
-			Remap:  make(map[string]string),
-		},
-	}
-	p.config.ConversionRules = append(p.config.ConversionRules, newRule)
-	return newRule
-}
-
 // parsePackagePath parses "package:path" directives and adds to PackageAliases.
 func (p *Parser) parsePackagePath(value string) {
 	parts := strings.Split(value, ",")
@@ -175,11 +159,16 @@ func (p *Parser) parsePackagePairs(value string) {
 	}
 }
 
-// parseConvertRule parses "convert" directives using a key-value format.
+// parseConvertRule parses "convert" directives and creates a new ConversionRule.
 func (p *Parser) parseConvertRule(value string) {
 	parts := strings.Split(value, ",")
-	var sourceTypeStr, targetTypeStr string
-	var direction, ignore, remap string
+	rule := &ConversionRule{
+		Direction: DirectionBoth, // Default direction
+		FieldRules: FieldRuleSet{
+			Ignore: make(map[string]struct{}),
+			Remap:  make(map[string]string),
+		},
+	}
 
 	for _, part := range parts {
 		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
@@ -190,45 +179,33 @@ func (p *Parser) parseConvertRule(value string) {
 
 		switch key {
 		case "source":
-			sourceTypeStr = val
+			rule.SourceType = p.resolveTypeFQN(val)
 		case "target":
-			targetTypeStr = val
+			rule.TargetType = p.resolveTypeFQN(val)
 		case "direction":
-			direction = val
+			if val == "oneway" {
+				rule.Direction = DirectionOneway
+			}
 		case "ignore":
-			ignore = val
+			for _, field := range strings.Split(val, ";") {
+				rule.FieldRules.Ignore[field] = struct{}{}
+			}
 		case "remap":
-			remap = val
-		}
-	}
-
-	if sourceTypeStr == "" || targetTypeStr == "" {
-		return
-	}
-
-	sourceFQN := p.resolveTypeFQN(sourceTypeStr)
-	targetFQN := p.resolveTypeFQN(targetTypeStr)
-	rule := p.findOrCreateRule(sourceFQN, targetFQN)
-
-	if direction == "oneway" {
-		rule.Direction = DirectionOneway
-	}
-	if ignore != "" {
-		for _, field := range strings.Split(ignore, ";") {
-			rule.FieldRules.Ignore[field] = struct{}{}
-		}
-	}
-	if remap != "" {
-		for _, remapPair := range strings.Split(remap, ";") {
-			fromTo := strings.SplitN(remapPair, ":", 2)
-			if len(fromTo) == 2 {
-				rule.FieldRules.Remap[fromTo[0]] = fromTo[1]
+			for _, remapPair := range strings.Split(val, ";") {
+				fromTo := strings.SplitN(remapPair, ":", 2)
+				if len(fromTo) == 2 {
+					rule.FieldRules.Remap[fromTo[0]] = fromTo[1]
+				}
 			}
 		}
 	}
+
+	if rule.SourceType != "" && rule.TargetType != "" {
+		p.config.ConversionRules = append(p.config.ConversionRules, rule)
+	}
 }
 
-// parseCustomFuncRule parses "convert:rule" directives.
+// parseCustomFuncRule parses "convert:rule" and stores it in a temporary map.
 func (p *Parser) parseCustomFuncRule(value string) {
 	parts := strings.Split(value, ",")
 	var source, target, funcName string
@@ -249,14 +226,22 @@ func (p *Parser) parseCustomFuncRule(value string) {
 		}
 	}
 
-	if source == "" || target == "" || funcName == "" {
-		return
+	if source != "" && target != "" && funcName != "" {
+		sourceFQN := p.resolveTypeFQN(source)
+		targetFQN := p.resolveTypeFQN(target)
+		mapKey := sourceFQN + "->" + targetFQN
+		p.config.CustomFunctionRules[mapKey] = funcName
 	}
+}
 
-	sourceFQN := p.resolveTypeFQN(source)
-	targetFQN := p.resolveTypeFQN(target)
-	rule := p.findOrCreateRule(sourceFQN, targetFQN)
-	rule.CustomFunc = funcName
+// mergeCustomFuncRules applies the parsed custom function rules to the main conversion rules.
+func (p *Parser) mergeCustomFuncRules() {
+	for _, rule := range p.config.ConversionRules {
+		key := rule.SourceType + "->" + rule.TargetType
+		if funcName, ok := p.config.CustomFunctionRules[key]; ok {
+			rule.CustomFunc = funcName
+		}
+	}
 }
 
 // resolveTypeFQN resolves a type string (e.g., "alias.TypeName" or "path/to/pkg.TypeName") to a fully-qualified name.

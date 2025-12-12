@@ -75,7 +75,7 @@ func TestParser_Comprehensive(t *testing.T) {
 					{
 						SourceType: "path/to/ent.Role",
 						TargetType: "Role",
-						Direction:  DirectionBoth, // Default
+						Direction:  DirectionBoth,
 						CustomFunc: "ConvertRoleFunc",
 						FieldRules: FieldRuleSet{
 							Ignore: make(map[string]struct{}),
@@ -121,6 +121,9 @@ func TestParser_Comprehensive(t *testing.T) {
 				}
 			}
 
+			// *** FIX ***: Manually call the merge step, as the test bypasses parseDirectives.
+			p.mergeCustomFuncRules()
+
 			cfg := p.config
 
 			// Normalize expected config for comparison
@@ -132,6 +135,9 @@ func TestParser_Comprehensive(t *testing.T) {
 			}
 			if tc.expectedConfig.PackagePairs == nil {
 				tc.expectedConfig.PackagePairs = []*PackagePair{}
+			}
+			if tc.expectedConfig.CustomFunctionRules == nil {
+				tc.expectedConfig.CustomFunctionRules = make(map[string]string)
 			}
 
 			// Compare PackageAliases

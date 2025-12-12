@@ -13,22 +13,14 @@ const (
 )
 
 // Config holds the complete, parsed configuration for a generation task.
-// It is designed to be stateless and serializable.
 type Config struct {
-	// GenerationContext holds information about the target package for generation.
-	GenerationContext GenerationContext
-	// PackageAliases maps a package alias to its full import path. It enforces a one-to-one relationship.
-	PackageAliases map[string]string
-	// LocalAliases explicitly maps a Fully Qualified Name (FQN) to a custom local alias.
-	// This takes precedence over auto-generated aliases.
-	LocalAliases map[string]string
-	// PackagePairs defines the source-to-target package mappings.
-	PackagePairs []*PackagePair
-	// ConversionRules defines the type-level conversion rules.
-	ConversionRules []*ConversionRule
-	// NamingRules defines how to name generated types and functions.
-	NamingRules NamingRule
-	// GlobalBehaviorRules defines global conversion behaviors.
+	GenerationContext   GenerationContext
+	PackageAliases      map[string]string
+	LocalAliases        map[string]string
+	PackagePairs        []*PackagePair
+	ConversionRules     []*ConversionRule
+	CustomFunctionRules map[string]string // New: Stores sourceFQN->targetFQN to funcName mappings
+	NamingRules         NamingRule
 	GlobalBehaviorRules BehaviorRule
 }
 
@@ -84,11 +76,12 @@ const (
 // NewConfig creates a new, empty configuration object.
 func NewConfig() *Config {
 	return &Config{
-		GenerationContext: GenerationContext{},
-		PackageAliases:    make(map[string]string),
-		LocalAliases:      make(map[string]string), // Initialize the new field
-		PackagePairs:      []*PackagePair{},
-		ConversionRules:   []*ConversionRule{},
+		GenerationContext:   GenerationContext{},
+		PackageAliases:      make(map[string]string),
+		LocalAliases:        make(map[string]string),
+		PackagePairs:        []*PackagePair{},
+		ConversionRules:     []*ConversionRule{},
+		CustomFunctionRules: make(map[string]string), // Initialize the new map
 		NamingRules: NamingRule{
 			SourcePrefix: "",
 			SourceSuffix: "",
@@ -101,34 +94,38 @@ func NewConfig() *Config {
 	}
 }
 
-// RequiredPackages gathers all unique package paths from the configuration
-// that need to be loaded for analysis.
+// RequiredPackages gathers all unique package paths from the configuration.
 func (c *Config) RequiredPackages() []string {
 	pathMap := make(map[string]struct{})
 
-	// Add the package where the code is being generated.
 	if c.GenerationContext.PackagePath != "" {
 		pathMap[c.GenerationContext.PackagePath] = struct{}{}
 	}
-
-	// Add all package aliases.
 	for _, path := range c.PackageAliases {
 		pathMap[path] = struct{}{}
 	}
-
-	// Add all package pairs.
 	for _, pair := range c.PackagePairs {
 		pathMap[pair.SourcePath] = struct{}{}
 		pathMap[pair.TargetPath] = struct{}{}
 	}
-
-	// Add packages from all types mentioned in conversion rules.
 	for _, rule := range c.ConversionRules {
 		if pkgPath := getPkgPath(rule.SourceType); pkgPath != "" {
 			pathMap[pkgPath] = struct{}{}
 		}
 		if pkgPath := getPkgPath(rule.TargetType); pkgPath != "" {
 			pathMap[pkgPath] = struct{}{}
+		}
+	}
+	// Also include packages from custom function rules
+	for key := range c.CustomFunctionRules {
+		parts := strings.Split(key, "->")
+		if len(parts) == 2 {
+			if pkgPath := getPkgPath(parts[0]); pkgPath != "" {
+				pathMap[pkgPath] = struct{}{}
+			}
+			if pkgPath := getPkgPath(parts[1]); pkgPath != "" {
+				pathMap[pkgPath] = struct{}{}
+			}
 		}
 	}
 
@@ -139,8 +136,7 @@ func (c *Config) RequiredPackages() []string {
 	return paths
 }
 
-// RequiredTypeFQNs gathers all unique fully-qualified type names (FQNs)
-// mentioned in the conversion rules.
+// RequiredTypeFQNs gathers all unique fully-qualified type names (FQNs).
 func (c *Config) RequiredTypeFQNs() []string {
 	fqnMap := make(map[string]struct{})
 
@@ -150,6 +146,17 @@ func (c *Config) RequiredTypeFQNs() []string {
 		}
 		if rule.TargetType != "" {
 			fqnMap[rule.TargetType] = struct{}{}
+		}
+	}
+	for key := range c.CustomFunctionRules {
+		parts := strings.Split(key, "->")
+		if len(parts) == 2 {
+			if parts[0] != "" {
+				fqnMap[parts[0]] = struct{}{}
+			}
+			if parts[1] != "" {
+				fqnMap[parts[1]] = struct{}{}
+			}
 		}
 	}
 
