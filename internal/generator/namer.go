@@ -3,6 +3,7 @@ package generator
 import (
 	"fmt"
 	"strings" // Import the strings package
+
 	"github.com/origadmin/abgen/internal/config"
 	"github.com/origadmin/abgen/internal/model"
 )
@@ -55,7 +56,7 @@ func (n *Namer) GetAlias(info *model.TypeInfo, isSource, disambiguate bool) stri
 	}
 
 	baseName := info.Name
-	
+
 	// Check if a user-defined naming rule applies
 	hasSpecificRule := (isSource && (n.config.NamingRules.SourcePrefix != "" || n.config.NamingRules.SourceSuffix != "")) ||
 		(!isSource && (n.config.NamingRules.TargetPrefix != "" || n.config.NamingRules.TargetSuffix != ""))

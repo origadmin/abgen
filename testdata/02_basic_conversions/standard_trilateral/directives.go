@@ -40,3 +40,18 @@ func ConvertGenderTrilateralToGender(from types.Gender) ent.Gender {
 	}
 	return ent.GenderFemale
 }
+
+func ConvertGenderToGenderTrilateral(from ent.Gender) types.Gender {
+	if from == ent.GenderMale {
+		return types.GenderMale
+	}
+	return types.GenderFemale
+}
+
+func ConvertUserTrilateralStatusToUserStatus(from int32) string {
+	return ""
+}
+
+func ConvertUserStatusToUserTrilateralStatus(from string) int32 {
+	return 0
+}

@@ -13,16 +13,17 @@ import (
 )
 
 var simpleConverters = map[string]string{
-	"time.Time->string": `Format`,
-	"uuid.UUID->string": `String`,
+	// Removed all entries from simpleConverters.
 }
 
-var helperBasedConverters = map[string]string{
+var conversionFunctions = map[string]string{ // Renamed from helperBasedConverters
 	"string->time.Time": "ConvertStringToTime",
 	"string->uuid.UUID": "ConvertStringToUUID",
+	"time.Time->string": "ConvertTimeToString",
+	"uuid.UUID->string": "ConvertUUIDToString",
 }
 
-var helperFunctionBodies = map[string]string{
+var conversionFunctionBodies = map[string]string{ // Renamed from helperFunctionBodies
 	"ConvertStringToTime": `
 func ConvertStringToTime(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339, s)
@@ -35,6 +36,16 @@ func ConvertStringToUUID(s string) uuid.UUID {
 	return u
 }
 `,
+	"ConvertTimeToString": `
+func ConvertTimeToString(t time.Time) string {
+	return t.Format(time.RFC3339)
+}
+`,
+	"ConvertUUIDToString": `
+func ConvertUUIDToString(u uuid.UUID) string {
+	return u.String()
+}
+`,
 }
 
 type Generator struct {
@@ -44,9 +55,9 @@ type Generator struct {
 	converter       *TypeConverter
 	namer           *Namer
 	aliasMap        map[string]string
-	requiredHelpers map[string]bool
+	requiredConversionFunctions map[string]bool // Renamed from requiredHelpers
 	typeInfos       map[string]*model.TypeInfo
-	customStubs     map[string]string // New field to store custom stub functions
+	customStubs     map[string]string
 }
 
 func NewGenerator(config *config.Config) *Generator {
@@ -54,8 +65,8 @@ func NewGenerator(config *config.Config) *Generator {
 		config:          config,
 		importMgr:       NewImportManager(),
 		aliasMap:        make(map[string]string),
-		requiredHelpers: make(map[string]bool),
-		customStubs:     make(map[string]string), // Initialize customStubs
+		requiredConversionFunctions: make(map[string]bool), // Initialize
+		customStubs:     make(map[string]string),
 	}
 	g.namer = NewNamer(config, g.aliasMap)
 	g.converter = NewTypeConverter()
@@ -99,7 +110,6 @@ func (g *Generator) CustomStubs() []byte {
 	buf.WriteString(fmt.Sprintf("// source: %s\n\n", g.config.GenerationContext.DirectivePath))
 	buf.WriteString(fmt.Sprintf("package %s\n\n", g.getPackageName()))
 
-	// Write imports for the custom stubs file
 	g.importMgr.WriteImportsToBuffer(&buf)
 
 	buf.WriteString("\n// --- Custom Conversion Stubs ---\n")
@@ -117,7 +127,7 @@ func (g *Generator) CustomStubs() []byte {
 	formatted, err := format.Source(buf.Bytes())
 	if err != nil {
 		slog.Error("Failed to format custom stubs", "error", err)
-		return buf.Bytes() // Return unformatted if error
+		return buf.Bytes()
 	}
 	return formatted
 }
@@ -191,17 +201,17 @@ func (g *Generator) writeConversionFunctions() {
 }
 
 func (g *Generator) writeHelperFunctions() {
-	if len(g.requiredHelpers) == 0 {
+	if len(g.requiredConversionFunctions) == 0 { // Renamed
 		return
 	}
-	helpers := make([]string, 0, len(g.requiredHelpers))
-	for name := range g.requiredHelpers {
+	helpers := make([]string, 0, len(g.requiredConversionFunctions)) // Renamed
+	for name := range g.requiredConversionFunctions {                // Renamed
 		helpers = append(helpers, name)
 	}
 	sort.Strings(helpers)
 	g.buf.WriteString("\n// --- Helper Functions ---\n")
 	for _, name := range helpers {
-		if body, ok := helperFunctionBodies[name]; ok {
+		if body, ok := conversionFunctionBodies[name]; ok { // Renamed
 			g.buf.WriteString(body)
 		}
 	}
@@ -254,7 +264,7 @@ func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *mod
 			}
 		}
 		if targetField != nil {
-			conversionExpr := g.getConversionExpression(sourceField, targetField, "from")
+			conversionExpr := g.getConversionExpression(sourceInfo, sourceField, targetInfo, targetField, "from")
 			g.buf.WriteString(fmt.Sprintf("\t\t%s: %s,\n", targetField.Name, conversionExpr))
 		}
 	}
@@ -312,8 +322,14 @@ func %s(from %s) %s {
 `, funcName, sourceTypeName, targetTypeName, sourceTypeName, targetTypeName, funcName, sourceTypeName, targetTypeName, targetTypeName)
 }
 
-func (g *Generator) getConversionExpression(sourceField, targetField *model.FieldInfo, fromVar string) string {
-	sourceType, targetType := sourceField.Type, targetField.Type
+func (g *Generator) getConversionExpression(
+	parentSource *model.TypeInfo, sourceField *model.FieldInfo,
+	parentTarget *model.TypeInfo, targetField *model.FieldInfo,
+	fromVar string,
+) string {
+	sourceType := sourceField.Type
+	targetType := targetField.Type
+
 	sourceFieldExpr := fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
 
 	sourceKey := sourceType.UniqueKey()
@@ -323,22 +339,21 @@ func (g *Generator) getConversionExpression(sourceField, targetField *model.Fiel
 		return sourceFieldExpr
 	}
 
+	// Check in the unified conversionFunctions map
 	conversionKey := sourceKey + "->" + targetKey
-	if funcName, ok := g.config.CustomFunctionRules[conversionKey]; ok {
+	if funcName, ok := conversionFunctions[conversionKey]; ok { // Renamed
+		g.requiredConversionFunctions[funcName] = true // Renamed
+		// Add necessary imports for the helper function
+		if strings.Contains(funcName, "Time") {
+			g.importMgr.Add("time")
+		}
+		if strings.Contains(funcName, "UUID") {
+			g.importMgr.Add("github.com/google/uuid")
+		}
 		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr)
 	}
 
-	if helperName, ok := helperBasedConverters[conversionKey]; ok {
-		g.requiredHelpers[helperName] = true
-		g.importMgr.Add("time")
-		g.importMgr.Add("github.com/google/uuid")
-		return fmt.Sprintf("%s(%s)", helperName, sourceFieldExpr)
-	}
-	if methodName, ok := simpleConverters[conversionKey]; ok {
-		g.importMgr.Add("time")
-		return fmt.Sprintf("%s.%s()", sourceFieldExpr, methodName)
-	}
-
+	// Handle underlying types for named types that are not primitive
 	if sourceType.Underlying != nil && targetType.Underlying != nil && sourceType.Underlying.UniqueKey() == targetType.Underlying.UniqueKey() {
 		return fmt.Sprintf("%s(%s)", g.getTypeString(targetType), sourceFieldExpr)
 	}
@@ -353,8 +368,7 @@ func (g *Generator) getConversionExpression(sourceField, targetField *model.Fiel
 		if canDirectlyConvertPrimitives(sourceType.Name, targetType.Name) {
 			return fmt.Sprintf("%s(%s)", g.getTypeString(targetType), sourceFieldExpr)
 		} else {
-			// Generate a stub function for incompatible primitive types
-			stubFuncName := g.namer.GetPrimitiveConversionStubName(sourceType, targetType)
+			stubFuncName := g.namer.GetPrimitiveConversionStubName(parentSource, sourceField, parentTarget, targetField)
 			if _, exists := g.customStubs[stubFuncName]; !exists {
 				g.customStubs[stubFuncName] = generatePrimitiveConversionStub(
 					stubFuncName,
