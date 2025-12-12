@@ -183,8 +183,11 @@ func (p *Parser) parseConvertRule(value string) {
 		case "target":
 			targetTypeStr = val
 		case "direction":
-			if val == "both" {
-				rule.Direction = DirectionBoth
+			switch val {
+			case "oneway":
+				rule.Direction = DirectionOneway
+			default:
+				// both is already set as default
 			}
 		case "ignore":
 			for _, field := range strings.Split(val, ";") {
