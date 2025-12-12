@@ -1,10 +1,11 @@
-// Package generator provides import management for generated code.
 package generator
 
 import (
+	"bytes" // Add bytes import
 	"fmt"
 	"path"
 	"sort"
+	"strings" // Add strings import
 )
 
 // ImportManager manages imports for generated code.
@@ -74,10 +75,24 @@ func (im *ImportManager) GetAllImports() []string {
 	return paths
 }
 
-// WriteImportBlock writes the import block to the given buffer.
-func (im *ImportManager) WriteImportBlock(buf interface{}) {
-	// This would need to be adapted to work with bytes.Buffer or similar
-	// For now, this is a placeholder implementation
+// WriteImportsToBuffer writes the import block to the given buffer.
+func (im *ImportManager) WriteImportsToBuffer(buf *bytes.Buffer) {
+	imports := im.GetAllImports()
+	if len(imports) == 0 {
+		return
+	}
+	buf.WriteString("import (\n")
+	for _, importPath := range imports {
+		alias := im.GetAlias(importPath)
+		// Only show alias if it's different from the base name or if it's a generated alias
+		baseAlias := path.Base(importPath)
+		if alias == baseAlias && !strings.HasPrefix(alias, "pkg") { // Check for generated alias
+			buf.WriteString(fmt.Sprintf("\t%q\n", importPath))
+		} else {
+			buf.WriteString(fmt.Sprintf("\t%s %q\n", alias, importPath))
+		}
+	}
+	buf.WriteString(")\n\n")
 }
 
 // String returns a string representation of all imports.

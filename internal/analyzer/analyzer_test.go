@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	testPackagePath     = "github.com/origadmin/abgen/testdata/00_complex_type_parsing/all_complex_types"
-	externalPackagePath = "github.com/origadmin/abgen/testdata/00_complex_type_parsing/external"
+	testPackagePath     = "github.com/origadmin/abgen/testdata/01_type_analysis/complex_type_parsing/all_complex_types"
+	externalPackagePath = "github.com/origadmin/abgen/testdata/01_type_analysis/complex_type_parsing/external"
 )
 
 func TestMain(m *testing.M) {

@@ -3,7 +3,7 @@ package all_complex_types
 import (
 	"time"
 
-	"github.com/origadmin/abgen/testdata/00_complex_type_parsing/external"
+	"github.com/origadmin/abgen/testdata/01_type_analysis/complex_type_parsing/external"
 )
 
 //go:abgen:package:path=github.com/origadmin/abgen/testdata/00_complex_type_parsing/external,alias=ext
@@ -28,7 +28,6 @@ type Product struct {
 }
 
 type UserAlias = external.User
-
 
 // --- Complex Types for Parsing ---
 
@@ -66,7 +65,6 @@ type TriplePtr ***BaseStruct
 
 // MyPtr is a defined type for a pointer to an int.
 type MyPtr *int
-
 
 // --- Alias Types (type T = U) ---
 
