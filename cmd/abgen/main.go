@@ -74,6 +74,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Resolve output file paths and store them in GenerationContext
+	mainOutputFile := *output
+	if mainOutputFile == "" {
+		mainOutputFile = filepath.Join(sourceDir, strings.ToLower(cfg.GenerationContext.PackageName)+".gen.go")
+	} else if !filepath.IsAbs(mainOutputFile) {
+		mainOutputFile = filepath.Join(sourceDir, mainOutputFile)
+	}
+	cfg.GenerationContext.MainOutputFile = mainOutputFile
+
+	customOutputFile := *customOutput
+	if !filepath.IsAbs(customOutputFile) {
+		customOutputFile = filepath.Join(sourceDir, customOutputFile)
+	}
+	cfg.GenerationContext.CustomOutputFile = customOutputFile
+
 	// --- 2. Prepare parameters for the analyzer ---
 	slog.Debug("Extracting package paths and type FQNs for analysis...")
 	packagePaths := cfg.RequiredPackages()
@@ -81,8 +96,8 @@ func main() {
 
 	// --- 3. Analyze Types ---
 	slog.Debug("Analyzing types...")
-	analyzer := analyzer.NewTypeAnalyzer()
-	typeInfos, err := analyzer.Analyze(packagePaths, typeFQNs) // Use the new Analyze method signature
+	analyzer := analyzer.NewTypeAnalyzer(cfg) // Pass config to analyzer
+	typeInfos, err := analyzer.Analyze(packagePaths, typeFQNs)
 	if err != nil {
 		slog.Error("Failed to analyze types", "error", err)
 		os.Exit(1)
@@ -98,13 +113,8 @@ func main() {
 	}
 
 	// --- 4. Write Main Output ---
-	mainOutputFile := *output
-	if mainOutputFile == "" {
-		// Default to <package_name>.gen.go, using the package name from the config.
-		mainOutputFile = filepath.Join(sourceDir, strings.ToLower(cfg.GenerationContext.PackageName)+".gen.go")
-	}
-	slog.Info("Writing main generated code", "file", mainOutputFile)
-	err = os.WriteFile(mainOutputFile, mainGeneratedCode, 0644)
+	slog.Info("Writing main generated code", "file", cfg.GenerationContext.MainOutputFile)
+	err = os.WriteFile(cfg.GenerationContext.MainOutputFile, mainGeneratedCode, 0644)
 	if err != nil {
 		slog.Error("Failed to write main output file", "error", err)
 		os.Exit(1)
@@ -113,12 +123,8 @@ func main() {
 	// --- 5. Write Custom Stubs Output (if any) ---
 	customGeneratedCode := gen.CustomStubs()
 	if len(customGeneratedCode) > 0 {
-		customOutputFile := *customOutput
-		if !filepath.IsAbs(customOutputFile) {
-			customOutputFile = filepath.Join(sourceDir, customOutputFile)
-		}
-		slog.Info("Writing custom conversion stubs", "file", customOutputFile)
-		err = os.WriteFile(customOutputFile, customGeneratedCode, 0644)
+		slog.Info("Writing custom conversion stubs", "file", cfg.GenerationContext.CustomOutputFile)
+		err = os.WriteFile(cfg.GenerationContext.CustomOutputFile, customGeneratedCode, 0644)
 		if err != nil {
 			slog.Error("Failed to write custom stubs file", "error", err)
 			os.Exit(1)

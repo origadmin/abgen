@@ -155,26 +155,25 @@ func (g *Generator) writeImportsToBuffer(buf *bytes.Buffer) {
 }
 
 func (g *Generator) writeAliases() {
-	if len(g.aliasMap) == 0 {
-		return
-	}
-	g.buf.WriteString("// Local type aliases for external types.\n")
-	g.buf.WriteString("type (\n")
-
-	type aliasPair struct {
-		aliasName, fqn string
-	}
-	aliases := make([]aliasPair, 0, len(g.aliasMap))
+	// Collect aliases that actually need to be written
+	aliasesToWrite := make([]aliasPair, 0)
 	for fqn, alias := range g.aliasMap {
 		if _, exists := g.config.ExistingAliases[alias]; exists {
 			continue
 		}
-		aliases = append(aliases, aliasPair{alias, fqn})
+		aliasesToWrite = append(aliasesToWrite, aliasPair{alias, fqn})
 	}
 
-	sort.Slice(aliases, func(i, j int) bool { return aliases[i].aliasName < aliases[j].aliasName })
+	if len(aliasesToWrite) == 0 {
+		return // No aliases to write, so skip the block entirely
+	}
 
-	for _, item := range aliases {
+	sort.Slice(aliasesToWrite, func(i, j int) bool { return aliasesToWrite[i].aliasName < aliasesToWrite[j].aliasName })
+
+	g.buf.WriteString("// Local type aliases for external types.\n")
+	g.buf.WriteString("type (\n")
+
+	for _, item := range aliasesToWrite {
 		typeInfo := g.typeInfos[item.fqn]
 		if typeInfo == nil {
 			continue
@@ -201,17 +200,17 @@ func (g *Generator) writeConversionFunctions() {
 }
 
 func (g *Generator) writeHelperFunctions() {
-	if len(g.requiredConversionFunctions) == 0 { // Renamed
+	if len(g.requiredConversionFunctions) == 0 {
 		return
 	}
-	helpers := make([]string, 0, len(g.requiredConversionFunctions)) // Renamed
-	for name := range g.requiredConversionFunctions {                // Renamed
+	helpers := make([]string, 0, len(g.requiredConversionFunctions))
+	for name := range g.requiredConversionFunctions {
 		helpers = append(helpers, name)
 	}
 	sort.Strings(helpers)
 	g.buf.WriteString("\n// --- Helper Functions ---\n")
 	for _, name := range helpers {
-		if body, ok := conversionFunctionBodies[name]; ok { // Renamed
+		if body, ok := conversionFunctionBodies[name]; ok {
 			g.buf.WriteString(body)
 		}
 	}
@@ -341,8 +340,8 @@ func (g *Generator) getConversionExpression(
 
 	// Check in the unified conversionFunctions map
 	conversionKey := sourceKey + "->" + targetKey
-	if funcName, ok := conversionFunctions[conversionKey]; ok { // Renamed
-		g.requiredConversionFunctions[funcName] = true // Renamed
+	if funcName, ok := conversionFunctions[conversionKey]; ok {
+		g.requiredConversionFunctions[funcName] = true
 		// Add necessary imports for the helper function
 		if strings.Contains(funcName, "Time") {
 			g.importMgr.Add("time")

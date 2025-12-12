@@ -19,9 +19,11 @@ type Config struct {
 
 // GenerationContext holds information about the package where code is being generated.
 type GenerationContext struct {
-	PackageName   string
-	PackagePath   string
-	DirectivePath string
+	PackageName     string
+	PackagePath     string
+	DirectivePath   string
+	MainOutputFile  string // New field for the main generated output file
+	CustomOutputFile string // New field for the custom stubs output file
 }
 
 // PackagePair represents a pairing between a source and a target package.
@@ -93,7 +95,7 @@ func (c *Config) RequiredPackages() []string {
 	}
 	for _, pair := range c.PackagePairs {
 		pathMap[pair.SourcePath] = struct{}{}
-		pathMap[pair.TargetPath] = struct{}{} // FIX: Corrected typo
+		pathMap[pair.TargetPath] = struct{}{}
 	}
 	for _, rule := range c.ConversionRules {
 		if pkgPath := getPkgPath(rule.SourceType); pkgPath != "" {
