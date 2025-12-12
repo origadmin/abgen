@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -44,57 +45,6 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 		category       string                   // Test category for organization
 		assertFunc     func(*testing.T, []byte) // Custom assertion function for detailed checks
 	}{
-		// === 01_basic_modes: Basic Conversion Patterns ===
-		{
-			name:          "simple_bilateral",
-			directivePath: "../../testdata/02_basic_conversions/simple_bilateral",
-			// goldenFileName: "expected.golden", // REMOVED
-			dependencies: baseDependencies,
-			priority:     "P0",
-			category:     "basic_modes",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
-				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
-
-				// Assert type block is used
-				assertContainsPattern(t, generatedStr, "type (")
-				assertContainsPattern(t, generatedStr, ")")
-
-				assertContainsPattern(t, generatedStr, "\tUserTarget = types.User")
-
-				// Assert conversion functions exist
-				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource`)
-			},
-
-			// Write success file for inspection (only for 02_basic_conversions)
-
-		},
-		{
-			name:          "standard_trilateral",
-			directivePath: "../../testdata/02_basic_conversions/standard_trilateral",
-			// goldenFileName: "expected.golden", // REMOVED
-			dependencies: baseDependencies,
-			priority:     "P0",
-			category:     "basic_modes",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
-				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
-
-				// Assert aliases for ent.User, types.User, and the implicit middle type exist
-				assertContainsPattern(t, generatedStr, "type (")
-				assertContainsPattern(t, generatedStr, ")")
-				assertContainsPattern(t, generatedStr, "\tUserSource = ent.User")
-				assertContainsPattern(t, generatedStr, "\tUserTarget = types.User")
-
-				// Standard trilateral should generate conversion between Source and Target, and vice versa
-				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource`)
-			},
-
-			// Write success file for inspection (only for 02_basic_conversions)
-
-		},
-		// Note: multi_source and multi_target test cases have been removed for now as their definitions need refinement.
-
 		// === 02_basic_conversions: Basic Struct Conversion ===
 		{
 			name:          "simple_struct_conversion",
@@ -243,18 +193,77 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			// Write success file for inspection (only for 02_basic_conversions)
 
 		},
+		{
+			name:          "simple_bilateral",
+			directivePath: "../../testdata/02_basic_conversions/simple_bilateral",
+			// goldenFileName: "expected.golden", // REMOVED
+			dependencies: baseDependencies,
+			priority: "P0",
+			category: "basic_conversions",
+			assertFunc: func(t *testing.T, generatedCode []byte) {
+				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
 
-		// === 04_type_aliases: Type Alias Handling ===
+				// Assert type block is used
+				assertContainsPattern(t, generatedStr, "type (")
+				assertContainsPattern(t, generatedStr, ")")
+
+				assertContainsPattern(t, generatedStr, "\tUserTarget = types.User")
+
+				// Assert conversion functions exist
+				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget`)
+				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource`)
+			},
+
+			// Write success file for inspection (only for 02_basic_conversions)
+
+		},
+		{
+			name:          "standard_trilateral",
+			directivePath: "../../testdata/02_basic_conversions/standard_trilateral",
+			// goldenFileName: "expected.golden", // REMOVED
+			dependencies: baseDependencies,
+			priority: "P0",
+			category: "basic_conversions",
+			assertFunc: func(t *testing.T, generatedCode []byte) {
+				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
+
+				// Assert aliases for ent.User, types.User, and the implicit middle type exist
+				assertContainsPattern(t, generatedStr, "type (")
+				assertContainsPattern(t, generatedStr, ")")
+				assertContainsPattern(t, generatedStr, "\tUserSource = ent.User")
+				assertContainsPattern(t, generatedStr, "\tUserTarget = types.User")
+
+				// Standard trilateral should generate conversion between Source and Target, and vice versa
+				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget`)
+				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource`)
+			},
+
+			// Write success file for inspection (only for 02_basic_conversions)
+
+		},
+
+		// === 03_advanced_features: Advanced Feature Tests ===
 		{
 			name:           "auto_generate_aliases",
 			directivePath:  "../../testdata/03_advanced_features/auto_generate_aliases",
 			goldenFileName: "expected.golden",
 			dependencies:   baseDependencies,
-			priority:       "P0",
-			category:       "type_aliases",
+			priority: "P0",
+			category: "advanced_features",
 		},
-
-		// === 06_complex_types: Complex Type Conversions ===
+		{
+			name:          "custom_function_rules",
+			directivePath: "../../testdata/03_advanced_features/custom_function_rules",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/source",
+				"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/target",
+			},
+			priority: "P0",
+			category: "advanced_features",
+			assertFunc: func(t *testing.T, generatedCode []byte) {
+				t.Log("TODO: Add specific assertions for custom_function_rules")
+			},
+		},
 		{
 			name:           "slice_conversions",
 			directivePath:  "../../testdata/03_advanced_features/slice_conversions",
@@ -265,7 +274,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			},
 
 			priority: "P0",
-			category: "complex_types",
+			category: "advanced_features",
 		},
 		{
 			name:          "enum_string_to_int",
@@ -274,7 +283,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				"github.com/origadmin/abgen/testdata/03_advanced_features/enum_string_to_int/source",
 				"github.com/origadmin/abgen/testdata/03_advanced_features/enum_string_to_int/target",
 			}, priority: "P1",
-			category:    "complex_types",
+			category: "advanced_features",
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				t.Log("TODO: Add specific assertions for enum_string_to_int")
 			},
@@ -291,7 +300,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			},
 
 			priority: "P1",
-			category: "complex_types",
+			category: "advanced_features",
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				t.Log("TODO: Add specific assertions for pointer_conversions")
 			},
@@ -307,7 +316,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				"github.com/origadmin/abgen/testdata/03_advanced_features/map_conversions/target",
 			},
 			priority: "P1",
-			category: "complex_types",
+			category: "advanced_features",
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				t.Log("TODO: Add specific assertions for map_conversions")
 			},
@@ -323,7 +332,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				"github.com/origadmin/abgen/testdata/03_advanced_features/numeric_conversions/target",
 			},
 			priority: "P1",
-			category: "complex_types",
+			category: "advanced_features",
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				t.Log("TODO: Add specific assertions for numeric_conversions")
 			},
@@ -332,25 +341,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 
 		},
 
-		// === 07_custom_rules: Custom Rules ===
-		{
-			name:          "custom_function_rules",
-			directivePath: "../../testdata/03_advanced_features/custom_function_rules",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/source",
-				"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/target",
-			},
-			priority: "P0",
-			category: "custom_rules",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
-				t.Log("TODO: Add specific assertions for custom_function_rules")
-			},
-
-			// Write success file for inspection (only for 02_basic_conversions)
-
-		},
-
-		// === 09_array_slice_fix: Array/Slice Conversion Fixes ===
+		// === 06_regression: Regression Tests ===
 		{
 			name:           "array_slice_test",
 			directivePath:  "../../testdata/06_regression/array_slice_fix/array_slice_test",
@@ -360,17 +351,16 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				"github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/target",
 			},
 			priority: "P0",
-			category: "array_slice_fix",
+			category: "regression",
 		},
 
-		// === Legacy and Special Cases ===
 		{
 			name:           "alias-gen", // Specific bug fix test case
 			directivePath:  "../../testdata/06_regression/alias_gen_fix",
 			goldenFileName: "expected.golden",
 			dependencies:   baseDependencies,
 			priority:       "P0",
-			category:       "alias-gen",
+			category:       "regression",
 		},
 	}
 
@@ -384,7 +374,21 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 	})
 
 	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
+		// Extract the numeric prefix from the directory path to ensure the stage number
+		// in the test name matches the physical directory structure.
+		// e.g., extracts "03" from "../../testdata/03_advanced_features/..."
+		var stagePrefix string
+		pathParts := strings.Split(tc.directivePath, "/")
+		for _, part := range pathParts {
+			if len(part) > 2 && part[2] == '_' && part[0] >= '0' && part[0] <= '9' && part[1] >= '0' && part[1] <= '9' {
+				stagePrefix = part[:2]
+				break
+			}
+		}
+
+		// Prepend the stage number to the test name for clear, always-visible grouping.
+		testNameWithStage := fmt.Sprintf("%s_%s/%s", stagePrefix, tc.category, tc.name)
+		t.Run(testNameWithStage, func(t *testing.T) {
 			t.Logf("Running test: %s (Priority: %s, Category: %s)", tc.name, tc.priority, tc.category)
 
 			// Step 1: Parse config from the directive path using the new high-level API.
