@@ -3,3 +3,107 @@
 // source: ../../testdata/03_advanced_features/auto_generate_aliases
 
 package directives
+
+import (
+	ent "github.com/origadmin/abgen/testdata/fixtures/ent"
+	types "github.com/origadmin/abgen/testdata/fixtures/types"
+	time "time"
+)
+
+// Local type aliases for external types.
+type (
+	ResourceSource = ent.Resource
+	ResourceTarget = types.Resource
+	RoleSource     = ent.Role
+	RoleTarget     = types.Role
+	UserSource     = ent.User
+	UserTarget     = types.User
+)
+
+// ConvertResourceSourceToResourceTarget converts ResourceSource to ResourceTarget
+func ConvertResourceSourceToResourceTarget(from *ResourceSource) *ResourceTarget {
+	if from == nil {
+		return nil
+	}
+
+	target := &ResourceTarget{
+		Id:       from.ID,
+		Name:     from.Name,
+		ParentId: from.ParentID,
+	}
+	return target
+}
+
+// ConvertResourceTargetToResourceSource converts ResourceTarget to ResourceSource
+func ConvertResourceTargetToResourceSource(from *ResourceTarget) *ResourceSource {
+	if from == nil {
+		return nil
+	}
+
+	target := &ResourceSource{
+		ID:       from.Id,
+		Name:     from.Name,
+		ParentID: from.ParentId,
+	}
+	return target
+}
+
+// ConvertRoleSourceToRoleTarget converts RoleSource to RoleTarget
+func ConvertRoleSourceToRoleTarget(from *RoleSource) *RoleTarget {
+	if from == nil {
+		return nil
+	}
+
+	target := &RoleTarget{
+		Id:   from.ID,
+		Name: from.Name,
+	}
+	return target
+}
+
+// ConvertRoleTargetToRoleSource converts RoleTarget to RoleSource
+func ConvertRoleTargetToRoleSource(from *RoleTarget) *RoleSource {
+	if from == nil {
+		return nil
+	}
+
+	target := &RoleSource{
+		ID:   from.Id,
+		Name: from.Name,
+	}
+	return target
+}
+
+// ConvertUserSourceToUserTarget converts UserSource to UserTarget
+func ConvertUserSourceToUserTarget(from *UserSource) *UserTarget {
+	if from == nil {
+		return nil
+	}
+
+	target := &UserTarget{
+		Id:        from.ID,
+		Username:  from.Username,
+		Age:       from.Age,
+		Gender:    from.Gender,
+		CreatedAt: from.CreatedAt,
+		Status:    from.Status,
+	}
+	return target
+}
+
+// ConvertUserTargetToUserSource converts UserTarget to UserSource
+func ConvertUserTargetToUserSource(from *UserTarget) *UserSource {
+	if from == nil {
+		return nil
+	}
+
+	target := &UserSource{
+		ID:        from.Id,
+		Username:  from.Username,
+		Age:       from.Age,
+		Gender:    from.Gender,
+		Status:    from.Status,
+		CreatedAt: from.CreatedAt,
+	}
+	return target
+}

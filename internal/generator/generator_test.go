@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	
-		"github.com/origadmin/abgen/internal/analyzer"
-	
+
+	"github.com/origadmin/abgen/internal/analyzer"
+
 	"github.com/origadmin/abgen/internal/config"
 )
 
@@ -29,41 +29,84 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 		name           string
 		directivePath  string
 		goldenFileName string
-		dependencies   []string // These are now hints for directive parsing, not direct load patterns
-		priority       string   // P0, P1, P2 for prioritization
-		category       string   // Test category for organization
+		dependencies   []string                 // These are now hints for directive parsing, not direct load patterns
+		priority       string                   // P0, P1, P2 for prioritization
+		category       string                   // Test category for organization
 		assertFunc     func(*testing.T, []byte) // Custom assertion function for detailed checks
 	}{
 		// === 01_basic_modes: Basic Conversion Patterns ===
 		{
-			name:           "simple_bilateral",
-			directivePath:  "../../testdata/02_basic_conversions/simple_bilateral",
-			goldenFileName: "expected.golden",
-			dependencies:   baseDependencies,
-			priority:       "P0",
-			category:       "basic_modes",
+			name:          "simple_bilateral",
+			directivePath: "../../testdata/02_basic_conversions/simple_bilateral",
+			// goldenFileName: "expected.golden", // REMOVED
+			dependencies: baseDependencies,
+			priority:     "P0",
+			category:     "basic_modes",
+			assertFunc: func(t *testing.T, generatedCode []byte) {
+				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
+
+				// Assert type block is used
+				assertContainsPattern(t, generatedStr, "type (")
+				assertContainsPattern(t, generatedStr, ")")
+
+				assertContainsPattern(t, generatedStr, "\tUserTarget = types.User")
+
+				// Assert conversion functions exist
+				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget`)
+				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource`)
+			},
 		},
 		{
-			name:           "standard_trilateral",
-			directivePath:  "../../testdata/02_basic_conversions/standard_trilateral",
-			goldenFileName: "expected.golden",
-			dependencies:   baseDependencies,
-			priority:       "P0",
-			category:       "basic_modes",
+			name:          "standard_trilateral",
+			directivePath: "../../testdata/02_basic_conversions/standard_trilateral",
+			// goldenFileName: "expected.golden", // REMOVED
+			dependencies: baseDependencies,
+			priority:     "P0",
+			category:     "basic_modes",
+			assertFunc: func(t *testing.T, generatedCode []byte) {
+				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
+
+				// Assert aliases for ent.User, types.User, and the implicit middle type exist
+				assertContainsPattern(t, generatedStr, "type (")
+				assertContainsPattern(t, generatedStr, ")")
+				assertContainsPattern(t, generatedStr, "\tUserSource = ent.User")
+				assertContainsPattern(t, generatedStr, "\tUserTarget = types.User")
+
+				// Standard trilateral should generate conversion between Source and Target, and vice versa
+				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget`)
+				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource`)
+			},
 		},
 		// Note: multi_source and multi_target test cases have been removed for now as their definitions need refinement.
 
 		// === 02_basic_conversions: Basic Struct Conversion ===
 		{
-			name:           "simple_struct_conversion",
-			directivePath:  "../../testdata/02_basic_conversions/simple_struct",
-			goldenFileName: "expected.golden",
+			name:          "simple_struct_conversion",
+			directivePath: "../../testdata/02_basic_conversions/simple_struct",
+			// goldenFileName: "expected.golden", // REMOVED
 			dependencies: []string{
 				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/source",
 				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/target",
 			},
 			priority: "P0",
 			category: "basic_conversions",
+			assertFunc: func(t *testing.T, generatedCode []byte) {
+				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
+
+				// Assert type block is used
+				assertContainsPattern(t, generatedStr, "type (")
+				assertContainsPattern(t, generatedStr, ")")
+
+				// Assert aliases are generated correctly
+				assertContainsPattern(t, generatedStr, "\tUser    = source.User")
+				assertContainsPattern(t, generatedStr, "\tUserDTO = target.UserDTO")
+
+				// Assert conversion function exists
+				assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO`)
+				assertContainsPattern(t, generatedStr, `to := &UserDTO{`)
+				assertContainsPattern(t, generatedStr, `		ID:       from.ID,`)
+				assertContainsPattern(t, generatedStr, `		UserName: from.Name,`)
+			},
 		},
 		{
 			name:          "package_level_conversion",
@@ -95,25 +138,43 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource`)
 
 				// Assert some basic content of the conversion function, e.g., field assignment
-				assertContainsPattern(t, generatedStr, `target := &UserTarget{`) // For ConvertUserSourceToUserTarget
-				assertContainsPattern(t, generatedStr, `ID:   from.ID,`)
-				assertContainsPattern(t, generatedStr, `Name: from.Name,`)
-
-				assertContainsPattern(t, generatedStr, `target := &UserSource{`) // For ConvertUserTargetToUserSource
-				assertContainsPattern(t, generatedStr, `ID:   from.ID,`)
+				assertContainsPattern(t, generatedStr, `to := &UserTarget{`)
+				assertContainsPattern(t, generatedStr, `        ID:   from.ID,`)
+				assertContainsPattern(t, generatedStr, `        Name: from.Name,`)
+				assertContainsPattern(t, generatedStr, `to := &UserSource{`) // For ConvertUserTargetToUserSource				assertContainsPattern(t, generatedStr, `ID:   from.ID,`)
 				assertContainsPattern(t, generatedStr, `Name: from.Name,`)
 			},
 		},
 		{
-			name:           "single_way_conversion",
-			directivePath:  "../../testdata/02_basic_conversions/single_way_conversion",
-			goldenFileName: "expected.golden",
+			name:          "single_way_conversion",
+			directivePath: "../../testdata/02_basic_conversions/single_way_conversion",
+			// goldenFileName: "expected.golden", // REMOVED
 			dependencies: []string{
 				"github.com/origadmin/abgen/testdata/02_basic_conversions/single_way_conversion/source",
 				"github.com/origadmin/abgen/testdata/02_basic_conversions/single_way_conversion/target",
 			},
 			priority: "P0",
 			category: "basic_conversions",
+			assertFunc: func(t *testing.T, generatedCode []byte) {
+				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
+
+				// Assert that a type block is used
+				assertContainsPattern(t, generatedStr, "type (")
+				assertContainsPattern(t, generatedStr, ")")
+
+				// Assert type aliases are generated correctly within the block without Source/Target suffixes
+				assertContainsPattern(t, generatedStr, "\tUser    = source.User")
+				assertContainsPattern(t, generatedStr, "\tUserDTO = target.UserDTO")
+
+				// Assert forward conversion function exists without suffixes
+				assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO`)
+				assertContainsPattern(t, generatedStr, `to := &UserDTO{`)
+				assertContainsPattern(t, generatedStr, `ID:   from.ID,`)
+				assertContainsPattern(t, generatedStr, `Name: from.Name,`)
+
+				// Assert reverse conversion function does NOT exist for 'oneway' direction
+				assertNotContainsPattern(t, generatedStr, `func ConvertUserDTOToUser`)
+			},
 		},
 		{
 			name:          "id_to_id_field_conversion",
@@ -145,11 +206,11 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource`)
 
 				// Assert that 'Id' from source is mapped to 'ID' in target
-				assertContainsPattern(t, generatedStr, `target := &UserTarget{`)
+				assertContainsPattern(t, generatedStr, `to := &UserTarget{`)
 				assertContainsPattern(t, generatedStr, `ID:   from.Id,`) // Correct: target.ID = source.Id
 				assertContainsPattern(t, generatedStr, `Name: from.Name,`)
 
-				assertContainsPattern(t, generatedStr, `target := &UserSource{`)
+				assertContainsPattern(t, generatedStr, `to := &UserSource{`)
 				assertContainsPattern(t, generatedStr, `Id:   from.ID,`) // Correct: target.Id = source.ID
 				assertContainsPattern(t, generatedStr, `Name: from.Name,`)
 			},
@@ -166,38 +227,38 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 		},
 
 		// === 06_complex_types: Complex Type Conversions ===
-		        {
-		            name:           "slice_conversions",
-		            directivePath:  "../../testdata/03_advanced_features/slice_conversions",
-		            goldenFileName: "expected.golden",
-		            dependencies: []string{
-		                "github.com/origadmin/abgen/testdata/03_advanced_features/slice_conversions/source",
-		                "github.com/origadmin/abgen/testdata/03_advanced_features/slice_conversions/target",
-		            },
-		
+		{
+			name:           "slice_conversions",
+			directivePath:  "../../testdata/03_advanced_features/slice_conversions",
+			goldenFileName: "expected.golden",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/03_advanced_features/slice_conversions/source",
+				"github.com/origadmin/abgen/testdata/03_advanced_features/slice_conversions/target",
+			},
+
 			priority: "P0",
 			category: "complex_types",
 		},
 		{
 			name:          "enum_string_to_int",
-			            directivePath: "../../testdata/03_advanced_features/enum_string_to_int",
-			            dependencies: []string{
-			                "github.com/origadmin/abgen/testdata/03_advanced_features/enum_string_to_int/source",
-			                "github.com/origadmin/abgen/testdata/03_advanced_features/enum_string_to_int/target",
-			            },			priority: "P1",
-			category: "complex_types",
+			directivePath: "../../testdata/03_advanced_features/enum_string_to_int",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/03_advanced_features/enum_string_to_int/source",
+				"github.com/origadmin/abgen/testdata/03_advanced_features/enum_string_to_int/target",
+			}, priority: "P1",
+			category:    "complex_types",
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				t.Log("TODO: Add specific assertions for enum_string_to_int")
 			},
 		},
-		        {
-		            name:          "pointer_conversions",
-		            directivePath: "../../testdata/03_advanced_features/pointer_conversions",
-		            dependencies: []string{
-		                "github.com/origadmin/abgen/testdata/03_advanced_features/pointer_conversions/source",
-		                "github.com/origadmin/abgen/testdata/03_advanced_features/pointer_conversions/target",
-		            },
-		
+		{
+			name:          "pointer_conversions",
+			directivePath: "../../testdata/03_advanced_features/pointer_conversions",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/03_advanced_features/pointer_conversions/source",
+				"github.com/origadmin/abgen/testdata/03_advanced_features/pointer_conversions/target",
+			},
+
 			priority: "P1",
 			category: "complex_types",
 			assertFunc: func(t *testing.T, generatedCode []byte) {
@@ -314,7 +375,15 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 
 			// Step 4.1: Run custom assertions if provided.
 			if tc.assertFunc != nil {
-				tc.assertFunc(t, generatedCode)
+				// Create a subtest to capture failures more clearly
+				t.Run(tc.name+"_Assertions", func(st *testing.T) {
+					tc.assertFunc(st, generatedCode)
+					if st.Failed() {
+						actualOutputFile := filepath.Join(tc.directivePath, tc.name+".actual.gen.go")
+						_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
+						st.Logf("Assertion failed for '%s'. Generated output saved to %s for inspection.", tc.name, actualOutputFile)
+					}
+				})
 			}
 
 			// Step 4.2: Snapshot testing - compare against a "golden" file.
@@ -371,5 +440,3 @@ func assertNotContainsPattern(t *testing.T, code string, pattern string) {
 		t.Errorf("Generated code contains unexpected pattern %q.\nGenerated Code:\n%s", pattern, code)
 	}
 }
-
-

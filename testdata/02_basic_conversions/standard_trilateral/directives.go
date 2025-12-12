@@ -1,12 +1,12 @@
 package directives
 
 import (
-	"github.com/origadmin/abgen/testdata/fixture/ent"
-	"github.com/origadmin/abgen/testdata/fixture/types"
+	"github.com/origadmin/abgen/testdata/fixtures/ent"
+	"github.com/origadmin/abgen/testdata/fixtures/types"
 )
 
-//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/ent,alias=ent
-//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/types,alias=types
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixtures/ent,alias=ent
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixtures/types,alias=types
 
 // Phase for Standard Trilateral Conversions  
 // Tests: source + current + target package conversions

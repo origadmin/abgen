@@ -319,7 +319,7 @@ func (g *Generator) generateConversionFunction(sourceInfo, targetInfo *model.Typ
 }
 
 func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule) {
-	g.buf.WriteString("\ttarget := &" + g.getTypeString(targetInfo) + "{\n") // Initialize as pointer
+	g.buf.WriteString("\tto := &" + g.getTypeString(targetInfo) + "{\n") // Initialize as pointer
 
 	// Generate field assignments
 	for _, sourceField := range sourceInfo.Fields {
@@ -350,7 +350,7 @@ func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *mod
 	}
 
 	g.buf.WriteString("\t}\n")
-	g.buf.WriteString("\treturn target\n") // Return the pointer
+	g.buf.WriteString("\treturn to\n") // Return the pointer
 }
 
 func (g *Generator) generateSliceToSliceConversion(sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule) {
@@ -362,11 +362,11 @@ func (g *Generator) generateSliceToSliceConversion(sourceInfo, targetInfo *model
 		g.buf.WriteString("\tif from == nil {\n") // Changed to 'from'
 		g.buf.WriteString("\t\treturn nil\n")
 		g.buf.WriteString("\t}\n")
-		g.buf.WriteString(fmt.Sprintf("\ttarget := make([]*%s, 0, len(*from))\n", g.getTypeString(targetElem))) // Dereference 'from'
+		g.buf.WriteString(fmt.Sprintf("\tto := make([]*%s, 0, len(*from))\n", g.getTypeString(targetElem))) // Dereference 'from'
 		g.buf.WriteString("\tfor _, item := range *from {\n")                                              // Dereference 'from' slice
-		g.buf.WriteString("\t\ttarget = append(target, " + funcName + "(&item))\n")                          // Pass address of item, append pointer
+		g.buf.WriteString("\t\tto = append(to, " + funcName + "(&item))\n")                          // Pass address of item, append pointer
 		g.buf.WriteString("\t}\n")
-		g.buf.WriteString("\treturn &target\n") // Return pointer to the slice
+		g.buf.WriteString("\treturn &to\n") // Return pointer to the slice
 	} else {
 		// Fallback for cases where element types are not clearly struct or primitive
 		g.buf.WriteString("\treturn nil\n")

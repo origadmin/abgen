@@ -1,12 +1,12 @@
 package directives
 
 import (
-	_ "github.com/origadmin/abgen/testdata/fixture/ent"
-	_ "github.com/origadmin/abgen/testdata/fixture/types"
+	_ "github.com/origadmin/abgen/testdata/fixtures/ent"
+	_ "github.com/origadmin/abgen/testdata/fixtures/types"
 )
 
-//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/ent,alias=ent
-//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/types,alias=types
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixtures/ent,alias=ent
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixtures/types,alias=types
 
 // Phase for Pointer and Value Type Conversions
 // Tests: *Type ↔ Type conversions with nil safety

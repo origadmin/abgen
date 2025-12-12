@@ -1,15 +1,15 @@
 package directives
 
 import (
-	_ "github.com/origadmin/abgen/testdata/fixture/ent"
-	_ "github.com/origadmin/abgen/testdata/fixture/types"
+	_ "github.com/origadmin/abgen/testdata/fixtures/ent"
+	_ "github.com/origadmin/abgen/testdata/fixtures/types"
 )
 
 // 三方转换示例：源包(ent) → 中转包(当前包) → 目标包(types)
 
 // 1. 定义包别名，简化后续指令
-//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/ent,alias=source
-//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixture/types,alias=target
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixtures/ent,alias=source
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/fixtures/types,alias=target
 
 // 2. 批量配对源包和目标包
 //    abgen会在source和target包中查找同名类型

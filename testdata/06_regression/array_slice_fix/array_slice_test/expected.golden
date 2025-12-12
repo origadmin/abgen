@@ -3,3 +3,81 @@
 // source: ../../testdata/06_regression/array_slice_fix/array_slice_test
 
 package array_slice_test
+
+import (
+	source "github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/source"
+	target "github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/target"
+	time "time"
+)
+
+// Local type aliases for external types.
+type (
+	DepartmentSource = source.Department
+	DepartmentTarget = target.Department
+	UserSource       = source.User
+	UserTarget       = target.User
+)
+
+// ConvertDepartmentSourceToDepartmentTarget converts DepartmentSource to DepartmentTarget
+func ConvertDepartmentSourceToDepartmentTarget(from *DepartmentSource) *DepartmentTarget {
+	if from == nil {
+		return nil
+	}
+
+	target := &DepartmentTarget{
+		Id:          from.ID,
+		Name:        from.Name,
+		Description: from.Description,
+		CreatedAt:   from.CreatedAt,
+	}
+	return target
+}
+
+// ConvertDepartmentTargetToDepartmentSource converts DepartmentTarget to DepartmentSource
+func ConvertDepartmentTargetToDepartmentSource(from *DepartmentTarget) *DepartmentSource {
+	if from == nil {
+		return nil
+	}
+
+	target := &DepartmentSource{
+		ID:          from.Id,
+		Name:        from.Name,
+		Description: from.Description,
+		CreatedAt:   from.CreatedAt,
+	}
+	return target
+}
+
+// ConvertUserSourceToUserTarget converts UserSource to UserTarget
+func ConvertUserSourceToUserTarget(from *UserSource) *UserTarget {
+	if from == nil {
+		return nil
+	}
+
+	target := &UserTarget{
+		Id:        from.ID,
+		Username:  from.Username,
+		Age:       from.Age,
+		Gender:    from.Gender,
+		Status:    from.Status,
+		CreatedAt: from.CreatedAt,
+	}
+	return target
+}
+
+// ConvertUserTargetToUserSource converts UserTarget to UserSource
+func ConvertUserTargetToUserSource(from *UserTarget) *UserSource {
+	if from == nil {
+		return nil
+	}
+
+	target := &UserSource{
+		ID:        from.Id,
+		Username:  from.Username,
+		Age:       from.Age,
+		Gender:    from.Gender,
+		Status:    from.Status,
+		CreatedAt: from.CreatedAt,
+	}
+	return target
+}
