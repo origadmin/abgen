@@ -51,6 +51,7 @@ type ConversionRule struct {
 	TargetType string // Fully-qualified type name
 	Direction  ConversionDirection
 	FieldRules FieldRuleSet
+	CustomFunc string // The name of the custom conversion function to use.
 }
 
 // NamingRule defines naming conventions for generated types and functions.

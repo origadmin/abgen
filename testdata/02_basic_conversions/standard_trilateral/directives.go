@@ -11,8 +11,8 @@ import (
 //go:abgen:package:path=github.com/origadmin/abgen/testdata/fixtures/types,alias=types
 
 // --- Restoring Final Strategy ---
-// With the panic in generator.go fixed, we revert to the correct strategy
-// of using fully qualified names (FQNs) in the `convert` directives.
+// With the core logic in generator.go now fixed, we use the correct directive
+// format with fully qualified names (FQNs) to ensure the test passes.
 
 //go:abgen:convert="source=github.com/origadmin/abgen/testdata/fixtures/ent.User,target=github.com/origadmin/abgen/testdata/fixtures/types.User"
 //go:abgen:convert="source=github.com/origadmin/abgen/testdata/fixtures/ent.Resource,target=github.com/origadmin/abgen/testdata/fixtures/types.Resource"
@@ -20,7 +20,8 @@ import (
 //go:abgen:convert:target:suffix="Trilateral"
 
 // Custom conversion rules for fields where types are fundamentally different.
-// These rules are now expected to work because the parent conversion is correctly specified.
+// The fixed generator logic will now correctly find and apply these rules.
+// Note: The rule for time.Time is not needed as it should be handled by basic type inference.
 //go:abgen:convert:rule="source:ent.Gender,target:types.Gender,func:ConvertGender"
 //go:abgen:convert:rule="source:string,target:int32,func:ConvertStatus"
 

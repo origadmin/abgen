@@ -318,6 +318,60 @@ func (g *Generator) generateConversionFunction(sourceInfo, targetInfo *model.Typ
 	g.buf.WriteString("}\n\n")
 }
 
+func (g *Generator) findConversionRule(sourceType, targetType *model.TypeInfo) *config.ConversionRule {
+	for _, rule := range g.config.ConversionRules {
+		if rule.SourceType == sourceType.FQN() && rule.TargetType == targetType.FQN() {
+			return rule
+		}
+	}
+	return nil
+}
+
+func (g *Generator) getConversionExpression(sourceField, targetField *model.FieldInfo, fromVar string) string {
+	sourceType := sourceField.Type
+	targetType := targetField.Type
+
+	// 1. Perfect match
+	if sourceType.FQN() == targetType.FQN() {
+		return fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
+	}
+
+	// 2. Check for a custom function rule
+	for _, rule := range g.config.ConversionRules {
+		if rule.SourceType == sourceType.FQN() && rule.TargetType == targetType.FQN() && rule.CustomFunc != "" {
+			return fmt.Sprintf("%s(%s.%s)", rule.CustomFunc, fromVar, sourceField.Name)
+		}
+	}
+
+	// 3. Check for slice conversion
+	if sourceType.Kind == model.Slice && targetType.Kind == model.Slice {
+		// Assuming element types are named types
+		if sourceType.Underlying != nil && targetType.Underlying != nil {
+			funcName := g.namer.GetFunctionName(sourceType.Underlying, targetType.Underlying)
+			return fmt.Sprintf("%s(%s.%s)", funcName, fromVar, sourceField.Name)
+		}
+	}
+
+	// 4. Check for pointer to non-pointer and vice-versa
+	if sourceType.Kind == model.Pointer && sourceType.Underlying.FQN() == targetType.FQN() {
+		return fmt.Sprintf("*%s.%s", fromVar, sourceField.Name) // Dereference
+	}
+	if targetType.Kind == model.Pointer && targetType.Underlying.FQN() == sourceType.FQN() {
+		return fmt.Sprintf("&%s.%s", fromVar, sourceField.Name) // Reference
+	}
+
+	// 5. Basic type casting
+	if sourceType.Kind == model.Primitive && targetType.Kind == model.Primitive {
+		return fmt.Sprintf("%s(%s.%s)", targetType.Name, fromVar, sourceField.Name)
+	}
+
+	// 6. Fallback to a generated stub function
+	funcName := g.namer.GetFunctionName(sourceType, targetType)
+	// We need to ensure this stub function is generated if it doesn't exist.
+	// This logic should be centralized. For now, we just return the call.
+	return fmt.Sprintf("%s(%s.%s)", funcName, fromVar, sourceField.Name)
+}
+
 func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule) {
 	g.buf.WriteString("\tto := &" + g.getTypeString(targetInfo) + "{\n") // Initialize as pointer
 
@@ -345,7 +399,8 @@ func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *mod
 		}
 
 		if targetField != nil {
-			g.buf.WriteString(fmt.Sprintf("\t\t%s: from.%s,\n", targetField.Name, sourceField.Name)) // Use 'from'
+			conversionExpr := g.getConversionExpression(sourceField, targetField, "from")
+			g.buf.WriteString(fmt.Sprintf("\t\t%s: %s,\n", targetField.Name, conversionExpr))
 		}
 	}
 

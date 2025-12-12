@@ -111,12 +111,31 @@ func (p *Parser) parseSingleDirective(directive string) error {
 		p.config.GlobalBehaviorRules.GenerateAlias = (value == "true")
 	case "convert":
 		p.parseConvertRule(value)
-	// Note: Field-level rules like ignore/remap and direction are now part of 'convert'
+	case "convert:rule":
+		p.parseCustomFuncRule(value)
 	default:
-		// Potentially handle unknown directives, e.g., log a warning.
 	}
 
 	return nil
+}
+
+func (p *Parser) findOrCreateRule(sourceFQN, targetFQN string) *ConversionRule {
+	for _, rule := range p.config.ConversionRules {
+		if rule.SourceType == sourceFQN && rule.TargetType == targetFQN {
+			return rule
+		}
+	}
+	newRule := &ConversionRule{
+		SourceType: sourceFQN,
+		TargetType: targetFQN,
+		Direction:  DirectionBoth, // Default direction
+		FieldRules: FieldRuleSet{
+			Ignore: make(map[string]struct{}),
+			Remap:  make(map[string]string),
+		},
+	}
+	p.config.ConversionRules = append(p.config.ConversionRules, newRule)
+	return newRule
 }
 
 // parsePackagePath parses "package:path" directives and adds to PackageAliases.
@@ -159,16 +178,8 @@ func (p *Parser) parsePackagePairs(value string) {
 // parseConvertRule parses "convert" directives using a key-value format.
 func (p *Parser) parseConvertRule(value string) {
 	parts := strings.Split(value, ",")
-
 	var sourceTypeStr, targetTypeStr string
-
-	rule := &ConversionRule{
-		Direction: DirectionBoth, // Default direction
-		FieldRules: FieldRuleSet{
-			Ignore: make(map[string]struct{}),
-			Remap:  make(map[string]string),
-		},
-	}
+	var direction, ignore, remap string
 
 	for _, part := range parts {
 		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
@@ -183,23 +194,11 @@ func (p *Parser) parseConvertRule(value string) {
 		case "target":
 			targetTypeStr = val
 		case "direction":
-			switch val {
-			case "oneway":
-				rule.Direction = DirectionOneway
-			default:
-				// both is already set as default
-			}
+			direction = val
 		case "ignore":
-			for _, field := range strings.Split(val, ";") {
-				rule.FieldRules.Ignore[field] = struct{}{}
-			}
+			ignore = val
 		case "remap":
-			for _, remapPair := range strings.Split(val, ";") {
-				fromTo := strings.SplitN(remapPair, ":", 2)
-				if len(fromTo) == 2 {
-					rule.FieldRules.Remap[fromTo[0]] = fromTo[1]
-				}
-			}
+			remap = val
 		}
 	}
 
@@ -207,24 +206,69 @@ func (p *Parser) parseConvertRule(value string) {
 		return
 	}
 
-	rule.SourceType = p.resolveTypeFQN(sourceTypeStr)
-	rule.TargetType = p.resolveTypeFQN(targetTypeStr)
+	sourceFQN := p.resolveTypeFQN(sourceTypeStr)
+	targetFQN := p.resolveTypeFQN(targetTypeStr)
+	rule := p.findOrCreateRule(sourceFQN, targetFQN)
 
-	p.config.ConversionRules = append(p.config.ConversionRules, rule)
+	if direction == "oneway" {
+		rule.Direction = DirectionOneway
+	}
+	if ignore != "" {
+		for _, field := range strings.Split(ignore, ";") {
+			rule.FieldRules.Ignore[field] = struct{}{}
+		}
+	}
+	if remap != "" {
+		for _, remapPair := range strings.Split(remap, ";") {
+			fromTo := strings.SplitN(remapPair, ":", 2)
+			if len(fromTo) == 2 {
+				rule.FieldRules.Remap[fromTo[0]] = fromTo[1]
+			}
+		}
+	}
+}
+
+// parseCustomFuncRule parses "convert:rule" directives.
+func (p *Parser) parseCustomFuncRule(value string) {
+	parts := strings.Split(value, ",")
+	var source, target, funcName string
+
+	for _, part := range parts {
+		kv := strings.SplitN(strings.TrimSpace(part), ":", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		key, val := kv[0], kv[1]
+		switch key {
+		case "source":
+			source = val
+		case "target":
+			target = val
+		case "func":
+			funcName = val
+		}
+	}
+
+	if source == "" || target == "" || funcName == "" {
+		return
+	}
+
+	sourceFQN := p.resolveTypeFQN(source)
+	targetFQN := p.resolveTypeFQN(target)
+	rule := p.findOrCreateRule(sourceFQN, targetFQN)
+	rule.CustomFunc = funcName
 }
 
 // resolveTypeFQN resolves a type string (e.g., "alias.TypeName" or "path/to/pkg.TypeName") to a fully-qualified name.
 func (p *Parser) resolveTypeFQN(typeStr string) string {
 	lastDot := strings.LastIndex(typeStr, ".")
 	if lastDot == -1 {
-		// It's a local type in the current package.
 		return typeStr
 	}
 
 	packageIdentifier := typeStr[:lastDot]
 	typeName := typeStr[lastDot+1:]
 
-	// The identifier could be an alias or a full package path.
 	packagePath := p.resolvePackagePath(packageIdentifier)
 
 	return packagePath + "." + typeName
