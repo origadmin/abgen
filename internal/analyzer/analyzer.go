@@ -38,7 +38,7 @@ func (a *TypeAnalyzer) Find(fqn string) (*model.TypeInfo, error) {
 
 // Analyze is the main entry point for the analysis phase.
 func (a *TypeAnalyzer) Analyze(packagePaths []string, fqns []string) (map[string]*model.TypeInfo, error) {
-	slog.Debug("Starting analysis", "package_count", len(packagePaths), "type_count", len(fqns))
+	slog.Debug("Starting analysis", "package_paths_count", len(packagePaths), "fqns_count", len(fqns), "packagePaths", packagePaths, "fqns", fqns) // Added debug log
 
 	// 1. Load the full graph of packages.
 	loadCfg := &packages.Config{
@@ -53,19 +53,45 @@ func (a *TypeAnalyzer) Analyze(packagePaths []string, fqns []string) (map[string
 	}
 	a.pkgs = pkgs // Store the loaded packages.
 
-	// 2. Resolve all requested types.
+	// 2. Resolve all requested types OR discover all named struct types if fqns is empty (for implicit rules).
 	resolvedTypes := make(map[string]*model.TypeInfo)
-	for _, fqn := range fqns {
-		if _, ok := resolvedTypes[fqn]; !ok {
-			info, err := a.find(fqn)
-			if err != nil {
-				slog.Warn("could not resolve source type", "fqn", fqn, "error", err)
-				continue
+	if len(fqns) == 0 && len(packagePaths) > 0 {
+		slog.Debug("FQNs list is empty, discovering all named struct types in loaded packages for implicit rules.")
+		// Discover all named struct types within the loaded packages
+		for _, pkg := range a.pkgs {
+			slog.Debug("Scanning package for named struct types", "pkgPath", pkg.PkgPath)
+			for _, typName := range pkg.TypesInfo.Defs {
+				if typName == nil || typName.Type() == nil {
+					continue
+				}
+				if named, ok := typName.Type().(*types.Named); ok {
+					if _, isStruct := named.Underlying().(*types.Struct); isStruct {
+						fqn := named.Obj().Pkg().Path() + "." + named.Obj().Name()
+						if _, ok := resolvedTypes[fqn]; !ok {
+							info := a.resolveType(named)
+							if info != nil {
+								resolvedTypes[fqn] = info
+								slog.Debug("Discovered named struct type", "fqn", fqn)
+							}
+						}
+					}
+				}
 			}
-			resolvedTypes[fqn] = info
+		}
+	} else {
+		for _, fqn := range fqns {
+			if _, ok := resolvedTypes[fqn]; !ok {
+				info, err := a.find(fqn)
+				if err != nil {
+					slog.Warn("could not resolve source type", "fqn", fqn, "error", err)
+					continue
+				}
+				resolvedTypes[fqn] = info
+			}
 		}
 	}
 
+	slog.Debug("Finished analysis", "resolved_types_count", len(resolvedTypes))
 	return resolvedTypes, nil
 }
 

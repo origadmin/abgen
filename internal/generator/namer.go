@@ -34,8 +34,8 @@ func (n *Namer) GetTypeName(info *model.TypeInfo) string {
 // used within the function name itself.
 func (n *Namer) GetFunctionName(sourceType, targetType *model.TypeInfo) string {
 	// According to documentation: Convert + [SourceTypeName] + To + [TargetTypeName]
-	sourceName := n.getFunctionTypeNamePart(sourceType, true)
-	targetName := n.getFunctionTypeNamePart(targetType, false)
+	sourceName := n.getFunctionTypeNamePart(sourceType, targetType, true)
+	targetName := n.getFunctionTypeNamePart(targetType, sourceType, false)
 
 	// For primitive types, use the Title-cased name directly
 	if sourceType.Kind == model.Primitive {
@@ -50,7 +50,7 @@ func (n *Namer) GetFunctionName(sourceType, targetType *model.TypeInfo) string {
 
 // getFunctionTypeNamePart returns the type name part used in the function name,
 // applying global Source/Target prefixes/suffixes if configured.
-func (n *Namer) getFunctionTypeNamePart(info *model.TypeInfo, isSource bool) string {
+func (n *Namer) getFunctionTypeNamePart(info, otherInfo *model.TypeInfo, isSource bool) string {
 	if info == nil {
 		return ""
 	}
@@ -63,19 +63,25 @@ func (n *Namer) getFunctionTypeNamePart(info *model.TypeInfo, isSource bool) str
 		name = strings.TrimPrefix(name, "[]")
 	}
 
+	// Check if any global naming rules are defined for source or target
+	hasGlobalSourceNaming := n.config.NamingRules.SourcePrefix != "" || n.config.NamingRules.SourceSuffix != ""
+	hasGlobalTargetNaming := n.config.NamingRules.TargetPrefix != "" || n.config.NamingRules.TargetSuffix != ""
+
 	if isSource {
-		if n.config.NamingRules.SourcePrefix != "" {
-			name = n.config.NamingRules.SourcePrefix + name
-		}
-		if n.config.NamingRules.SourceSuffix != "" {
-			name = name + n.config.NamingRules.SourceSuffix
+		if hasGlobalSourceNaming {
+			// User-defined source naming rules take precedence
+			name = n.config.NamingRules.SourcePrefix + name + n.config.NamingRules.SourceSuffix
+		} else if !hasGlobalTargetNaming && otherInfo != nil && name == otherInfo.Name {
+			// If no global naming rules for source or target, and names conflict, add default suffix
+			name = name + "Source"
 		}
 	} else { // is target
-		if n.config.NamingRules.TargetPrefix != "" {
-			name = n.config.NamingRules.TargetPrefix + name
-		}
-		if n.config.NamingRules.TargetSuffix != "" {
-			name = name + n.config.NamingRules.TargetSuffix
+		if hasGlobalTargetNaming {
+			// User-defined target naming rules take precedence
+			name = n.config.NamingRules.TargetPrefix + name + n.config.NamingRules.TargetSuffix
+		} else if !hasGlobalSourceNaming && otherInfo != nil && name == otherInfo.Name {
+			// If no global naming rules for source or target, and names conflict, add default suffix
+			name = name + "Target"
 		}
 	}
 	return name

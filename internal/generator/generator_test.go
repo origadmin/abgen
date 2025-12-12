@@ -1,16 +1,23 @@
 package generator
 
 import (
+	"log/slog" // Added this import
 	"os"
 	"path/filepath"
 	"sort"
-	"testing"
-
-	"github.com/origadmin/abgen/internal/analyzer"
+		"testing"
+	
+		"github.com/origadmin/abgen/internal/analyzer"
+	
 	"github.com/origadmin/abgen/internal/config"
 )
 
 func TestGenerator_CodeGeneration(t *testing.T) {
+	// Enable debug logging for tests
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})))
+
 	// Base dependencies for most tests
 	// NOTE: These are now only used for tests that specifically rely on the global fixture.
 	// New tests should define their own local dependencies if they have specific fixture types.
@@ -28,6 +35,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 		dependencies   []string // These are now hints for directive parsing, not direct load patterns
 		priority       string   // P0, P1, P2 for prioritization
 		category       string   // Test category for organization
+		assertFunc     func(*testing.T, []byte) // Custom assertion function for detailed checks
 	}{
 		// === 01_basic_modes: Basic Conversion Patterns ===
 		{
@@ -57,6 +65,39 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			dependencies: []string{
 				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/source",
 				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/target",
+			},
+			priority: "P0",
+			category: "basic_conversions",
+		},
+		{
+			name:           "package_level_conversion",
+			directivePath:  "../../testdata/02_basic_conversions/package_level_conversion",
+			goldenFileName: "expected.golden",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/source",
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/target",
+			},
+			priority: "P0",
+			category: "basic_conversions",
+		},
+		{
+			name:           "single_way_conversion",
+			directivePath:  "../../testdata/02_basic_conversions/single_way_conversion",
+			goldenFileName: "expected.golden",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/single_way_conversion/source",
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/single_way_conversion/target",
+			},
+			priority: "P0",
+			category: "basic_conversions",
+		},
+		{
+			name:           "id_to_id_field_conversion",
+			directivePath:  "../../testdata/02_basic_conversions/id_to_id_field_conversion",
+			goldenFileName: "expected.golden",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/id_to_id_field_conversion/source",
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/id_to_id_field_conversion/target",
 			},
 			priority: "P0",
 			category: "basic_conversions",
@@ -155,7 +196,12 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				t.Fatalf("Generate() failed for test case %s: %v", tc.name, err)
 			}
 
-			// Step 4: Snapshot testing - compare against a "golden" file.
+			// Step 4.1: Run custom assertions if provided.
+			if tc.assertFunc != nil {
+				tc.assertFunc(t, generatedCode)
+			}
+
+			// Step 4.2: Snapshot testing - compare against a "golden" file.
 			goldenFile := filepath.Join(tc.directivePath, tc.goldenFileName)
 			if os.Getenv("UPDATE_GOLDEN_FILES") != "" {
 				err = os.WriteFile(goldenFile, generatedCode, 0644)
@@ -172,9 +218,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			}
 
 			if string(generatedCode) != string(expectedCode) {
-				generatedFile := filepath.Join(tc.directivePath, "expected.golden")
-				_ = os.WriteFile(generatedFile, generatedCode, 0644)
-				t.Errorf("Generated code does not match the golden file %s. The generated output was saved to %s for inspection.", goldenFile, generatedFile)
+				actualOutputFile := filepath.Join(tc.directivePath, tc.name+".actual.gen.go") // Save to a unique file
+				_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
+				t.Errorf("Generated code for '%s' does not match the golden file %s. The generated output was saved to %s for inspection.", tc.name, goldenFile, actualOutputFile)
 			}
 		})
 	}
