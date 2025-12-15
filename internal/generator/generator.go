@@ -552,40 +552,46 @@ func (g *Generator) createAliasesRecursively(info *model.TypeInfo, isSource, dis
 		return
 	}
 
-	// Filter out types from packages not involved in the conversion.
-	if info.ImportPath != "" {
-		if _, ok := g.involvedPackages[info.ImportPath]; !ok {
-			return
-		}
-	}
-
 	key := info.UniqueKey()
-
 	if _, ok := visited[key]; ok {
 		return
 	}
 	visited[key] = struct{}{}
 
-	alias := g.namer.GetAlias(info, isSource, disambiguate)
-	if _, exists := g.config.ExistingAliases[alias]; !exists {
-		if _, exists := g.aliasMap[key]; !exists {
+	// Always create an alias for a named type, regardless of whether it's from an involved package.
+	// This is crucial for types that are fields within other types.
+	if info.IsNamedType() {
+		alias := g.namer.GetAlias(info, isSource, disambiguate)
+		if _, exists := g.config.ExistingAliases[alias]; !exists {
+			if _, exists := g.aliasMap[key]; !exists {
+				g.aliasMap[key] = alias
+			}
+		} else {
 			g.aliasMap[key] = alias
 		}
-	} else {
-		g.aliasMap[key] = alias
 	}
 
 	if info.ImportPath != "" && !g.isCurrentPackage(info.ImportPath) {
 		g.importMgr.Add(info.ImportPath)
 	}
 
-	if info.Kind == model.Struct {
+	// Recursively process fields for structs and element types for slices/arrays/maps.
+	switch info.Kind {
+	case model.Struct:
 		for _, field := range info.Fields {
 			g.createAliasesRecursively(field.Type, isSource, disambiguate, visited)
 		}
-	}
-	if info.Underlying != nil {
-		g.createAliasesRecursively(info.Underlying, isSource, disambiguate, visited)
+	case model.Slice, model.Array, model.Pointer:
+		if info.Underlying != nil {
+			g.createAliasesRecursively(info.Underlying, isSource, disambiguate, visited)
+		}
+	case model.Map:
+		if info.KeyType != nil {
+			g.createAliasesRecursively(info.KeyType, isSource, disambiguate, visited)
+		}
+		if info.Underlying != nil { // Corrected: Use info.Underlying for map value type
+			g.createAliasesRecursively(info.Underlying, isSource, disambiguate, visited)
+		}
 	}
 }
 
@@ -594,36 +600,41 @@ func (g *Generator) getTypeString(info *model.TypeInfo) string {
 		return "interface{}"
 	}
 
-	switch info.Kind {
-	case model.Primitive:
-		return info.Name
-	case model.Slice:
-		elemStr := g.getTypeString(info.Underlying)
-		return "[]" + elemStr
+	// For non-named types, construct the type string recursively.
+	if !info.IsNamedType() {
+		switch info.Kind {
+		case model.Primitive:
+			return info.Name
+		case model.Slice:
+			return "[]" + g.getTypeString(info.Underlying)
+		case model.Pointer:
+			return "*" + g.getTypeString(info.Underlying)
+		case model.Map:
+			keyStr := g.getTypeString(info.KeyType)
+			valStr := g.getTypeString(info.Underlying) // Corrected: Use info.Underlying for map value type
+			return fmt.Sprintf("map[%s]%s", keyStr, valStr)
+		case model.Array:
+			return fmt.Sprintf("[%d]%s", info.ArrayLen, g.getTypeString(info.Underlying))
+		default:
+			return "interface{}" // Fallback
+		}
 	}
 
+	// For named types, use the alias if it exists.
 	key := info.UniqueKey()
-
 	if alias, ok := g.aliasMap[key]; ok {
 		return alias
 	}
-
-	for alias, existingFQN := range g.config.ExistingAliases {
-		if existingFQN == key {
-			return alias
-		}
+	if alias, ok := g.config.ExistingAliases[key]; ok {
+		return alias
 	}
 
-	// Fallback for named types that might not have an alias
-	if info.Name != "" {
-		if info.ImportPath != "" && !g.isCurrentPackage(info.ImportPath) {
-			pkgAlias := g.importMgr.GetAlias(info.ImportPath)
-			return fmt.Sprintf("%s.%s", pkgAlias, info.Name)
-		}
-		return info.Name
+	// Fallback for named types that might not have an alias (should be rare).
+	if info.ImportPath != "" && !g.isCurrentPackage(info.ImportPath) {
+		pkgAlias := g.importMgr.GetAlias(info.ImportPath)
+		return fmt.Sprintf("%s.%s", pkgAlias, info.Name)
 	}
-
-	return "interface{}" // Should be rare
+	return info.Name
 }
 
 func (g *Generator) discoverImplicitConversionRules() {

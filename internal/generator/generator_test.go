@@ -255,15 +255,17 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				// Check forward conversion for Order
 				assertContainsPattern(t, generatedStr, `func ConvertOrderSourceToOrderTarget\(from \*OrderSource\) \*OrderTarget`)
 				// Check that the Items field is converted using a loop and the single-item converter
-				assertContainsPattern(t, generatedStr, `Items: func\(fs \[\]\*ItemSource\) \[\]\*ItemTarget {`) // Check for inline func or helper
-				assertContainsPattern(t, generatedStr, `ts := make\(\[\]\*ItemTarget, len\(fs\)\)`)
-				assertContainsPattern(t, generatedStr, `ts\[i\] = ConvertItemSourceToItemTarget\(f\)`)
+				assertContainsPattern(t, generatedStr, `Items: func\(fs \[\]ItemSource\) \[\]ItemTarget {`) // Corrected: fs is []ItemSource (value slice)
+				assertContainsPattern(t, generatedStr, `ts := make\(\[\]ItemTarget, len\(fs\)\)`)         // Corrected: ts is []ItemTarget (value slice)
+				assertContainsPattern(t, generatedStr, `converted := ConvertItemSourceToItemTarget\(&f\)`) // Corrected: &f for value type
+				assertContainsPattern(t, generatedStr, `ts\[i\] = \*converted`)                            // Corrected: dereference for value type
 
 				// Check reverse conversion for Order
 				assertContainsPattern(t, generatedStr, `func ConvertOrderTargetToOrderSource\(from \*OrderTarget\) \*OrderSource`)
-				assertContainsPattern(t, generatedStr, `Items: func\(fs \[\]\*ItemTarget\) \[\]\*ItemSource {`)
-				assertContainsPattern(t, generatedStr, `ts := make\(\[\]\*ItemSource, len\(fs\)\)`)
-				assertContainsPattern(t, generatedStr, `ts\[i\] = ConvertItemTargetToItemSource\(f\)`)
+				assertContainsPattern(t, generatedStr, `Items: func\(fs \[\]ItemTarget\) \[\]ItemSource {`) // Corrected: fs is []ItemTarget (value slice)
+				assertContainsPattern(t, generatedStr, `ts := make\(\[\]ItemSource, len\(fs\)\)`)         // Corrected: ts is []ItemSource (value slice)
+				assertContainsPattern(t, generatedStr, `converted := ConvertItemTargetToItemSource\(&f\)`) // Corrected: &f for value type
+				assertContainsPattern(t, generatedStr, `ts\[i\] = \*converted`)                            // Corrected: dereference for value type
 
 				// Check that the individual item converters are generated
 				assertContainsPattern(t, generatedStr, `func ConvertItemSourceToItemTarget\(from \*ItemSource\) \*ItemTarget`)
@@ -371,7 +373,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			directivePath: "../../testdata/03_advanced_features/numeric_conversions",
 			dependencies: []string{
 				"github.com/origadmin/abgen/testdata/03_advanced_features/numeric_conversions/source",
-				"github.com/origadmin/abgen/testdata/03_advanced_features/numeric_conversions/target",
+				"github.com/origadmin/abgen/testdata/03_advanced_conversions/numeric_conversions/target",
 			},
 			priority: "P1",
 			category: "advanced_features",
