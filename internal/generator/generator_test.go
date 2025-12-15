@@ -60,8 +60,8 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
 
 				// Assert type block is used
-				assertContainsPattern(t, generatedStr, "type (")
-				assertContainsPattern(t, generatedStr, ")")
+				assertContainsPattern(t, generatedStr, "type \\(")
+				assertContainsPattern(t, generatedStr, "\\)")
 
 				// Assert aliases are generated correctly
 				assertContainsPattern(t, generatedStr, "\tUser    = source.User")
@@ -91,8 +91,8 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
 
 				// Assert that a type block is used
-				assertContainsPattern(t, generatedStr, "type (")
-				assertContainsPattern(t, generatedStr, ")")
+				assertContainsPattern(t, generatedStr, "type \\(")
+				assertContainsPattern(t, generatedStr, "\\)")
 
 				// Assert type aliases are generated correctly within the block
 				assertContainsPattern(t, generatedStr, "\tUserSource = source.User")
@@ -108,10 +108,11 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 
 				// Assert some basic content of the conversion function, e.g., field assignment
 				assertContainsPattern(t, generatedStr, `to := &UserTarget{`)
-				assertContainsPattern(t, generatedStr, `        ID:   from.ID,`)
-				assertContainsPattern(t, generatedStr, `        Name: from.Name,`)
-				assertContainsPattern(t, generatedStr, `to := &UserSource{`) // For ConvertUserTargetToUserSource				assertContainsPattern(t, generatedStr, `ID:   from.ID,`)
-				assertContainsPattern(t, generatedStr, `Name: from.Name,`)
+				assertContainsPattern(t, generatedStr, `\s+ID:\s+from.ID,`)
+				assertContainsPattern(t, generatedStr, `\s+Name:\s+from.Name,`)
+				assertContainsPattern(t, generatedStr, `to := &UserSource{`) // For ConvertUserTargetToUserSource
+				assertContainsPattern(t, generatedStr, `\s+ID:\s+from.ID,`)
+				assertContainsPattern(t, generatedStr, `\s+Name:\s+from.Name,`)
 			},
 
 			// Write success file for inspection (only for 02_basic_conversions)
@@ -131,8 +132,8 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
 
 				// Assert that a type block is used
-				assertContainsPattern(t, generatedStr, "type (")
-				assertContainsPattern(t, generatedStr, ")")
+				assertContainsPattern(t, generatedStr, "type \\(")
+				assertContainsPattern(t, generatedStr, "\\)")
 
 				// Assert type aliases are generated correctly within the block without Source/Target suffixes
 				assertContainsPattern(t, generatedStr, "\tUser    = source.User")
@@ -165,8 +166,8 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
 
 				// Assert that a type block is used
-				assertContainsPattern(t, generatedStr, "type (")
-				assertContainsPattern(t, generatedStr, ")")
+				assertContainsPattern(t, generatedStr, "type \\(")
+				assertContainsPattern(t, generatedStr, "\\)")
 
 				// Assert type aliases are generated correctly within the block
 				assertContainsPattern(t, generatedStr, "\tUserSource = source.User")
@@ -204,17 +205,17 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
 
 				// Assert type block is used
-				assertContainsPattern(t, generatedStr, "type (")
-				assertContainsPattern(t, generatedStr, ")")
+				assertContainsPattern(t, generatedStr, "type \\(")
+				assertContainsPattern(t, generatedStr, "\\)")
 
-				assertContainsPattern(t, generatedStr, "\tUserTarget = types.User")
+				// Assert aliases are generated correctly according to the new logic
+				assertContainsPattern(t, generatedStr, `\s+User\s+=\s+ent.User`)
+				assertContainsPattern(t, generatedStr, `\s+UserBilateral\s+=\s+types.User`)
 
-				// Assert conversion functions exist
-				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource`)
+				// Assert conversion functions exist with corrected names
+				assertContainsPattern(t, generatedStr, `func ConvertUserToUserBilateral`)
+				assertContainsPattern(t, generatedStr, `func ConvertUserBilateralToUser`)
 			},
-
-			// Write success file for inspection (only for 02_basic_conversions)
 
 		},
 		{
@@ -227,15 +228,16 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
 
-				// Assert aliases for ent.User, types.User, and the implicit middle type exist
-				assertContainsPattern(t, generatedStr, "type (")
-				assertContainsPattern(t, generatedStr, ")")
-				assertContainsPattern(t, generatedStr, "\tUserSource = ent.User")
-				assertContainsPattern(t, generatedStr, "\tUserTarget = types.User")
+				// For this test, local aliases are defined in the directive file itself.
+				// The generator should RESPECT them and NOT generate a new `type` block for them.
+				// Therefore, we assert the ABSENCE of a generated alias for `User`.
+				assertNotContainsPattern(t, generatedStr, `type\s+\(\s+User\s+=`)
 
-				// Standard trilateral should generate conversion between Source and Target, and vice versa
-				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource`)
+				// Standard trilateral should generate conversion between Source and Trilateral, and vice versa
+				assertContainsPattern(t, generatedStr, `func ConvertUserToUserTrilateral`)
+				assertContainsPattern(t, generatedStr, `func ConvertUserTrilateralToUser`)
+				assertContainsPattern(t, generatedStr, `func ConvertResourceToResourceTrilateral`)
+				assertContainsPattern(t, generatedStr, `func ConvertResourceTrilateralToResource`)
 			},
 
 			// Write success file for inspection (only for 02_basic_conversions)
@@ -391,6 +393,12 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 		t.Run(testNameWithStage, func(t *testing.T) {
 			t.Logf("Running test: %s (Priority: %s, Category: %s)", tc.name, tc.priority, tc.category)
 
+			// Cleanup any previously generated files in the testdata directory to ensure a clean slate.
+			// This prevents "redeclared in this block" errors when running tests repeatedly.
+			cleanTestFiles(t, tc.directivePath)
+			defer cleanTestFiles(t, tc.directivePath)
+
+
 			// Step 1: Parse config from the directive path using the new high-level API.
 			parser := config.NewParser()
 			cfg, err := parser.Parse(tc.directivePath)
@@ -503,13 +511,33 @@ func TestDefaultDirectionBehavior(t *testing.T) {
 	slog.Debug("TestDefaultDirectionBehavior completed successfully")
 }
 
+func cleanTestFiles(t *testing.T, dir string) {
+	files, err := filepath.Glob(filepath.Join(dir, "*.actual.gen.go"))
+	if err != nil {
+		t.Fatalf("Failed to glob for generated files in %s: %v", dir, err)
+	}
+	for _, f := range files {
+		if err := os.Remove(f); err != nil {
+			// Change from t.Fatalf to t.Logf to prevent flaky tests on Windows due to file locks.
+			t.Logf("Warning: Failed to remove old generated file %s: %v", f, err)
+		}
+	}
+	// Also remove the failed output file if it exists
+	failedFile := filepath.Join(dir, "failed.actual.gen.go")
+	if _, err := os.Stat(failedFile); err == nil {
+		if err := os.Remove(failedFile); err != nil {
+			// Change from t.Fatalf to t.Logf
+			t.Logf("Warning: Failed to remove old failed output file %s: %v", failedFile, err)
+		}
+	}
+}
+
 // assertContainsPattern checks if the generated code contains a specific regular expression pattern.
 func assertContainsPattern(t *testing.T, code string, pattern string) {
 	t.Helper()
-	escapedPattern := regexp.QuoteMeta(pattern) // Escape pattern for literal match
-	match, err := regexp.MatchString(escapedPattern, code)
+	match, err := regexp.MatchString(pattern, code)
 	if err != nil {
-		t.Fatalf("Invalid regex pattern %q: %v", escapedPattern, err)
+		t.Fatalf("Invalid regex pattern %q: %v", pattern, err)
 	}
 	if !match {
 		t.Errorf("Generated code does not contain expected pattern %q.\nGenerated Code:\n%s", pattern, code)
@@ -519,10 +547,9 @@ func assertContainsPattern(t *testing.T, code string, pattern string) {
 // assertNotContainsPattern checks if the generated code does NOT contain a specific regular expression pattern.
 func assertNotContainsPattern(t *testing.T, code string, pattern string) {
 	t.Helper()
-	escapedPattern := regexp.QuoteMeta(pattern) // Escape pattern for literal match
-	match, err := regexp.MatchString(escapedPattern, code)
+	match, err := regexp.MatchString(pattern, code)
 	if err != nil {
-		t.Fatalf("Invalid regex pattern %q: %v", escapedPattern, err)
+		t.Fatalf("Invalid regex pattern %q: %v", pattern, err)
 	}
 	if match {
 		t.Errorf("Generated code contains unexpected pattern %q.\nGenerated Code:\n%s", pattern, code)

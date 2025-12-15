@@ -56,24 +56,25 @@ func (n *Namer) GetAlias(info *model.TypeInfo, isSource, disambiguate bool) stri
 	}
 
 	baseName := info.Name
-
-	// Check if a user-defined naming rule applies
-	hasSpecificRule := (isSource && (n.config.NamingRules.SourcePrefix != "" || n.config.NamingRules.SourceSuffix != "")) ||
-		(!isSource && (n.config.NamingRules.TargetPrefix != "" || n.config.NamingRules.TargetSuffix != ""))
-
 	var prefix, suffix string
+
+	// Determine if any specific rule is set for either source or target.
+	anySourceRule := n.config.NamingRules.SourcePrefix != "" || n.config.NamingRules.SourceSuffix != ""
+	anyTargetRule := n.config.NamingRules.TargetPrefix != "" || n.config.NamingRules.TargetSuffix != ""
+	anySpecificRule := anySourceRule || anyTargetRule
+
 	if isSource {
 		prefix = n.config.NamingRules.SourcePrefix
 		suffix = n.config.NamingRules.SourceSuffix
-		// Only add "Source" for disambiguation if no specific rule for the pair exists.
-		if !hasSpecificRule && disambiguate {
+		// If there are NO specific rules AT ALL, and we need to disambiguate, add "Source".
+		if !anySpecificRule && disambiguate {
 			suffix = "Source"
 		}
 	} else { // is Target
 		prefix = n.config.NamingRules.TargetPrefix
 		suffix = n.config.NamingRules.TargetSuffix
-		// Only add "Target" for disambiguation if no specific rule for the pair exists.
-		if !hasSpecificRule && disambiguate {
+		// If there are NO specific rules AT ALL, and we need to disambiguate, add "Target".
+		if !anySpecificRule && disambiguate {
 			suffix = "Target"
 		}
 	}

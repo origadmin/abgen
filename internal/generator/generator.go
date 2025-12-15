@@ -58,6 +58,7 @@ type Generator struct {
 	requiredConversionFunctions map[string]bool // Renamed from requiredHelpers
 	typeInfos                   map[string]*model.TypeInfo
 	customStubs                 map[string]string
+	involvedPackages            map[string]struct{}
 }
 
 func NewGenerator(config *config.Config) *Generator {
@@ -67,6 +68,7 @@ func NewGenerator(config *config.Config) *Generator {
 		aliasMap:                    make(map[string]string),
 		requiredConversionFunctions: make(map[string]bool), // Initialize
 		customStubs:                 make(map[string]string),
+		involvedPackages:            make(map[string]struct{}),
 	}
 	g.namer = NewNamer(config, g.aliasMap)
 	g.converter = NewTypeConverter()
@@ -76,6 +78,11 @@ func NewGenerator(config *config.Config) *Generator {
 func (g *Generator) Generate(typeInfos map[string]*model.TypeInfo) ([]byte, error) {
 	g.typeInfos = typeInfos
 	slog.Debug("Generating code", "type_count", len(g.typeInfos), "rules", len(g.config.ConversionRules))
+
+	// Populate the set of involved packages
+	for _, pkgPath := range g.config.RequiredPackages() {
+		g.involvedPackages[pkgPath] = struct{}{}
+	}
 
 	if len(g.config.ConversionRules) == 0 {
 		g.discoverImplicitConversionRules()
@@ -435,6 +442,13 @@ func (g *Generator) populateAliases() {
 func (g *Generator) createAliasesRecursively(info *model.TypeInfo, isSource, disambiguate bool, visited map[string]struct{}) {
 	if info == nil || (info.UniqueKey() == "" && info.Kind != model.Primitive) {
 		return
+	}
+
+	// Filter out types from packages not involved in the conversion.
+	if info.ImportPath != "" {
+		if _, ok := g.involvedPackages[info.ImportPath]; !ok {
+			return
+		}
 	}
 
 	key := info.UniqueKey()
