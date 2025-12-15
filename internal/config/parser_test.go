@@ -103,13 +103,52 @@ func TestParser_Comprehensive(t *testing.T) {
 			},
 		},
 		{
-			name: "Global Behavior Rules",
+			name: "Merge Custom Func to Existing Conversion Rule",
 			directives: []string{
-				`//go:abgen:convert:alias:generate=true`,
+				`//go:abgen:package:path=builtin,alias=builtin`,
+				`//go:abgen:convert="source=builtin.int,target=builtin.string"`,
+				`//go:abgen:convert:rule="source:builtin.int,target:builtin.string,func:IntStatusToString"`,
 			},
 			expectedConfig: &Config{
-				GlobalBehaviorRules: BehaviorRule{
-					GenerateAlias: true,
+				PackageAliases: map[string]string{
+					"builtin": "builtin",
+				},
+				ConversionRules: []*ConversionRule{
+					{
+						SourceType: "builtin.int",
+						TargetType: "builtin.string",
+						Direction:  DirectionBoth, // Default direction
+						CustomFunc: "IntStatusToString",
+						FieldRules: FieldRuleSet{
+							Ignore: make(map[string]struct{}),
+							Remap:  make(map[string]string),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Convert Rule with Ignore and Remap",
+			directives: []string{
+				`//go:abgen:package:path=github.com/my/project/source,alias=source`,
+				`//go:abgen:package:path=github.com/my/project/target,alias=target`,
+				`//go:abgen:convert="source=source.User,target=target.UserDTO,ignore=Password;CreatedAt,remap=Name:FullName;Email:UserEmail"`,
+			},
+			expectedConfig: &Config{
+				PackageAliases: map[string]string{
+					"source": "github.com/my/project/source",
+					"target": "github.com/my/project/target",
+				},
+				ConversionRules: []*ConversionRule{
+					{
+						SourceType: "github.com/my/project/source.User",
+						TargetType: "github.com/my/project/target.UserDTO",
+						Direction:  DirectionBoth,
+						FieldRules: FieldRuleSet{
+							Ignore: map[string]struct{}{"Password": {}, "CreatedAt": {}},
+							Remap:  map[string]string{"Name": "FullName", "Email": "UserEmail"},
+						},
+					},
 				},
 			},
 		},

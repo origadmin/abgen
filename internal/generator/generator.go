@@ -176,20 +176,24 @@ func (g *Generator) writeAliases() {
 		aliasesToWrite = append(aliasesToWrite, aliasPair{alias, fqn})
 	}
 
-	if len(aliasesToWrite) == 0 {
-		return // No aliases to write, so skip the block entirely
+	validAliases := make([]aliasPair, 0)
+	for _, alias := range aliasesToWrite {
+		if g.typeInfos[alias.fqn] != nil {
+			validAliases = append(validAliases, alias)
+		}
 	}
 
-	sort.Slice(aliasesToWrite, func(i, j int) bool { return aliasesToWrite[i].aliasName < aliasesToWrite[j].aliasName })
+	if len(validAliases) == 0 {
+		return // No valid aliases to write, so skip the block entirely
+	}
+
+	sort.Slice(validAliases, func(i, j int) bool { return validAliases[i].aliasName < validAliases[j].aliasName })
 
 	g.buf.WriteString("// Local type aliases for external types.\n")
 	g.buf.WriteString("type (\n")
 
-	for _, item := range aliasesToWrite {
+	for _, item := range validAliases {
 		typeInfo := g.typeInfos[item.fqn]
-		if typeInfo == nil {
-			continue
-		}
 		pkgAlias := g.importMgr.GetAlias(typeInfo.ImportPath)
 		originalTypeName := fmt.Sprintf("%s.%s", pkgAlias, typeInfo.Name)
 		g.buf.WriteString(fmt.Sprintf("\t%s = %s\n", item.aliasName, originalTypeName))
@@ -373,6 +377,22 @@ func (g *Generator) getConversionExpression(
 			g.importMgr.Add("github.com/google/uuid")
 		}
 		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr)
+	}
+
+	slog.Debug("Entering getConversionExpression",
+		"sourceFQN", sourceKey,
+		"targetFQN", targetKey,
+		"field", sourceField.Name,
+		"customFunctionRules", g.config.CustomFunctionRules)
+
+	// Check for custom function rules from config
+	customFuncKey := sourceKey + "->" + targetKey
+	slog.Debug("Checking for custom function rule", "customFuncKey", customFuncKey, "sourceField", sourceField.Name, "sourceType", sourceType.Name, "targetType", targetType.Name)
+	if customFuncName, ok := g.config.CustomFunctionRules[customFuncKey]; ok {
+		slog.Debug("Found custom function rule", "customFuncKey", customFuncKey, "funcName", customFuncName)
+		// We found a custom function defined by the user for this specific type conversion.
+		// We don't need to add it to requiredConversionFunctions as it's assumed to be user-defined.
+		return fmt.Sprintf("%s(%s)", customFuncName, sourceFieldExpr)
 	}
 
 	// Handle underlying types for named types that are not primitive

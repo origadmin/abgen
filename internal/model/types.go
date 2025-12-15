@@ -46,15 +46,15 @@ type TypeInfo struct {
 }
 
 // UniqueKey returns a string that uniquely identifies the type.
-// For named types, it's the FQN. For primitives, it's the Name.
+// It prioritizes the Fully Qualified Name (FQN) if available, falling back to the type Name otherwise.
+// This ensures consistency for both named types and built-in primitives (e.g., "builtin.int").
 func (ti *TypeInfo) UniqueKey() string {
 	if ti == nil {
 		return ""
 	}
-	if ti.IsNamedType() {
+	if ti.ImportPath != "" && ti.Name != "" {
 		return ti.FQN()
 	}
-	// For primitives and other unnamed types, the name is sufficient.
 	return ti.Name
 }
 
