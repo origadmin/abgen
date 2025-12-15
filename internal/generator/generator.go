@@ -77,15 +77,18 @@ func NewGenerator(config *config.Config) *Generator {
 
 func (g *Generator) Generate(typeInfos map[string]*model.TypeInfo) ([]byte, error) {
 	g.typeInfos = typeInfos
-	slog.Debug("Generating code", "type_count", len(g.typeInfos), "rules", len(g.config.ConversionRules))
+	slog.Debug("Generating code", "type_count", len(g.typeInfos), "initial_rules", len(g.config.ConversionRules))
 
-	// Populate the set of involved packages
+	// Populate the set of involved packages early on.
 	for _, pkgPath := range g.config.RequiredPackages() {
 		g.involvedPackages[pkgPath] = struct{}{}
 	}
 
+	// If no explicit conversion rules are defined, discover them from package pairs.
+	// This is the crucial step to enable `pair:packages` to work.
 	if len(g.config.ConversionRules) == 0 {
 		g.discoverImplicitConversionRules()
+		slog.Debug("Implicit rule discovery finished", "discovered_rules", len(g.config.ConversionRules))
 	}
 
 	g.populateAliases()
@@ -120,17 +123,7 @@ func (g *Generator) CustomStubs() []byte {
 
 	g.importMgr.WriteImportsToBuffer(&buf)
 
-	buf.WriteString("\n// --- Custom Conversion Stubs ---\n")
-	stubNames := make([]string, 0, len(g.customStubs))
-	for name := range g.customStubs {
-		stubNames = append(stubNames, name)
-	}
-	sort.Strings(stubNames)
-
-	for _, name := range stubNames {
-		buf.WriteString(g.customStubs[name])
-		buf.WriteString("\n")
-	}
+	g.writeCustomStubsToBuffer(&buf)
 
 	formatted, err := format.Source(buf.Bytes())
 	if err != nil {
@@ -231,6 +224,23 @@ func (g *Generator) writeHelperFunctions() {
 	}
 }
 
+func (g *Generator) writeCustomStubsToBuffer(buf *bytes.Buffer) {
+	if len(g.customStubs) == 0 {
+		return
+	}
+	buf.WriteString("\n// --- Custom Conversion Stubs ---\n")
+	stubNames := make([]string, 0, len(g.customStubs))
+	for name := range g.customStubs {
+		stubNames = append(stubNames, name)
+	}
+	sort.Strings(stubNames)
+
+	for _, name := range stubNames {
+		buf.WriteString(g.customStubs[name])
+		buf.WriteString("\n")
+	}
+}
+
 func (g *Generator) generateConversionFunction(sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule) {
 	g.doGenerateConversionFunction(sourceInfo, targetInfo, rule, false)
 	if rule.Direction == config.DirectionBoth {
@@ -248,15 +258,62 @@ func (g *Generator) generateConversionFunction(sourceInfo, targetInfo *model.Typ
 }
 
 func (g *Generator) doGenerateConversionFunction(sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule, isReverse bool) {
-	funcName := g.namer.GetFunctionName(sourceInfo, targetInfo)
-	g.buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, g.getTypeString(sourceInfo), g.getTypeString(targetInfo)))
-	g.buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, g.getTypeString(sourceInfo), g.getTypeString(targetInfo)))
-	g.buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n\n")
-	if g.converter.IsStruct(sourceInfo) && g.converter.IsStruct(targetInfo) {
-		g.generateStructToStructConversion(sourceInfo, targetInfo, rule)
-	} else {
-		g.buf.WriteString("\t// TODO: Implement non-struct conversion\n\treturn nil\n")
+	// Check if both types are structs. If not, we might not want to generate a pointer-based conversion.
+	if !g.converter.IsStruct(sourceInfo) || !g.converter.IsStruct(targetInfo) {
+		// For non-struct types (like slices), we generate a value-based conversion.
+		if g.converter.IsSlice(sourceInfo) && g.converter.IsSlice(targetInfo) {
+			funcName := g.namer.GetFunctionName(sourceInfo, targetInfo)
+			g.generateSliceToSliceConversion(funcName, sourceInfo, targetInfo)
+		}
+		// Potentially handle other non-struct, non-slice types here if necessary.
+		return
 	}
+
+	funcName := g.namer.GetFunctionName(sourceInfo, targetInfo)
+	sourceTypeStr := g.getTypeString(sourceInfo)
+	targetTypeStr := g.getTypeString(targetInfo)
+
+	g.buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceTypeStr, targetTypeStr))
+	g.buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, sourceTypeStr, targetTypeStr))
+	g.buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n\n")
+	g.generateStructToStructConversion(sourceInfo, targetInfo, rule)
+	g.buf.WriteString("}\n\n")
+}
+
+func (g *Generator) generateSliceToSliceConversion(funcName string, sourceInfo, targetInfo *model.TypeInfo) {
+	sourceElem := g.converter.GetElementType(sourceInfo)
+	targetElem := g.converter.GetElementType(targetInfo)
+	sourceSliceStr := g.getTypeString(sourceInfo)
+	targetSliceStr := g.getTypeString(targetInfo)
+
+	g.buf.WriteString(fmt.Sprintf("func %s(froms %s) %s {\n", funcName, sourceSliceStr, targetSliceStr))
+	g.buf.WriteString("\tif froms == nil {\n\t\treturn nil\n\t}\n")
+	g.buf.WriteString(fmt.Sprintf("\ttos := make(%s, len(froms))\n", targetSliceStr))
+	g.buf.WriteString("\tfor i, f := range froms {\n")
+
+	elementConverterFunc := g.namer.GetFunctionName(sourceElem, targetElem)
+
+	sourceIsSliceOfPointers := sourceElem.Kind == model.Pointer
+	targetIsSliceOfPointers := targetElem.Kind == model.Pointer
+
+	var callExpr string
+	if sourceIsSliceOfPointers {
+		callExpr = fmt.Sprintf("%s(f)", elementConverterFunc)
+	} else {
+		callExpr = fmt.Sprintf("%s(&f)", elementConverterFunc)
+	}
+
+	if targetIsSliceOfPointers {
+		g.buf.WriteString(fmt.Sprintf("\t\ttos[i] = %s\n", callExpr))
+	} else {
+		g.buf.WriteString(fmt.Sprintf("converted := %s\n", callExpr))
+		g.buf.WriteString("if converted != nil {\n")
+		g.buf.WriteString("tos[i] = *converted\n")
+		g.buf.WriteString("}\n")
+	}
+
+	g.buf.WriteString("\t}\n")
+	g.buf.WriteString("\treturn tos\n")
 	g.buf.WriteString("}\n\n")
 }
 
@@ -354,8 +411,55 @@ func (g *Generator) getConversionExpression(
 ) string {
 	sourceType := sourceField.Type
 	targetType := targetField.Type
-
 	sourceFieldExpr := fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
+
+	// Prioritize slice conversion logic
+	if sourceType.Kind == model.Slice && targetType.Kind == model.Slice {
+		sourceElem := g.converter.GetElementType(sourceType)
+		targetElem := g.converter.GetElementType(targetType)
+
+		if sourceElem != nil && targetElem != nil {
+			// Only proceed if the element types are different, otherwise direct assignment is fine.
+			if sourceElem.UniqueKey() != targetElem.UniqueKey() {
+				sourceSliceStr := g.getTypeString(sourceType)
+				targetSliceStr := g.getTypeString(targetType)
+				elementConverterFunc := g.namer.GetFunctionName(sourceElem, targetElem)
+
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("func(fs %s) %s {\n", sourceSliceStr, targetSliceStr))
+				sb.WriteString("if fs == nil {\nreturn nil\n}\n")
+				sb.WriteString(fmt.Sprintf("ts := make(%s, len(fs))\n", targetSliceStr))
+				sb.WriteString("for i, f := range fs {\n")
+
+				// Correctly handle pointer and value types in the loop
+				sourceIsPointer := sourceElem.Kind == model.Pointer
+				targetIsPointer := targetElem.Kind == model.Pointer
+
+				var callExpr string
+				if sourceIsPointer {
+					callExpr = fmt.Sprintf("%s(f)", elementConverterFunc)
+				} else {
+					// If the source slice contains values, we need to pass the address to the converter
+					callExpr = fmt.Sprintf("%s(&f)", elementConverterFunc)
+				}
+
+				if targetIsPointer {
+					sb.WriteString(fmt.Sprintf("ts[i] = %s\n", callExpr))
+				} else {
+					sb.WriteString(fmt.Sprintf("converted := %s\n", callExpr))
+					sb.WriteString("if converted != nil {\n")
+					sb.WriteString("ts[i] = *converted\n")
+					sb.WriteString("}\n")
+				}
+
+				sb.WriteString("}\n")
+				sb.WriteString("return ts\n")
+				sb.WriteString("}")
+
+				return fmt.Sprintf("%s(%s)", sb.String(), sourceFieldExpr)
+			}
+		}
+	}
 
 	sourceKey := sourceType.UniqueKey()
 	targetKey := targetType.UniqueKey()
@@ -368,7 +472,6 @@ func (g *Generator) getConversionExpression(
 	conversionKey := sourceKey + "->" + targetKey
 	if funcName, ok := conversionFunctions[conversionKey]; ok {
 		g.requiredConversionFunctions[funcName] = true
-		// Add necessary imports for the helper function
 		if strings.Contains(funcName, "Time") {
 			g.importMgr.Add("time")
 		}
@@ -378,19 +481,9 @@ func (g *Generator) getConversionExpression(
 		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr)
 	}
 
-	slog.Debug("Entering getConversionExpression",
-		"sourceFQN", sourceKey,
-		"targetFQN", targetKey,
-		"field", sourceField.Name,
-		"customFunctionRules", g.config.CustomFunctionRules)
-
 	// Check for custom function rules from config
 	customFuncKey := sourceKey + "->" + targetKey
-	slog.Debug("Checking for custom function rule", "customFuncKey", customFuncKey, "sourceField", sourceField.Name, "sourceType", sourceType.Name, "targetType", targetType.Name)
 	if customFuncName, ok := g.config.CustomFunctionRules[customFuncKey]; ok {
-		slog.Debug("Found custom function rule", "customFuncKey", customFuncKey, "funcName", customFuncName)
-		// We found a custom function defined by the user for this specific type conversion.
-		// We don't need to add it to requiredConversionFunctions as it's assumed to be user-defined.
 		return fmt.Sprintf("%s(%s)", customFuncName, sourceFieldExpr)
 	}
 
@@ -415,9 +508,6 @@ func (g *Generator) getConversionExpression(
 		if canDirectlyConvertPrimitives(sourceType.Name, targetType.Name) {
 			return fmt.Sprintf("%s(%s)", g.getTypeString(targetType), sourceFieldExpr)
 		} else {
-			// This case is for non-numeric primitives that need custom logic,
-			// like converting a status string "active" to an integer status 1.
-			// A stub function is generated for the user to implement.
 			stubFuncName := g.namer.GetPrimitiveConversionStubName(parentSource, sourceField, parentTarget, targetField)
 			if _, exists := g.customStubs[stubFuncName]; !exists {
 				g.customStubs[stubFuncName] = generatePrimitiveConversionStub(
@@ -430,8 +520,7 @@ func (g *Generator) getConversionExpression(
 		}
 	}
 
-	// Fallback to generating/using a dedicated conversion function for complex types (structs, slices, etc.)
-	// This is the recursive part of the generation.
+	// Fallback to generating/using a dedicated conversion function for complex types (structs, etc.)
 	funcName := g.namer.GetFunctionName(sourceType, targetType)
 	return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr)
 }
@@ -504,8 +593,13 @@ func (g *Generator) getTypeString(info *model.TypeInfo) string {
 	if info == nil {
 		return "interface{}"
 	}
-	if info.Kind == model.Primitive {
+
+	switch info.Kind {
+	case model.Primitive:
 		return info.Name
+	case model.Slice:
+		elemStr := g.getTypeString(info.Underlying)
+		return "[]" + elemStr
 	}
 
 	key := info.UniqueKey()
@@ -520,35 +614,52 @@ func (g *Generator) getTypeString(info *model.TypeInfo) string {
 		}
 	}
 
-	return info.Name
+	// Fallback for named types that might not have an alias
+	if info.Name != "" {
+		if info.ImportPath != "" && !g.isCurrentPackage(info.ImportPath) {
+			pkgAlias := g.importMgr.GetAlias(info.ImportPath)
+			return fmt.Sprintf("%s.%s", pkgAlias, info.Name)
+		}
+		return info.Name
+	}
+
+	return "interface{}" // Should be rare
 }
 
 func (g *Generator) discoverImplicitConversionRules() {
 	typesByPackage := make(map[string][]*model.TypeInfo)
 	for _, info := range g.typeInfos {
-		if info.IsNamedType() && info.Kind == model.Struct {
+		// We only consider named types for implicit rule discovery.
+		if info.IsNamedType() {
 			typesByPackage[info.ImportPath] = append(typesByPackage[info.ImportPath], info)
 		}
 	}
+
 	for _, pair := range g.config.PackagePairs {
 		sourceTypes := typesByPackage[pair.SourcePath]
 		targetTypes := typesByPackage[pair.TargetPath]
-		sort.Slice(sourceTypes, func(i, j int) bool { return sourceTypes[i].FQN() < sourceTypes[j].FQN() })
-		sort.Slice(targetTypes, func(i, j int) bool { return targetTypes[i].FQN() < targetTypes[j].FQN() })
+
+		// Create a map for quick lookups of target types by name.
+		targetMap := make(map[string]*model.TypeInfo)
+		for _, tt := range targetTypes {
+			targetMap[tt.Name] = tt
+		}
+
 		for _, sourceType := range sourceTypes {
-			for _, targetType := range targetTypes {
-				if sourceType.Name == targetType.Name {
-					rule := &config.ConversionRule{
-						SourceType: sourceType.FQN(),
-						TargetType: targetType.FQN(),
-						Direction:  config.DirectionBoth,
-						FieldRules: config.FieldRuleSet{Ignore: make(map[string]struct{}), Remap: make(map[string]string)},
-					}
-					g.config.ConversionRules = append(g.config.ConversionRules, rule)
+			// If a matching type name exists in the target package, create a rule.
+			if targetType, ok := targetMap[sourceType.Name]; ok {
+				rule := &config.ConversionRule{
+					SourceType: sourceType.FQN(),
+					TargetType: targetType.FQN(),
+					Direction:  config.DirectionBoth, // Default to 'both' for implicit rules.
+					FieldRules: config.FieldRuleSet{Ignore: make(map[string]struct{}), Remap: make(map[string]string)},
 				}
+				g.config.ConversionRules = append(g.config.ConversionRules, rule)
 			}
 		}
 	}
+
+	// Sort the rules for consistent generation order.
 	sort.Slice(g.config.ConversionRules, func(i, j int) bool {
 		if g.config.ConversionRules[i].SourceType != g.config.ConversionRules[j].SourceType {
 			return g.config.ConversionRules[i].SourceType < g.config.ConversionRules[j].SourceType

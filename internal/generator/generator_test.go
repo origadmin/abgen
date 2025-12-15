@@ -40,10 +40,10 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 		name           string
 		directivePath  string
 		goldenFileName string
-		dependencies   []string                 // These are now hints for directive parsing, not direct load patterns
-		priority       string                   // P0, P1, P2 for prioritization
-		category       string                   // Test category for organization
-		assertFunc     func(*testing.T, []byte) // Custom assertion function for detailed checks
+		dependencies   []string // These are now hints for directive parsing, not direct load patterns
+		priority       string   // P0, P1, P2 for prioritization
+		category       string   // Test category for organization
+		assertFunc     func(t *testing.T, generatedCode []byte, stubCode []byte)
 	}{
 		// === 02_basic_conversions: Basic Struct Conversion ===
 		{
@@ -55,7 +55,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			},
 			priority: "P0",
 			category: "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 				generatedStr := string(generatedCode)
 				// Check forward conversion (User -> UserDTO)
 				assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
@@ -77,7 +77,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			},
 			priority: "P0",
 			category: "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 				generatedStr := string(generatedCode)
 				// Check forward and reverse conversion for User
 				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget\(from \*UserSource\) \*UserTarget`)
@@ -106,16 +106,17 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			},
 			priority: "P0",
 			category: "basic_conversions",
-			            assertFunc: func(t *testing.T, generatedCode []byte) {
-			                generatedStr := string(generatedCode)
-			                // Check forward conversion (User -> UserDTO)
-			                assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
-			                assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
-			                assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
-			
-			                // Check that reverse conversion (UserDTO -> User) does NOT exist
-			                assertNotContainsPattern(t, generatedStr, `func ConvertUserDTOToUser`)
-			            },		},
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+				generatedStr := string(generatedCode)
+				// Check forward conversion (User -> UserDTO)
+				assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
+				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
+				assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
+
+				// Check that reverse conversion (UserDTO -> User) does NOT exist
+				assertNotContainsPattern(t, generatedStr, `func ConvertUserDTOToUser`)
+			},
+		},
 		{
 			name:          "id_to_id_field_conversion",
 			directivePath: "../../testdata/02_basic_conversions/id_to_id_field_conversion",
@@ -125,7 +126,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			},
 			priority: "P0",
 			category: "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 				generatedStr := string(generatedCode)
 				// Check forward conversion (source.User.Id -> target.User.ID)
 				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget\(from \*UserSource\) \*UserTarget`)
@@ -144,7 +145,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			dependencies:  baseDependencies,
 			priority:      "P0",
 			category:      "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 				generatedStr := string(generatedCode)
 
 				// Expected helper functions (from generator.go's conversionFunctionBodies)
@@ -183,7 +184,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			dependencies:  baseDependencies,
 			priority:      "P0",
 			category:      "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 				generatedStr := string(generatedCode)
 
 				// Helper functions
@@ -223,7 +224,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			},
 			priority: "P0",
 			category: "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 				generatedStr := string(generatedCode)
 				// Assertions for ConvertUserToUserDTO
 				assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
@@ -237,6 +238,40 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`) // Corrected to `ID` as in generated code and `Id` for source
 				assertContainsPattern(t, generatedStr, `LastUpdate:\s+from.UpdatedAt,`) // The generator directly assigns time.Time fields when compatible.
 				assertNotContainsPattern(t, generatedStr, `CreatedDate:`) // It shouldn't be explicitly assigned if no source
+			},
+		},
+		{
+			name:           "slice_conversion",
+			directivePath:  "../../testdata/02_basic_conversions/slice_conversion",
+			goldenFileName: "expected.golden",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/slice_conversion/source",
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/slice_conversion/target",
+			},
+			priority: "P0",
+			category: "basic_conversions",
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+				generatedStr := string(generatedCode)
+				// Check forward conversion for Order
+				assertContainsPattern(t, generatedStr, `func ConvertOrderSourceToOrderTarget\(from \*OrderSource\) \*OrderTarget`)
+				// Check that the Items field is converted using a loop and the single-item converter
+				assertContainsPattern(t, generatedStr, `Items: func\(fs \[\]\*ItemSource\) \[\]\*ItemTarget {`) // Check for inline func or helper
+				assertContainsPattern(t, generatedStr, `ts := make\(\[\]\*ItemTarget, len\(fs\)\)`)
+				assertContainsPattern(t, generatedStr, `ts\[i\] = ConvertItemSourceToItemTarget\(f\)`)
+
+				// Check reverse conversion for Order
+				assertContainsPattern(t, generatedStr, `func ConvertOrderTargetToOrderSource\(from \*OrderTarget\) \*OrderSource`)
+				assertContainsPattern(t, generatedStr, `Items: func\(fs \[\]\*ItemTarget\) \[\]\*ItemSource {`)
+				assertContainsPattern(t, generatedStr, `ts := make\(\[\]\*ItemSource, len\(fs\)\)`)
+				assertContainsPattern(t, generatedStr, `ts\[i\] = ConvertItemTargetToItemSource\(f\)`)
+
+				// Check that the individual item converters are generated
+				assertContainsPattern(t, generatedStr, `func ConvertItemSourceToItemTarget\(from \*ItemSource\) \*ItemTarget`)
+				assertContainsPattern(t, generatedStr, `func ConvertItemTargetToItemSource\(from \*ItemTarget\) \*ItemSource`)
+
+				// Check that the old, verbose slice helper functions are NOT generated
+				assertNotContainsPattern(t, generatedStr, `func ConvertItemSourceSliceToItemTargetSlice`)
+				assertNotContainsPattern(t, generatedStr, `func ConvertItemTargetSliceToItemSourceSlice`)
 			},
 		},
 
@@ -259,13 +294,16 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			},
 			priority: "P0",
 			category: "advanced_features",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 				generatedStr := string(generatedCode)
+				stubStr := string(stubCode)
 				slog.Debug("Generated code inside custom_function_rules assertFunc", "code", generatedStr)
 				// Assertions for ConvertUserToUserCustom
 				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserStatusToUserCustomStatus\(from.Status\),`)
 				// Assertions for ConvertUserCustomToUser
-				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserCustomToUserStatus\(from.Status\),`)
+				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserCustomStatusToUserStatus\(from.Status\),`)
+				// Assert that the stub function is generated in the stub file
+				assertContainsPattern(t, stubStr, `func ConvertUserStatusToUserCustomStatus\(from int\) string`)
 			},
 		},
 		{
@@ -288,7 +326,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				"github.com/origadmin/abgen/testdata/03_advanced_features/enum_string_to_int/target",
 			}, priority: "P1",
 			category:    "advanced_features",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 				t.Log("TODO: Add specific assertions for enum_string_to_int")
 			},
 
@@ -305,7 +343,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 
 			priority: "P1",
 			category: "advanced_features",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 				t.Log("TODO: Add specific assertions for pointer_conversions")
 			},
 
@@ -321,7 +359,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			},
 			priority: "P1",
 			category: "advanced_features",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 				t.Log("TODO: Add specific assertions for map_conversions")
 			},
 
@@ -337,7 +375,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			},
 			priority: "P1",
 			category: "advanced_features",
-			assertFunc: func(t *testing.T, generatedCode []byte) {
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 				t.Log("TODO: Add specific assertions for numeric_conversions")
 			},
 
@@ -426,6 +464,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Generate() failed for test case %s: %v", tc.name, err)
 			}
+			stubCode := g.CustomStubs()
 
 			// Normalize path separators in generated code for consistent comparison across OS.
 			// The `source` comment line uses paths that might differ by OS.
@@ -437,11 +476,16 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			if tc.assertFunc != nil {
 				// Create a subtest to capture failures more clearly
 				t.Run(tc.name+"_Assertions", func(st *testing.T) {
-					tc.assertFunc(st, generatedCode)
+					tc.assertFunc(st, generatedCode, stubCode)
 					if st.Failed() {
 						actualOutputFile := filepath.Join(tc.directivePath, "failed.actual.gen.go")
 						_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
 						st.Logf("Assertion failed for '%s'. Generated output saved to %s for inspection.", tc.name, actualOutputFile)
+						if len(stubCode) > 0 {
+							actualStubFile := filepath.Join(tc.directivePath, "failed.actual.stub.go")
+							_ = os.WriteFile(actualStubFile, stubCode, 0644)
+							st.Logf("Stub output saved to %s for inspection.", actualStubFile)
+						}
 					} else {
 						actualOutputFile := filepath.Join(tc.directivePath, "success.actual.gen.go")
 						_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
@@ -521,6 +565,7 @@ func cleanTestFiles(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatalf("Failed to glob for generated files in %s: %v", dir, err)
 	}
+	files = append(files, filepath.Join(dir, "failed.actual.stub.go"))
 	for _, f := range files {
 		if err := os.Remove(f); err != nil {
 			// Change from t.Fatalf to t.Logf to prevent flaky tests on Windows due to file locks.

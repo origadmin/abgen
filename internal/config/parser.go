@@ -39,7 +39,7 @@ func (p *Parser) Parse(sourceDir string) (*Config, error) {
 	p.config.GenerationContext.DirectivePath = sourceDir
 
 	initialLoaderCfg := &packages.Config{
-		Mode:       packages.NeedName | packages.NeedSyntax | packages.NeedFiles | packages.NeedModule | packages.NeedTypes | packages.NeedTypesInfo, // FIX: Added packages.NeedTypesInfo
+		Mode:       packages.NeedName | packages.NeedSyntax | packages.NeedFiles | packages.NeedModule | packages.NeedTypes | packages.NeedTypesInfo,
 		Dir:        sourceDir,
 		Tests:      false,
 		BuildFlags: []string{"-tags=abgen_source"},
@@ -68,12 +68,10 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 	p.config.GenerationContext.PackageName = pkg.Name
 	p.config.GenerationContext.PackagePath = pkg.ID
 
-	// Extract existing type aliases from source code
 	p.extractExistingAliases(pkg)
 
 	var directives []string
 	for _, file := range pkg.Syntax {
-		// Collect directives
 		for _, commentGroup := range file.Comments {
 			for _, comment := range commentGroup.List {
 				if strings.HasPrefix(comment.Text, "//go:abgen:") {
@@ -83,8 +81,11 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 		}
 	}
 
+	// No directives is not an error, it might just mean no conversions are needed.
+	// The generator should handle this gracefully.
 	if len(directives) == 0 {
-		return nil, fmt.Errorf("no abgen directives found in package %s", pkg.ID)
+		slog.Warn("no abgen directives found, no code will be generated", "package", pkg.ID)
+		return p.config, nil
 	}
 
 	for _, directive := range directives {
@@ -148,12 +149,14 @@ func (p *Parser) resolvePackagePath(identifier string) string {
 	if path, ok := p.config.PackageAliases[identifier]; ok {
 		return path
 	}
+	// Assume it's a full path if not found in aliases
 	return identifier
 }
 
 func (p *Parser) parsePackagePairs(value string) {
 	pair := strings.Split(value, ",")
 	if len(pair) != 2 {
+		slog.Warn("invalid pair:packages directive, expected two comma-separated values", "value", value)
 		return
 	}
 	sourceIdentifier, targetIdentifier := strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1])
@@ -161,6 +164,7 @@ func (p *Parser) parsePackagePairs(value string) {
 	targetPath := p.resolvePackagePath(targetIdentifier)
 	if sourcePath != "" && targetPath != "" {
 		p.config.PackagePairs = append(p.config.PackagePairs, &PackagePair{SourcePath: sourcePath, TargetPath: targetPath})
+		slog.Debug("Registered package pair", "source", sourcePath, "target", targetPath)
 	}
 }
 
@@ -244,7 +248,8 @@ func (p *Parser) mergeCustomFuncRules() {
 func (p *Parser) resolveTypeFQN(typeStr string) string {
 	lastDot := strings.LastIndex(typeStr, ".")
 	if lastDot == -1 {
-		return typeStr
+		// Assume it's a type in the current package if no package identifier is present
+		return p.config.GenerationContext.PackagePath + "." + typeStr
 	}
 	packageIdentifier := typeStr[:lastDot]
 	typeName := typeStr[lastDot+1:]
