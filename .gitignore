@@ -804,5 +804,5 @@ sketch
 
 # typescript
 next-env.d.ts
-* . a c t u a l . g e n . g o  
- 
+*.gen.go
+

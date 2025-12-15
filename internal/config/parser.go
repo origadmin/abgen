@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	slog "log/slog"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -140,6 +141,7 @@ func (p *Parser) parsePackagePath(value string) {
 		alias = path[strings.LastIndex(path, "/")+1:]
 	}
 	p.config.PackageAliases[alias] = path
+	slog.Debug("Registered package alias", "alias", alias, "path", path)
 }
 
 func (p *Parser) resolvePackagePath(identifier string) string {
