@@ -15,16 +15,16 @@ import (
 // Local type aliases for external types.
 type (
 	User    = source.User
-	UserDTO = target.UserDTO
+	Userdto = target.UserDTO
 )
 
-// ConvertUserToUserDTO converts User to UserDTO
-func ConvertUserToUserDTO(from *User) *UserDTO {
+// ConvertUserToUserdto converts User to Userdto
+func ConvertUserToUserdto(from *User) *Userdto {
 	if from == nil {
 		return nil
 	}
 
-	to := &UserDTO{
+	to := &Userdto{
 		ID:         from.ID,
 		FullName:   from.Name,
 		UserEmail:  from.Email,
@@ -33,8 +33,8 @@ func ConvertUserToUserDTO(from *User) *UserDTO {
 	return to
 }
 
-// ConvertUserDTOToUser converts UserDTO to User
-func ConvertUserDTOToUser(from *UserDTO) *User {
+// ConvertUserdtoToUser converts Userdto to User
+func ConvertUserdtoToUser(from *Userdto) *User {
 	if from == nil {
 		return nil
 	}

@@ -70,8 +70,8 @@ func NewGenerator(config *config.Config) *Generator {
 		customStubs:                 make(map[string]string),
 		involvedPackages:            make(map[string]struct{}),
 	}
-	g.namer = NewNamer(config, g.aliasMap)
-	g.converter = NewTypeConverter()
+	g.converter = NewTypeConverter() // Initialize converter before passing to Namer
+	g.namer = NewNamer(config, g.aliasMap) // Pass converter to Namer
 	return g
 }
 
@@ -186,8 +186,29 @@ func (g *Generator) writeAliases() {
 
 	for _, item := range validAliases {
 		typeInfo := g.typeInfos[item.fqn]
-		pkgAlias := g.importMgr.GetAlias(typeInfo.ImportPath)
-		originalTypeName := fmt.Sprintf("%s.%s", pkgAlias, typeInfo.Name)
+		var originalTypeName string
+		if typeInfo.IsNamedType() {
+			pkgAlias := g.importMgr.GetAlias(typeInfo.ImportPath)
+			originalTypeName = fmt.Sprintf("%s.%s", pkgAlias, typeInfo.Name)
+		} else {
+			// For composite types (like slices), construct the original type string directly
+			// to avoid recursive alias definitions (e.g., ItemsSource = ItemsSource).
+			if typeInfo.Kind == model.Slice {
+				// Construct as []pkg.Type or []AliasType
+				originalTypeName = "[]" + g.getTypeString(typeInfo.Underlying)
+			} else if typeInfo.Kind == model.Array {
+				originalTypeName = fmt.Sprintf("[%d]%s", typeInfo.ArrayLen, g.getTypeString(typeInfo.Underlying))
+			} else if typeInfo.Kind == model.Pointer {
+				originalTypeName = "*" + g.getTypeString(typeInfo.Underlying)
+			} else if typeInfo.Kind == model.Map {
+				keyStr := g.getTypeString(typeInfo.KeyType)
+				valStr := g.getTypeString(typeInfo.Underlying)
+				originalTypeName = fmt.Sprintf("map[%s]%s", keyStr, valStr)
+			} else {
+				// Fallback for other composite types if needed, or if getTypeString is intended to handle them
+				originalTypeName = g.getTypeString(typeInfo)
+			}
+		}
 		g.buf.WriteString(fmt.Sprintf("\t%s = %s\n", item.aliasName, originalTypeName))
 	}
 	g.buf.WriteString(")\n\n")
@@ -286,24 +307,26 @@ func (g *Generator) generateSliceToSliceConversion(funcName string, sourceInfo, 
 	sourceSliceStr := g.getTypeString(sourceInfo)
 	targetSliceStr := g.getTypeString(targetInfo)
 
+	g.buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceSliceStr, targetSliceStr)) // Add comment for helper
 	g.buf.WriteString(fmt.Sprintf("func %s(froms %s) %s {\n", funcName, sourceSliceStr, targetSliceStr))
-	g.buf.WriteString("\tif froms == nil {\n\t\treturn nil\n\t}\n")
+	g.buf.WriteString("\tif froms == nil {\n\t\treturn nil\t}\n")
 	g.buf.WriteString(fmt.Sprintf("\ttos := make(%s, len(froms))\n", targetSliceStr))
 	g.buf.WriteString("\tfor i, f := range froms {\n")
 
 	elementConverterFunc := g.namer.GetFunctionName(sourceElem, targetElem)
 
-	sourceIsSliceOfPointers := sourceElem.Kind == model.Pointer
-	targetIsSliceOfPointers := targetElem.Kind == model.Pointer
+	sourceIsPointer := sourceElem.Kind == model.Pointer
+	targetIsPointer := targetElem.Kind == model.Pointer
 
 	var callExpr string
-	if sourceIsSliceOfPointers {
+	if sourceIsPointer {
 		callExpr = fmt.Sprintf("%s(f)", elementConverterFunc)
 	} else {
+		// If the source slice contains values, we need to pass the address to the converter
 		callExpr = fmt.Sprintf("%s(&f)", elementConverterFunc)
 	}
 
-	if targetIsSliceOfPointers {
+	if targetIsPointer {
 		g.buf.WriteString(fmt.Sprintf("\t\ttos[i] = %s\n", callExpr))
 	} else {
 		g.buf.WriteString(fmt.Sprintf("converted := %s\n", callExpr))
@@ -346,6 +369,7 @@ func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *mod
 			}
 		}
 		if targetField != nil {
+			// Corrected: Pass targetField (which is *model.FieldInfo) to getConversionExpression
 			conversionExpr := g.getConversionExpression(sourceInfo, sourceField, targetInfo, targetField, "from")
 			g.buf.WriteString(fmt.Sprintf("\t\t%s: %s,\n", targetField.Name, conversionExpr))
 		}
@@ -406,11 +430,11 @@ func %s(from %s) %s {
 
 func (g *Generator) getConversionExpression(
 	parentSource *model.TypeInfo, sourceField *model.FieldInfo,
-	parentTarget *model.TypeInfo, targetField *model.FieldInfo,
+	parentTarget *model.TypeInfo, targetField *model.FieldInfo, // Corrected: targetField is now *model.FieldInfo
 	fromVar string,
 ) string {
 	sourceType := sourceField.Type
-	targetType := targetField.Type
+	targetType := targetField.Type // Corrected: targetField is *model.FieldInfo, so targetField.Type is *model.TypeInfo
 	sourceFieldExpr := fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
 
 	// Prioritize slice conversion logic
@@ -421,42 +445,11 @@ func (g *Generator) getConversionExpression(
 		if sourceElem != nil && targetElem != nil {
 			// Only proceed if the element types are different, otherwise direct assignment is fine.
 			if sourceElem.UniqueKey() != targetElem.UniqueKey() {
-				sourceSliceStr := g.getTypeString(sourceType)
-				targetSliceStr := g.getTypeString(targetType)
-				elementConverterFunc := g.namer.GetFunctionName(sourceElem, targetElem)
+				// Get the name of the dedicated slice conversion helper function
+				sliceConverterFuncName := g.namer.GetFunctionName(sourceType, targetType)
 
-				var sb strings.Builder
-				sb.WriteString(fmt.Sprintf("func(fs %s) %s {\n", sourceSliceStr, targetSliceStr))
-				sb.WriteString("if fs == nil {\nreturn nil\n}\n")
-				sb.WriteString(fmt.Sprintf("ts := make(%s, len(fs))\n", targetSliceStr))
-				sb.WriteString("for i, f := range fs {\n")
-
-				// Correctly handle pointer and value types in the loop
-				sourceIsPointer := sourceElem.Kind == model.Pointer
-				targetIsPointer := targetElem.Kind == model.Pointer
-
-				var callExpr string
-				if sourceIsPointer {
-					callExpr = fmt.Sprintf("%s(f)", elementConverterFunc)
-				} else {
-					// If the source slice contains values, we need to pass the address to the converter
-					callExpr = fmt.Sprintf("%s(&f)", elementConverterFunc)
-				}
-
-				if targetIsPointer {
-					sb.WriteString(fmt.Sprintf("ts[i] = %s\n", callExpr))
-				} else {
-					sb.WriteString(fmt.Sprintf("converted := %s\n", callExpr))
-					sb.WriteString("if converted != nil {\n")
-					sb.WriteString("ts[i] = *converted\n")
-					sb.WriteString("}\n")
-				}
-
-				sb.WriteString("}\n")
-				sb.WriteString("return ts\n")
-				sb.WriteString("}")
-
-				return fmt.Sprintf("%s(%s)", sb.String(), sourceFieldExpr)
+				// Return the call to the dedicated helper function
+				return fmt.Sprintf("%s(%s)", sliceConverterFuncName, sourceFieldExpr)
 			}
 		}
 	}
@@ -508,6 +501,7 @@ func (g *Generator) getConversionExpression(
 		if canDirectlyConvertPrimitives(sourceType.Name, targetType.Name) {
 			return fmt.Sprintf("%s(%s)", g.getTypeString(targetType), sourceFieldExpr)
 		} else {
+			// Corrected: Pass targetField (which is *model.FieldInfo) to GetPrimitiveConversionStubName
 			stubFuncName := g.namer.GetPrimitiveConversionStubName(parentSource, sourceField, parentTarget, targetField)
 			if _, exists := g.customStubs[stubFuncName]; !exists {
 				g.customStubs[stubFuncName] = generatePrimitiveConversionStub(
@@ -569,7 +563,26 @@ func (g *Generator) createAliasesRecursively(info *model.TypeInfo, isSource, dis
 		} else {
 			g.aliasMap[key] = alias
 		}
+	} else if info.Kind == model.Slice { // Handle non-named slice types
+		// Ensure the underlying element type has an alias first
+		if info.Underlying != nil {
+			g.createAliasesRecursively(info.Underlying, isSource, disambiguate, visited)
+		}
+		
+		// Create an alias for the slice type itself, based on its element's alias
+		if info.Underlying != nil && info.Underlying.UniqueKey() != "" {
+			// Get the base name of the element type, pluralize it, and then apply naming rules.
+			elemBaseName := info.Underlying.Name
+			pluralElemBaseName := elemBaseName + "s" // Simple pluralization for now.
+
+			sliceAlias := g.namer.getFinalAlias(pluralElemBaseName, isSource, disambiguate)
+			sliceKey := "[]" + info.Underlying.UniqueKey()
+			if _, exists := g.aliasMap[sliceKey]; !exists {
+				g.aliasMap[sliceKey] = sliceAlias
+			}
+		}
 	}
+
 
 	if info.ImportPath != "" && !g.isCurrentPackage(info.ImportPath) {
 		g.importMgr.Add(info.ImportPath)
@@ -595,6 +608,18 @@ func (g *Generator) createAliasesRecursively(info *model.TypeInfo, isSource, dis
 	}
 }
 
+func (g *Generator) getAliasedName(info *model.TypeInfo) string {
+	key := info.UniqueKey()
+	if alias, ok := g.aliasMap[key]; ok {
+		return alias
+	}
+	if alias, ok := g.config.ExistingAliases[key]; ok {
+		return alias
+	}
+	return info.Name // Fallback to base name if no alias found
+}
+
+
 func (g *Generator) getTypeString(info *model.TypeInfo) string {
 	if info == nil {
 		return "interface{}"
@@ -606,6 +631,11 @@ func (g *Generator) getTypeString(info *model.TypeInfo) string {
 		case model.Primitive:
 			return info.Name
 		case model.Slice:
+			// If an alias exists for the slice type itself, use it.
+			sliceKey := "[]" + info.Underlying.UniqueKey()
+			if alias, ok := g.aliasMap[sliceKey]; ok {
+				return alias
+			}
 			return "[]" + g.getTypeString(info.Underlying)
 		case model.Pointer:
 			return "*" + g.getTypeString(info.Underlying)
@@ -646,6 +676,9 @@ func (g *Generator) discoverImplicitConversionRules() {
 		}
 	}
 
+	// Store initially discovered rules to then process slice types
+	var initialRules []*config.ConversionRule
+
 	for _, pair := range g.config.PackagePairs {
 		sourceTypes := typesByPackage[pair.SourcePath]
 		targetTypes := typesByPackage[pair.TargetPath]
@@ -660,14 +693,43 @@ func (g *Generator) discoverImplicitConversionRules() {
 			// If a matching type name exists in the target package, create a rule.
 			if targetType, ok := targetMap[sourceType.Name]; ok {
 				rule := &config.ConversionRule{
-					SourceType: sourceType.FQN(),
-					TargetType: targetType.FQN(),
-					Direction:  config.DirectionBoth, // Default to 'both' for implicit rules.
+					SourceType: sourceType.UniqueKey(), // Use UniqueKey() for named types too for consistency
+					TargetType: targetType.UniqueKey(), // Use UniqueKey()
+					Direction:  config.DirectionBoth,    // Default to 'both' for implicit rules.
 					FieldRules: config.FieldRuleSet{Ignore: make(map[string]struct{}), Remap: make(map[string]string)},
 				}
-				g.config.ConversionRules = append(g.config.ConversionRules, rule)
+				initialRules = append(initialRules, rule)
 			}
 		}
+	}
+
+	g.config.ConversionRules = append(g.config.ConversionRules, initialRules...)
+
+	// Now, generate rules for slice types based on the initial named type rules
+	for _, rule := range initialRules {
+		sourceInfo := g.typeInfos[rule.SourceType]
+		targetInfo := g.typeInfos[rule.TargetType]
+
+		// Create slice TypeInfo for source and target
+		sourceSliceType := &model.TypeInfo{
+			Kind:       model.Slice,
+			Underlying: sourceInfo,
+		}
+		targetSliceType := &model.TypeInfo{
+			Kind:       model.Slice,
+			Underlying: targetInfo,
+		}
+		// Add these newly created TypeInfo objects to g.typeInfos so they can be looked up later.
+		g.typeInfos[sourceSliceType.UniqueKey()] = sourceSliceType
+		g.typeInfos[targetSliceType.UniqueKey()] = targetSliceType
+
+		// Add rule for slice conversion
+		sliceRule := &config.ConversionRule{
+			SourceType: sourceSliceType.UniqueKey(),
+			TargetType: targetSliceType.UniqueKey(),
+			Direction:  config.DirectionBoth, // Always generate both directions for slice helpers
+		}
+		g.config.ConversionRules = append(g.config.ConversionRules, sliceRule)
 	}
 
 	// Sort the rules for consistent generation order.

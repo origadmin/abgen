@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strings" // Import the strings package
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
+
 	"github.com/origadmin/abgen/internal/config"
 	"github.com/origadmin/abgen/internal/model"
 )
@@ -48,58 +51,65 @@ func (n *Namer) GetPrimitiveConversionStubName(
 	)
 }
 
-// GetAlias generates a type alias based on the naming rules.
-func (n *Namer) GetAlias(info *model.TypeInfo, isSource, disambiguate bool) string {
-	// If it's a primitive type, we don't apply any prefixes/suffixes from naming rules.
-	if info.Kind == model.Primitive {
-		return info.Name
-	}
-
-	baseName := info.Name
+func (n *Namer) getFinalAlias(baseName string, isSource, disambiguate bool) string {
+	alias := baseName // baseName is already Title-cased (e.g., "Item", "Order", "Items")
 	var prefix, suffix string
-
-	// Determine if any specific rule is set for either source or target.
-	anySourceRule := n.config.NamingRules.SourcePrefix != "" || n.config.NamingRules.SourceSuffix != ""
-	anyTargetRule := n.config.NamingRules.TargetPrefix != "" || n.config.NamingRules.TargetSuffix != ""
-	anySpecificRule := anySourceRule || anyTargetRule
 
 	if isSource {
 		prefix = n.config.NamingRules.SourcePrefix
 		suffix = n.config.NamingRules.SourceSuffix
-		// If there are NO specific rules AT ALL, and we need to disambiguate, add "Source".
-		if !anySpecificRule && disambiguate {
-			suffix = "Source"
-		}
 	} else { // is Target
 		prefix = n.config.NamingRules.TargetPrefix
 		suffix = n.config.NamingRules.TargetSuffix
-		// If there are NO specific rules AT ALL, and we need to disambiguate, add "Target".
-		if !anySpecificRule && disambiguate {
-			suffix = "Target"
-		}
 	}
 
-	return prefix + baseName + suffix
+	// Apply configured prefix and suffix
+	alias = prefix + alias + suffix
+
+	// If disambiguation is needed and not already handled by a config suffix/prefix,
+	// apply default disambiguation suffix.
+	if disambiguate {
+		if isSource && n.config.NamingRules.SourceSuffix == "" && n.config.NamingRules.SourcePrefix == "" {
+			alias += "Source"
+		} else if !isSource && n.config.NamingRules.TargetSuffix == "" && n.config.NamingRules.TargetPrefix == "" {
+			alias += "Target"
+		}
+	}
+	return alias
 }
 
+// GetAlias generates a suitable alias for a given TypeInfo.
+func (n *Namer) GetAlias(info *model.TypeInfo, isSource, disambiguate bool) string {
+	if info.Kind == model.Primitive {
+		return info.Name
+	}
+
+	var baseName string
+	if info.Kind == model.Slice && info.Underlying != nil {
+		// For slices, take the base name of the underlying element, pluralize it.
+		baseName = cases.Title(language.English).String(info.Underlying.Name) + "s" // e.g., "Items"
+	} else {
+		// For named types, just take its name.
+		baseName = cases.Title(language.English).String(info.Name) // e.g., "Item", "Order"
+	}
+
+	return n.getFinalAlias(baseName, isSource, disambiguate)
+}
 // getAliasedOrBaseName returns the alias if it exists, otherwise returns the base name.
 // For primitive types, it returns the capitalized primitive name.
 func (n *Namer) getAliasedOrBaseName(info *model.TypeInfo) string {
+	if info == nil {
+		return ""
+	}
+	// For primitives, just return the name as is. Capitalization will be handled by GetFunctionName.
 	if info.Kind == model.Primitive {
-		return strings.Title(info.Name) // Capitalize primitive names
+		return info.Name
 	}
 
-	fqn := info.FQN()
-	if fqn == "" {
-		// This case should ideally not be hit for non-primitive types if TypeInfo is well-formed.
-		// For safety, return capitalized name if it's a primitive that somehow slipped through.
-		if info.Kind == model.Primitive {
-			return strings.Title(info.Name)
-		}
-		return info.Name // Fallback for unnamed non-primitives
-	}
-	if alias, ok := n.aliasMap[fqn]; ok {
+	key := info.UniqueKey() // Use UniqueKey() for all types, including slices
+
+	if alias, ok := n.aliasMap[key]; ok {
 		return alias
 	}
-	return info.Name
+	return info.Name // Fallback to base name if no alias found
 }

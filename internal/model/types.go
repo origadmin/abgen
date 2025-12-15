@@ -52,10 +52,61 @@ func (ti *TypeInfo) UniqueKey() string {
 	if ti == nil {
 		return ""
 	}
+
+	// For named types, FQN is the most stable unique key.
 	if ti.ImportPath != "" && ti.Name != "" {
 		return ti.FQN()
 	}
-	return ti.Name
+
+	// For composite types, build a recursive unique key.
+	var sb strings.Builder
+	switch ti.Kind {
+	case Slice:
+		sb.WriteString("[]")
+		if ti.Underlying != nil {
+			sb.WriteString(ti.Underlying.UniqueKey())
+		} else {
+			sb.WriteString("interface{}") // Should not happen for valid types
+		}
+	case Array:
+		sb.WriteString(fmt.Sprintf("[%d]", ti.ArrayLen))
+		if ti.Underlying != nil {
+			sb.WriteString(ti.Underlying.UniqueKey())
+		} else {
+			sb.WriteString("interface{}") // Should not happen for valid types
+		}
+	case Pointer:
+		sb.WriteString("*")
+		if ti.Underlying != nil {
+			sb.WriteString(ti.Underlying.UniqueKey())
+		} else {
+			sb.WriteString("interface{}") // Should not happen for valid types
+		}
+	case Map:
+		sb.WriteString("map[")
+		if ti.KeyType != nil {
+			sb.WriteString(ti.KeyType.UniqueKey())
+		} else {
+			sb.WriteString("interface{}") // Should not happen for valid types
+		}
+		sb.WriteString("]")
+		if ti.Underlying != nil {
+			sb.WriteString(ti.Underlying.UniqueKey())
+		} else {
+			sb.WriteString("interface{}") // Should not happen for valid types
+		}
+	case Primitive:
+		return ti.Name
+	default:
+		// Fallback for other kinds, though they should ideally be handled explicitly
+		// or covered by the FQN case if they are named types.
+		if ti.Name != "" {
+			return ti.Name
+		}
+		slog.Warn("UniqueKey for unhandled TypeInfo kind", "kind", ti.Kind.String(), "info", fmt.Sprintf("%+v", ti))
+		return fmt.Sprintf("unhandled_%s_%p", ti.Kind.String(), ti)
+	}
+	return sb.String()
 }
 
 // String returns a string representation of the type.

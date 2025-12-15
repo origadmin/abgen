@@ -14,15 +14,113 @@ import (
 
 // Local type aliases for external types.
 type (
-	Resource      = ent.Resource
-	ResourceAlias = types.Resource
-	ResourceEdges = ent.ResourceEdges
-	Role          = ent.Role
-	RoleAlias     = types.Role
-	Time          = time.Time
-	User          = ent.User
-	UserAlias     = types.User
+	Permission         = ent.Permission
+	Permissionresource = ent.PermissionResource
+	Resource           = ent.Resource
+	ResourceAlias      = types.Resource
+	Resourceedges      = ent.ResourceEdges
+	Resources          = []Resource
+	ResourcesAlias     = []ResourceAlias
+	Role               = ent.Role
+	RoleAlias          = types.Role
+	Roles              = []Role
+	RolesAlias         = []RoleAlias
+	Time               = time.Time
+	User               = ent.User
+	UserAlias          = types.User
+	Users              = []User
+	UsersAlias         = []UserAlias
 )
+
+// ConvertResourcesToResourcesAlias converts Resources to ResourcesAlias
+func ConvertResourcesToResourcesAlias(froms Resources) ResourcesAlias {
+	if froms == nil {
+		return nil
+	}
+	tos := make(ResourcesAlias, len(froms))
+	for i, f := range froms {
+		converted := ConvertResourceToResourceAlias(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
+
+// ConvertResourcesAliasToResources converts ResourcesAlias to Resources
+func ConvertResourcesAliasToResources(froms ResourcesAlias) Resources {
+	if froms == nil {
+		return nil
+	}
+	tos := make(Resources, len(froms))
+	for i, f := range froms {
+		converted := ConvertResourceAliasToResource(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
+
+// ConvertRolesToRolesAlias converts Roles to RolesAlias
+func ConvertRolesToRolesAlias(froms Roles) RolesAlias {
+	if froms == nil {
+		return nil
+	}
+	tos := make(RolesAlias, len(froms))
+	for i, f := range froms {
+		converted := ConvertRoleToRoleAlias(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
+
+// ConvertRolesAliasToRoles converts RolesAlias to Roles
+func ConvertRolesAliasToRoles(froms RolesAlias) Roles {
+	if froms == nil {
+		return nil
+	}
+	tos := make(Roles, len(froms))
+	for i, f := range froms {
+		converted := ConvertRoleAliasToRole(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
+
+// ConvertUsersToUsersAlias converts Users to UsersAlias
+func ConvertUsersToUsersAlias(froms Users) UsersAlias {
+	if froms == nil {
+		return nil
+	}
+	tos := make(UsersAlias, len(froms))
+	for i, f := range froms {
+		converted := ConvertUserToUserAlias(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
+
+// ConvertUsersAliasToUsers converts UsersAlias to Users
+func ConvertUsersAliasToUsers(froms UsersAlias) Users {
+	if froms == nil {
+		return nil
+	}
+	tos := make(Users, len(froms))
+	for i, f := range froms {
+		converted := ConvertUserAliasToUser(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
 
 // ConvertResourceToResourceAlias converts Resource to ResourceAlias
 func ConvertResourceToResourceAlias(from *Resource) *ResourceAlias {

@@ -14,15 +14,113 @@ import (
 
 // Local type aliases for external types.
 type (
-	Resource      = ent.Resource
-	ResourceEdges = ent.ResourceEdges
-	ResourceSlice = types.Resource
-	Role          = ent.Role
-	RoleSlice     = types.Role
-	Time          = time.Time
-	User          = ent.User
-	UserSlice     = types.User
+	Permission         = ent.Permission
+	Permissionresource = ent.PermissionResource
+	Resource           = ent.Resource
+	ResourceSlice      = types.Resource
+	Resourceedges      = ent.ResourceEdges
+	Resources          = []Resource
+	ResourcesSlice     = []ResourceSlice
+	Role               = ent.Role
+	RoleSlice          = types.Role
+	Roles              = []Role
+	RolesSlice         = []RoleSlice
+	Time               = time.Time
+	User               = ent.User
+	UserSlice          = types.User
+	Users              = []User
+	UsersSlice         = []UserSlice
 )
+
+// ConvertResourcesToResourcesSlice converts Resources to ResourcesSlice
+func ConvertResourcesToResourcesSlice(froms Resources) ResourcesSlice {
+	if froms == nil {
+		return nil
+	}
+	tos := make(ResourcesSlice, len(froms))
+	for i, f := range froms {
+		converted := ConvertResourceToResourceSlice(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
+
+// ConvertResourcesSliceToResources converts ResourcesSlice to Resources
+func ConvertResourcesSliceToResources(froms ResourcesSlice) Resources {
+	if froms == nil {
+		return nil
+	}
+	tos := make(Resources, len(froms))
+	for i, f := range froms {
+		converted := ConvertResourceSliceToResource(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
+
+// ConvertRolesToRolesSlice converts Roles to RolesSlice
+func ConvertRolesToRolesSlice(froms Roles) RolesSlice {
+	if froms == nil {
+		return nil
+	}
+	tos := make(RolesSlice, len(froms))
+	for i, f := range froms {
+		converted := ConvertRoleToRoleSlice(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
+
+// ConvertRolesSliceToRoles converts RolesSlice to Roles
+func ConvertRolesSliceToRoles(froms RolesSlice) Roles {
+	if froms == nil {
+		return nil
+	}
+	tos := make(Roles, len(froms))
+	for i, f := range froms {
+		converted := ConvertRoleSliceToRole(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
+
+// ConvertUsersToUsersSlice converts Users to UsersSlice
+func ConvertUsersToUsersSlice(froms Users) UsersSlice {
+	if froms == nil {
+		return nil
+	}
+	tos := make(UsersSlice, len(froms))
+	for i, f := range froms {
+		converted := ConvertUserToUserSlice(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
+
+// ConvertUsersSliceToUsers converts UsersSlice to Users
+func ConvertUsersSliceToUsers(froms UsersSlice) Users {
+	if froms == nil {
+		return nil
+	}
+	tos := make(Users, len(froms))
+	for i, f := range froms {
+		converted := ConvertUserSliceToUser(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
 
 // ConvertResourceToResourceSlice converts Resource to ResourceSlice
 func ConvertResourceToResourceSlice(from *Resource) *ResourceSlice {

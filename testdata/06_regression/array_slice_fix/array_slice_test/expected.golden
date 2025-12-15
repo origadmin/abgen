@@ -14,12 +14,76 @@ import (
 
 // Local type aliases for external types.
 type (
-	Department   = source.Department
-	DepartmentPB = target.Department
-	Time         = time.Time
-	User         = source.User
-	UserPB       = target.User
+	Department    = source.Department
+	DepartmentPB  = target.Department
+	Departments   = []Department
+	DepartmentsPB = []DepartmentPB
+	Time          = time.Time
+	User          = source.User
+	UserPB        = target.User
+	Users         = []User
+	UsersPB       = []UserPB
 )
+
+// ConvertDepartmentsToDepartmentsPB converts Departments to DepartmentsPB
+func ConvertDepartmentsToDepartmentsPB(froms Departments) DepartmentsPB {
+	if froms == nil {
+		return nil
+	}
+	tos := make(DepartmentsPB, len(froms))
+	for i, f := range froms {
+		converted := ConvertDepartmentToDepartmentPB(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
+
+// ConvertDepartmentsPBToDepartments converts DepartmentsPB to Departments
+func ConvertDepartmentsPBToDepartments(froms DepartmentsPB) Departments {
+	if froms == nil {
+		return nil
+	}
+	tos := make(Departments, len(froms))
+	for i, f := range froms {
+		converted := ConvertDepartmentPBToDepartment(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
+
+// ConvertUsersToUsersPB converts Users to UsersPB
+func ConvertUsersToUsersPB(froms Users) UsersPB {
+	if froms == nil {
+		return nil
+	}
+	tos := make(UsersPB, len(froms))
+	for i, f := range froms {
+		converted := ConvertUserToUserPB(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
+
+// ConvertUsersPBToUsers converts UsersPB to Users
+func ConvertUsersPBToUsers(froms UsersPB) Users {
+	if froms == nil {
+		return nil
+	}
+	tos := make(Users, len(froms))
+	for i, f := range froms {
+		converted := ConvertUserPBToUser(&f)
+		if converted != nil {
+			tos[i] = *converted
+		}
+	}
+	return tos
+}
 
 // ConvertDepartmentToDepartmentPB converts Department to DepartmentPB
 func ConvertDepartmentToDepartmentPB(from *Department) *DepartmentPB {

@@ -53,5 +53,5 @@ type Function struct {
 	TargetType    string
 	SourcePointer string
 	TargetPointer string
-	Conversions   []model.Field
+	Conversions   []model.FieldInfo
 }

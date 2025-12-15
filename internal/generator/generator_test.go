@@ -254,24 +254,22 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				generatedStr := string(generatedCode)
 				// Check forward conversion for Order
 				assertContainsPattern(t, generatedStr, `func ConvertOrderSourceToOrderTarget\(from \*OrderSource\) \*OrderTarget`)
-				// Check that the Items field is converted using a loop and the single-item converter
-				assertContainsPattern(t, generatedStr, `Items: func\(fs \[\]ItemSource\) \[\]ItemTarget {`) // Corrected: fs is []ItemSource (value slice)
-				assertContainsPattern(t, generatedStr, `ts := make\(\[\]ItemTarget, len\(fs\)\)`)         // Corrected: ts is []ItemTarget (value slice)
-				assertContainsPattern(t, generatedStr, `converted := ConvertItemSourceToItemTarget\(&f\)`) // Corrected: &f for value type
-				assertContainsPattern(t, generatedStr, `ts\[i\] = \*converted`)                            // Corrected: dereference for value type
+				// Check that the Items field is converted using the dedicated slice conversion function
+				assertContainsPattern(t, generatedStr, `Items:\s+ConvertItemsSourceToItemsTarget\(from.Items\),`) // Updated assertion
 
 				// Check reverse conversion for Order
 				assertContainsPattern(t, generatedStr, `func ConvertOrderTargetToOrderSource\(from \*OrderTarget\) \*OrderSource`)
-				assertContainsPattern(t, generatedStr, `Items: func\(fs \[\]ItemTarget\) \[\]ItemSource {`) // Corrected: fs is []ItemTarget (value slice)
-				assertContainsPattern(t, generatedStr, `ts := make\(\[\]ItemSource, len\(fs\)\)`)         // Corrected: ts is []ItemSource (value slice)
-				assertContainsPattern(t, generatedStr, `converted := ConvertItemTargetToItemSource\(&f\)`) // Corrected: &f for value type
-				assertContainsPattern(t, generatedStr, `ts\[i\] = \*converted`)                            // Corrected: dereference for value type
+				assertContainsPattern(t, generatedStr, `Items:\s+ConvertItemsTargetToItemsSource\(from.Items\),`) // Updated assertion
 
 				// Check that the individual item converters are generated
 				assertContainsPattern(t, generatedStr, `func ConvertItemSourceToItemTarget\(from \*ItemSource\) \*ItemTarget`)
 				assertContainsPattern(t, generatedStr, `func ConvertItemTargetToItemSource\(from \*ItemTarget\) \*ItemSource`)
 
-				// Check that the old, verbose slice helper functions are NOT generated
+				// Check that the dedicated slice conversion functions are generated
+				assertContainsPattern(t, generatedStr, `func ConvertItemsSourceToItemsTarget\(froms ItemsSource\) ItemsTarget`)
+				assertContainsPattern(t, generatedStr, `func ConvertItemsTargetToItemsSource\(froms ItemsTarget\) ItemsSource`)
+
+				// Check that the old, verbose slice helper functions are NOT generated (if this is still desired)
 				assertNotContainsPattern(t, generatedStr, `func ConvertItemSourceSliceToItemTargetSlice`)
 				assertNotContainsPattern(t, generatedStr, `func ConvertItemTargetSliceToItemSourceSlice`)
 			},
