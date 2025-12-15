@@ -11,78 +11,84 @@ import (
 	target "github.com/origadmin/abgen/testdata/02_basic_conversions/slice_conversion/target"
 )
 
+// Local type aliases for external types.
+type (
+	ItemSource  = source.Item
+	ItemTarget  = target.Item
+	OrderSource = source.Order
+	OrderTarget = target.Order
+)
+
 // ConvertItemSourceToItemTarget converts ItemSource to ItemTarget
-func ConvertItemSourceToItemTarget(from *source.Item) *target.Item {
+func ConvertItemSourceToItemTarget(from *ItemSource) *ItemTarget {
 	if from == nil {
 		return nil
 	}
 
-	to := &target.Item{
+	to := &ItemTarget{
 		ID: from.ID,
 	}
 	return to
 }
 
 // ConvertItemTargetToItemSource converts ItemTarget to ItemSource
-func ConvertItemTargetToItemSource(from *target.Item) *source.Item {
+func ConvertItemTargetToItemSource(from *ItemTarget) *ItemSource {
 	if from == nil {
 		return nil
 	}
 
-	to := &source.Item{
+	to := &ItemSource{
 		ID: from.ID,
 	}
 	return to
 }
 
 // ConvertOrderSourceToOrderTarget converts OrderSource to OrderTarget
-func ConvertOrderSourceToOrderTarget(from *source.Order) *target.Order {
+func ConvertOrderSourceToOrderTarget(from *OrderSource) *OrderTarget {
 	if from == nil {
 		return nil
 	}
 
-	to := &target.Order{
-		ID:    from.ID,
-		Items: ConvertItemSourceSliceToItemTargetSlice(from.Items),
+	to := &OrderTarget{
+		ID: from.ID,
+		Items: func(fs []ItemSource) []ItemTarget {
+			if fs == nil {
+				return nil
+			}
+			ts := make([]ItemTarget, len(fs))
+			for i, f := range fs {
+				converted := ConvertItemSourceToItemTarget(&f)
+				if converted != nil {
+					ts[i] = *converted
+				}
+			}
+			return ts
+		}(from.Items),
 	}
 	return to
 }
 
 // ConvertOrderTargetToOrderSource converts OrderTarget to OrderSource
-func ConvertOrderTargetToOrderSource(from *target.Order) *source.Order {
+func ConvertOrderTargetToOrderSource(from *OrderTarget) *OrderSource {
 	if from == nil {
 		return nil
 	}
 
-	to := &source.Order{
-		ID:    from.ID,
-		Items: ConvertItemTargetSliceToItemSourceSlice(from.Items),
+	to := &OrderSource{
+		ID: from.ID,
+		Items: func(fs []ItemTarget) []ItemSource {
+			if fs == nil {
+				return nil
+			}
+			ts := make([]ItemSource, len(fs))
+			for i, f := range fs {
+				converted := ConvertItemTargetToItemSource(&f)
+				if converted != nil {
+					ts[i] = *converted
+				}
+			}
+			return ts
+		}(from.Items),
 	}
 	return to
-}
-
-// --- Helper Functions ---
-
-// ConvertItemSourceSliceToItemTargetSlice converts a slice of ItemSource to a slice of ItemTarget.
-func ConvertItemSourceSliceToItemTargetSlice(froms []source.Item) []target.Item {
-	if froms == nil {
-		return nil
-	}
-	tos := make([]target.Item, len(froms))
-	for i := range froms {
-		tos[i] = *ConvertItemSourceToItemTarget(&froms[i])
-	}
-	return tos
-}
-
-// ConvertItemTargetSliceToItemSourceSlice converts a slice of ItemTarget to a slice of ItemSource.
-func ConvertItemTargetSliceToItemSourceSlice(froms []target.Item) []source.Item {
-	if froms == nil {
-		return nil
-	}
-	tos := make([]source.Item, len(froms))
-	for i := range froms {
-		tos[i] = *ConvertItemTargetToItemSource(&froms[i])
-	}
-	return tos
 }
