@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
-
+	"go/ast"
+	"go/token"
+	"go/types"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -64,6 +66,9 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 	}
 	p.config.GenerationContext.PackageName = pkg.Name
 	p.config.GenerationContext.PackagePath = pkg.ID
+
+	// Extract existing type aliases from source code
+	p.extractExistingAliases(pkg)
 
 	var directives []string
 	for _, file := range pkg.Syntax {
@@ -243,4 +248,69 @@ func (p *Parser) resolveTypeFQN(typeStr string) string {
 	typeName := typeStr[lastDot+1:]
 	packagePath := p.resolvePackagePath(packageIdentifier)
 	return packagePath + "." + typeName
+}
+
+// extractExistingAliases extracts type aliases from the source code
+func (p *Parser) extractExistingAliases(pkg *packages.Package) {
+	if pkg.TypesInfo == nil {
+		return
+	}
+
+	// Also check for type aliases in type declarations (GenDecl)
+	for _, file := range pkg.Syntax {
+		for _, decl := range file.Decls {
+			if genDecl, ok := decl.(*ast.GenDecl); ok && genDecl.Tok == token.TYPE {
+				for _, spec := range genDecl.Specs {
+					if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+						// Check if this is a type alias (typeSpec.Assign != 0)
+						if typeSpec.Assign != 0 {
+							// This is a type alias, try to resolve the RHS
+							if selExpr, ok := typeSpec.Type.(*ast.SelectorExpr); ok {
+								// Handle qualified identifiers like "ent.User"
+								if pkgName, ok := selExpr.X.(*ast.Ident); ok {
+									// First, try to resolve using PackageAliases
+									if pkgPath, exists := p.config.PackageAliases[pkgName.Name]; exists {
+										typeName := selExpr.Sel.Name
+										fqn := pkgPath + "." + typeName
+										p.config.ExistingAliases[typeSpec.Name.Name] = fqn
+									} else if obj := pkg.TypesInfo.Uses[pkgName]; obj != nil && obj.Pkg() != nil {
+										if obj := pkg.TypesInfo.Uses[pkgName]; obj != nil && obj.Pkg() != nil {
+											pkgPath := obj.Pkg().Path()
+											typeName := selExpr.Sel.Name
+											fqn := pkgPath + "." + typeName
+											p.config.ExistingAliases[typeSpec.Name.Name] = fqn
+										} else if obj := pkg.TypesInfo.Defs[pkgName]; obj != nil && obj.Pkg() != nil {
+											// Try in Definitions as well
+											pkgPath := obj.Pkg().Path()
+											typeName := selExpr.Sel.Name
+											fqn := pkgPath + "." + typeName
+											p.config.ExistingAliases[typeSpec.Name.Name] = fqn
+										} else {
+											// Fallback: look for the package in imports
+											for _, imp := range pkg.Imports {
+												if imp.Name == pkgName.Name {
+													typeName := selExpr.Sel.Name
+													fqn := imp.PkgPath + "." + typeName
+													p.config.ExistingAliases[typeSpec.Name.Name] = fqn
+													break
+												}
+											}
+										}
+									}
+								} else if ident, ok := typeSpec.Type.(*ast.Ident); ok {
+									// Handle simple identifiers
+									if obj := pkg.TypesInfo.Uses[ident]; obj != nil {
+										if named, ok := obj.Type().(*types.Named); ok && named.Obj() != nil && named.Obj().Pkg() != nil {
+											fqn := named.Obj().Pkg().Path() + "." + named.Obj().Name()
+											p.config.ExistingAliases[typeSpec.Name.Name] = fqn
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }

@@ -419,13 +419,16 @@ func (g *Generator) populateAliases() {
 			continue
 		}
 
-		hasSpecificRule := g.config.NamingRules.SourcePrefix != "" || g.config.NamingRules.SourceSuffix != "" ||
-			g.config.NamingRules.TargetPrefix != "" || g.config.NamingRules.TargetSuffix != ""
+		hasSourceSpecificRule := g.config.NamingRules.SourcePrefix != "" || g.config.NamingRules.SourceSuffix != ""
+		hasTargetSpecificRule := g.config.NamingRules.TargetPrefix != "" || g.config.NamingRules.TargetSuffix != ""
+		
+		// Disambiguate if source and target have same name but different packages
+		// and either source or target (or both) lack specific naming rules
+		sourceNeedsDisambiguation := sourceInfo.Name == targetInfo.Name && sourceInfo.ImportPath != targetInfo.ImportPath && !hasSourceSpecificRule
+		targetNeedsDisambiguation := sourceInfo.Name == targetInfo.Name && sourceInfo.ImportPath != targetInfo.ImportPath && !hasTargetSpecificRule
 
-		disambiguate := sourceInfo.Name == targetInfo.Name && sourceInfo.ImportPath != targetInfo.ImportPath && !hasSpecificRule
-
-		g.createAliasesRecursively(sourceInfo, true, disambiguate, visited)
-		g.createAliasesRecursively(targetInfo, false, disambiguate, visited)
+		g.createAliasesRecursively(sourceInfo, true, sourceNeedsDisambiguation, visited)
+		g.createAliasesRecursively(targetInfo, false, targetNeedsDisambiguation, visited)
 	}
 }
 
