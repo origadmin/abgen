@@ -167,7 +167,6 @@ func (g *Generator) writeAliases() {
 	type aliasPair struct {
 		aliasName, fqn string
 	}
-	// Collect aliases that actually need to be written
 	aliasesToWrite := make([]aliasPair, 0)
 	for fqn, alias := range g.aliasMap {
 		if _, exists := g.config.ExistingAliases[alias]; exists {
@@ -184,7 +183,7 @@ func (g *Generator) writeAliases() {
 	}
 
 	if len(validAliases) == 0 {
-		return // No valid aliases to write, so skip the block entirely
+		return
 	}
 
 	sort.Slice(validAliases, func(i, j int) bool { return validAliases[i].aliasName < validAliases[j].aliasName })

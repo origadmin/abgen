@@ -12,16 +12,13 @@ import (
 	time "time"
 )
 
-// Local type aliases for external types.
-type ()
-
 // ConvertResourceToResourceTrilateral converts Resource to ResourceTrilateral
-func ConvertResourceToResourceTrilateral(from *Resource) *ResourceTrilateral {
+func ConvertResourceToResourceTrilateral(from *ent.Resource) *types.Resource {
 	if from == nil {
 		return nil
 	}
 
-	to := &ResourceTrilateral{
+	to := &types.Resource{
 		Id:       from.ID,
 		Name:     from.Name,
 		ParentId: from.ParentID,
@@ -30,12 +27,12 @@ func ConvertResourceToResourceTrilateral(from *Resource) *ResourceTrilateral {
 }
 
 // ConvertResourceTrilateralToResource converts ResourceTrilateral to Resource
-func ConvertResourceTrilateralToResource(from *ResourceTrilateral) *Resource {
+func ConvertResourceTrilateralToResource(from *types.Resource) *ent.Resource {
 	if from == nil {
 		return nil
 	}
 
-	to := &Resource{
+	to := &ent.Resource{
 		ID:       from.Id,
 		Name:     from.Name,
 		ParentID: from.ParentId,
@@ -44,34 +41,34 @@ func ConvertResourceTrilateralToResource(from *ResourceTrilateral) *Resource {
 }
 
 // ConvertUserToUserTrilateral converts User to UserTrilateral
-func ConvertUserToUserTrilateral(from *User) *UserTrilateral {
+func ConvertUserToUserTrilateral(from *ent.User) *types.User {
 	if from == nil {
 		return nil
 	}
 
-	to := &UserTrilateral{
+	to := &types.User{
 		Id:        from.ID,
 		Username:  from.Username,
 		Age:       from.Age,
-		Gender:    ConvertGenderToGenderTrilateral(from.Gender),
+		Gender:    types.Gender(from.Gender),
 		CreatedAt: ConvertTimeToString(from.CreatedAt),
-		Status:    ConvertUserStatusToUserTrilateralStatus(from.Status),
+		Status:    types.UserStatus(from.Status),
 	}
 	return to
 }
 
 // ConvertUserTrilateralToUser converts UserTrilateral to User
-func ConvertUserTrilateralToUser(from *UserTrilateral) *User {
+func ConvertUserTrilateralToUser(from *types.User) *ent.User {
 	if from == nil {
 		return nil
 	}
 
-	to := &User{
+	to := &ent.User{
 		ID:        from.Id,
 		Username:  from.Username,
 		Age:       from.Age,
-		Gender:    ConvertGenderTrilateralToGender(from.Gender),
-		Status:    ConvertUserTrilateralStatusToUserStatus(from.Status),
+		Gender:    ent.Gender(from.Gender),
+		Status:    string(from.Status),
 		CreatedAt: ConvertStringToTime(from.CreatedAt),
 	}
 	return to
