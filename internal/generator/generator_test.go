@@ -198,8 +198,8 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			directivePath: "../../testdata/02_basic_conversions/simple_bilateral",
 			// goldenFileName: "expected.golden", // REMOVED
 			dependencies: baseDependencies,
-			priority: "P0",
-			category: "basic_conversions",
+			priority:     "P0",
+			category:     "basic_conversions",
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
 
@@ -222,8 +222,8 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			directivePath: "../../testdata/02_basic_conversions/standard_trilateral",
 			// goldenFileName: "expected.golden", // REMOVED
 			dependencies: baseDependencies,
-			priority: "P0",
-			category: "basic_conversions",
+			priority:     "P0",
+			category:     "basic_conversions",
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				generatedStr := strings.ReplaceAll(string(generatedCode), "\r\n", "\n")
 
@@ -248,8 +248,8 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			directivePath:  "../../testdata/03_advanced_features/auto_generate_aliases",
 			goldenFileName: "expected.golden",
 			dependencies:   baseDependencies,
-			priority: "P0",
-			category: "advanced_features",
+			priority:       "P0",
+			category:       "advanced_features",
 		},
 		{
 			name:          "custom_function_rules",
@@ -283,7 +283,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				"github.com/origadmin/abgen/testdata/03_advanced_features/enum_string_to_int/source",
 				"github.com/origadmin/abgen/testdata/03_advanced_features/enum_string_to_int/target",
 			}, priority: "P1",
-			category: "advanced_features",
+			category:    "advanced_features",
 			assertFunc: func(t *testing.T, generatedCode []byte) {
 				t.Log("TODO: Add specific assertions for enum_string_to_int")
 			},
@@ -399,7 +399,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			}
 
 			// Step 2: Analyze types using the new high-level API.
-			typeAnalyzer := analyzer.NewTypeAnalyzer()
+			typeAnalyzer := analyzer.NewTypeAnalyzer() // Pass the root dir for analysis context
 			packagePaths := cfg.RequiredPackages()
 			typeFQNs := cfg.RequiredTypeFQNs()
 			typeInfos, err := typeAnalyzer.Analyze(packagePaths, typeFQNs)

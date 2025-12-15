@@ -2,9 +2,7 @@ package config
 
 import (
 	"fmt"
-	"go/ast"
-	"go/token"
-	"go/types"
+
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -38,10 +36,12 @@ func (p *Parser) Parse(sourceDir string) (*Config, error) {
 	p.config.GenerationContext.DirectivePath = sourceDir
 
 	initialLoaderCfg := &packages.Config{
-		Mode:  packages.NeedName | packages.NeedSyntax | packages.NeedFiles | packages.NeedModule | packages.NeedTypes | packages.NeedTypesInfo, // FIX: Added packages.NeedTypesInfo
-		Dir:   sourceDir,
-		Tests: false,
+		Mode:       packages.NeedName | packages.NeedSyntax | packages.NeedFiles | packages.NeedModule | packages.NeedTypes | packages.NeedTypesInfo, // FIX: Added packages.NeedTypesInfo
+		Dir:        sourceDir,
+		Tests:      false,
+		BuildFlags: []string{"-tags=abgen_source"},
 	}
+
 	initialPkgs, err := packages.Load(initialLoaderCfg, ".")
 	if err != nil {
 		return nil, fmt.Errorf("failed to load initial package at %s: %w", sourceDir, err)
@@ -67,9 +67,6 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 
 	var directives []string
 	for _, file := range pkg.Syntax {
-		// Parse existing type aliases
-		p.parseExistingAliases(file, pkg.TypesInfo)
-
 		// Collect directives
 		for _, commentGroup := range file.Comments {
 			for _, comment := range commentGroup.List {
@@ -94,32 +91,6 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 
 	return p.config, nil
 }
-
-// parseExistingAliases scans a file for `type X = Y` declarations.
-func (p *Parser) parseExistingAliases(file *ast.File, info *types.Info) {
-	for _, decl := range file.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.TYPE {
-			continue
-		}
-		for _, spec := range genDecl.Specs {
-			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok || typeSpec.Assign == 0 { // Not a type alias
-				continue
-			}
-			
-			aliasName := typeSpec.Name.Name
-			
-			// Get the fully qualified name of the original type
-			obj := info.TypeOf(typeSpec.Type)
-			if named, ok := obj.(*types.Named); ok && named.Obj() != nil && named.Obj().Pkg() != nil {
-				fqn := named.Obj().Pkg().Path() + "." + named.Obj().Name()
-				p.config.ExistingAliases[aliasName] = fqn
-			}
-		}
-	}
-}
-
 
 // parseSingleDirective processes a single directive string.
 func (p *Parser) parseSingleDirective(directive string) error {

@@ -38,26 +38,25 @@ func (a *TypeAnalyzer) Find(fqn string) (*model.TypeInfo, error) {
 
 // Analyze is the main entry point for the analysis phase.
 func (a *TypeAnalyzer) Analyze(packagePaths []string, fqns []string) (map[string]*model.TypeInfo, error) {
-	slog.Debug("Starting analysis", "package_paths_count", len(packagePaths), "fqns_count", len(fqns), "packagePaths", packagePaths, "fqns", fqns) // Added debug log
+	slog.Debug("Starting analysis", "package_paths_count", len(packagePaths), "fqns_count", len(fqns), "packagePaths", packagePaths, "fqns", fqns)
 
-	// 1. Load the full graph of packages.
 	loadCfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedModule |
 			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
-		Tests:      false,
-		BuildFlags: []string{"-tags=abgen"},
+		Tests: false,
+		// Use build tags to exclude generated files. This is the standard Go mechanism.
+		// The "!abgen_source" tag is added to all generated files.
+		BuildFlags: []string{"-tags=abgen_source"},
 	}
 	pkgs, err := packages.Load(loadCfg, packagePaths...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load package graph: %w", err)
 	}
-	a.pkgs = pkgs // Store the loaded packages.
+	a.pkgs = pkgs
 
-	// 2. Resolve all requested types OR discover all named struct types if fqns is empty (for implicit rules).
 	resolvedTypes := make(map[string]*model.TypeInfo)
 	if len(fqns) == 0 && len(packagePaths) > 0 {
 		slog.Debug("FQNs list is empty, discovering all named struct types in loaded packages for implicit rules.")
-		// Discover all named struct types within the loaded packages
 		for _, pkg := range a.pkgs {
 			slog.Debug("Scanning package for named struct types", "pkgPath", pkg.PkgPath)
 			for _, typName := range pkg.TypesInfo.Defs {
@@ -112,6 +111,18 @@ func (a *TypeAnalyzer) collectSeedPaths(cfg *config.Config) []string {
 			pathMap[pkgPath] = struct{}{}
 		}
 	}
+	for key := range cfg.CustomFunctionRules {
+		parts := strings.Split(key, "->")
+		if len(parts) == 2 {
+			if pkgPath := getPkgPath(parts[0]); pkgPath != "" {
+				pathMap[pkgPath] = struct{}{}
+			}
+			if pkgPath := getPkgPath(parts[1]); pkgPath != "" {
+				pathMap[pkgPath] = struct{}{}
+			}
+		}
+	}
+
 	paths := make([]string, 0, len(pathMap))
 	for path := range pathMap {
 		paths = append(paths, path)
@@ -134,27 +145,27 @@ func (a *TypeAnalyzer) find(fqn string) (*model.TypeInfo, error) {
 	}
 	typeName := fqn[len(pkgPath)+1:]
 
-	slog.Debug("find", "fqn", fqn, "pkgPath", pkgPath, "typeName", typeName) // Added log
+	slog.Debug("find", "fqn", fqn, "pkgPath", pkgPath, "typeName", typeName)
 
 	for _, pkg := range a.pkgs {
 		if pkg.PkgPath == pkgPath {
-			slog.Debug("find: found matching pkg", "pkg.PkgPath", pkg.PkgPath) // Added log
+			slog.Debug("find: found matching pkg", "pkg.PkgPath", pkg.PkgPath)
 			scope := pkg.Types.Scope()
 			if scope == nil {
-				slog.Debug("find: scope is nil", "pkg.PkgPath", pkg.PkgPath) // Added log
+				slog.Debug("find: scope is nil", "pkg.PkgPath", pkg.PkgPath)
 				continue
 			}
 			obj := scope.Lookup(typeName)
 			if obj == nil {
-				slog.Debug("find: obj not found in scope", "typeName", typeName, "pkg.PkgPath", pkg.PkgPath) // Added log
+				slog.Debug("find: obj not found in scope", "typeName", typeName, "pkg.PkgPath", pkg.PkgPath)
 				continue
 			}
 			objType := obj.Type()
-			slog.Debug("find: obj found", "obj.Name", obj.Name(), "obj.Type", objType.String(), "obj.TypeKind", fmt.Sprintf("%T", objType)) // Added log
+			slog.Debug("find: obj found", "obj.Name", obj.Name(), "obj.Type", objType.String(), "obj.TypeKind", fmt.Sprintf("%T", objType))
 			return a.resolveType(objType), nil
 		}
 	}
-	slog.Debug("find: type not found in any loaded pkg", "fqn", fqn) // Added log
+	slog.Debug("find: type not found in any loaded pkg", "fqn", fqn)
 	return nil, fmt.Errorf("type %q not found in pre-loaded packages", fqn)
 }
 
@@ -170,30 +181,25 @@ func (a *TypeAnalyzer) resolveType(typ types.Type) *model.TypeInfo {
 	a.typeCache[typ] = info
 
 	typeKind := fmt.Sprintf("%T", typ)
-	slog.Debug("resolveType", "typ", typ.String(), "type_kind", typeKind) // Added log
+	slog.Debug("resolveType", "typ", typ.String(), "type_kind", typeKind)
 
 	switch t := typ.(type) {
-	case *types.Alias:
+	case *types.Alias: // Handles 'type T = some.OtherType'
 		obj := t.Obj()
 		info.Name = obj.Name()
 		if obj.Pkg() != nil {
 			info.ImportPath = obj.Pkg().Path()
 		}
 		info.Original = obj
-		info.IsAlias = true
+		info.IsAlias = true // This is the definition of a type alias
 
+		// An alias is always a "Named" type in our model, regardless of what it aliases.
+		underlyingInfo := a.resolveType(t.Rhs())
+		info.Kind = model.Named          // Set the kind for the alias itself
+		info.Underlying = underlyingInfo // Point to the resolved type on the RHS
 		slog.Debug("resolveType: Alias", "name", info.Name, "importPath", info.ImportPath, "rhs", t.Rhs().String())
 
-		// For a type alias (type T = U), we use Rhs() to get the aliased type
-		// Rhs() returns the type on the right-hand side of the alias declaration
-		underlyingInfo := a.resolveType(t.Rhs())
-
-		if underlyingInfo != nil {
-			info.Kind = model.Named
-			info.Underlying = underlyingInfo
-		}
-
-	case *types.Named:
+	case *types.Named: // Handles 'type T struct{...}' or 'type T int'
 		obj := t.Obj()
 
 		info.Name = obj.Name()
@@ -201,20 +207,17 @@ func (a *TypeAnalyzer) resolveType(typ types.Type) *model.TypeInfo {
 			info.ImportPath = obj.Pkg().Path()
 		}
 		info.Original = obj
-		info.IsAlias = obj.IsAlias()
 
 		slog.Debug("resolveType: Named", "name", info.Name, "importPath", info.ImportPath, "isAlias", info.IsAlias, "underlying", t.Underlying().String())
 
 		underlyingInfo := a.resolveType(t.Underlying())
 		if underlyingInfo != nil {
-			// If the underlying type is a struct, then this named type IS a struct.
-			// Its Kind should be Struct, and it should expose the fields directly.
 			if underlyingInfo.Kind == model.Struct {
+				// A named struct is treated as a struct directly in our model.
 				info.Kind = model.Struct
 				info.Fields = underlyingInfo.Fields
 			} else {
-				// Otherwise, this is a defined type acting as an alias for a non-struct type.
-				// Its Kind is Named, and it points to the underlying type info.
+				// A named non-struct (e.g., type MyInt int) is a Named type with an underlying.
 				info.Kind = model.Named
 				info.Underlying = underlyingInfo
 			}

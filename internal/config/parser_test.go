@@ -70,7 +70,9 @@ func TestParser_Comprehensive(t *testing.T) {
 				`//go:abgen:convert="source=ent.Role,target=Role"`,
 			},
 			expectedConfig: &Config{
-				PackageAliases: map[string]string{"ent": "path/to/ent"},
+				PackageAliases: map[string]string{
+					"ent": "path/to/ent",
+				},
 				ConversionRules: []*ConversionRule{
 					{
 						SourceType: "path/to/ent.Role",
@@ -92,7 +94,9 @@ func TestParser_Comprehensive(t *testing.T) {
 				`//go:abgen:pair:packages=s,github.com/my/target`,
 			},
 			expectedConfig: &Config{
-				PackageAliases: map[string]string{"s": "github.com/my/source"},
+				PackageAliases: map[string]string{
+					"s": "github.com/my/source",
+				},
 				PackagePairs: []*PackagePair{
 					{SourcePath: "github.com/my/source", TargetPath: "github.com/my/target"},
 				},
@@ -140,9 +144,12 @@ func TestParser_Comprehensive(t *testing.T) {
 				tc.expectedConfig.CustomFunctionRules = make(map[string]string)
 			}
 
-			// Compare PackageAliases
-			if !reflect.DeepEqual(cfg.PackageAliases, tc.expectedConfig.PackageAliases) {
-				t.Errorf("PackageAliases mismatch:\ngot:  %v\nwant: %v", cfg.PackageAliases, tc.expectedConfig.PackageAliases)
+			// Check that all expected aliases from directives are present.
+			// This avoids test brittleness if default aliases are added to NewParser.
+			for alias, path := range tc.expectedConfig.PackageAliases {
+				if gotPath, ok := cfg.PackageAliases[alias]; !ok || gotPath != path {
+					t.Errorf("PackageAliases mismatch for alias '%s': got '%s', want '%s'", alias, gotPath, path)
+				}
 			}
 
 			// Compare NamingRules

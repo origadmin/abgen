@@ -96,7 +96,7 @@ func main() {
 
 	// --- 3. Analyze Types ---
 	slog.Debug("Analyzing types...")
-	analyzer := analyzer.NewTypeAnalyzer(cfg) // Pass config to analyzer
+	analyzer := analyzer.NewTypeAnalyzer() // Pass config to analyzer
 	typeInfos, err := analyzer.Analyze(packagePaths, typeFQNs)
 	if err != nil {
 		slog.Error("Failed to analyze types", "error", err)
