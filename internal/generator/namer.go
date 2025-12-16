@@ -183,6 +183,22 @@ func (n *Namer) GetTypeString(info *model.TypeInfo) string {
 	return sb.String()
 }
 
+// GetTypeAliasString gets the aliased name for a type if one exists, otherwise returns the full type string.
+// This is the primary method to use when generating code that should use local aliases.
+func (n *Namer) GetTypeAliasString(info *model.TypeInfo) string {
+	if info == nil {
+		return ""
+	}
+	// First, check if an alias exists for the exact type.
+	if alias, ok := n.aliasMap[info.UniqueKey()]; ok && alias != "" {
+		return alias
+	}
+
+	// If no alias is found, it means it's either a primitive, a type from the current package,
+	// or something that doesn't need an alias. In this case, we construct its full type string.
+	return n.GetTypeString(info)
+}
+
 // getAliasedOrBaseName returns the alias if it exists in the map, or the simple name.
 func (n *Namer) getAliasedOrBaseName(info *model.TypeInfo) string {
 	if info == nil {

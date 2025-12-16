@@ -280,8 +280,8 @@ func (g *Generator) doGenerateConversionFunction(sourceInfo, targetInfo *model.T
 
 	funcName := g.namer.GetFunctionName(sourceInfo, targetInfo)
 
-	sourceTypeStr := g.namer.GetTypeString(sourceInfo)
-	targetTypeStr := g.namer.GetTypeString(targetInfo)
+	sourceTypeStr := g.namer.GetTypeAliasString(sourceInfo)
+	targetTypeStr := g.namer.GetTypeAliasString(targetInfo)
 
 	g.buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceTypeStr, targetTypeStr))
 	g.buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, sourceTypeStr, targetTypeStr))
@@ -294,10 +294,8 @@ func (g *Generator) generateSliceToSliceConversion(funcName string, sourceInfo, 
 	sourceElem := g.converter.GetElementType(sourceInfo)
 	targetElem := g.converter.GetElementType(targetInfo)
 
-	// For slice conversion functions, the parameter and return type strings should be generated
-	// using namer.GetTypeString to ensure correct pointer handling.
-	sourceSliceStr := g.namer.GetTypeString(sourceInfo)
-	targetSliceStr := g.namer.GetTypeString(targetInfo)
+	sourceSliceStr := g.namer.GetTypeAliasString(sourceInfo)
+	targetSliceStr := g.namer.GetTypeAliasString(targetInfo)
 
 	g.buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceSliceStr, targetSliceStr)) // Add comment for helper
 	g.buf.WriteString(fmt.Sprintf("func %s(froms %s) %s {\n", funcName, sourceSliceStr, targetSliceStr))
