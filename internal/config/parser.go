@@ -5,7 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	slog "log/slog"
+	"log/slog"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -95,14 +95,6 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 	}
 
 	p.mergeCustomFuncRules()
-
-	// If no explicit naming rules were provided, apply a default set to prevent ambiguity.
-	if p.config.NamingRules.SourcePrefix == "" && p.config.NamingRules.SourceSuffix == "" &&
-		p.config.NamingRules.TargetPrefix == "" && p.config.NamingRules.TargetSuffix == "" {
-		slog.Debug("No explicit naming rules found. Applying default 'Source'/'Target' suffixes.")
-		p.config.NamingRules.SourceSuffix = "Source"
-		p.config.NamingRules.TargetSuffix = "Target"
-	}
 
 	return p.config, nil
 }

@@ -23,11 +23,19 @@ var camelCaseRegexp = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
 // NewNamer creates a new Namer.
 func NewNamer(config *config.Config, aliasMap map[string]string) *Namer {
-	sourcePkgs := make(map[string]struct{})
+	return &Namer{
+		config:     config,
+		aliasMap:   aliasMap,
+		sourcePkgs: make(map[string]struct{}),
+	}
+}
 
+// PopulateSourcePkgs populates the source package map from the final config.
+// This should be called after all implicit rules have been discovered.
+func (n *Namer) PopulateSourcePkgs(config *config.Config) {
 	// 1. Populate from explicit PackagePairs
 	for _, pair := range config.PackagePairs {
-		sourcePkgs[pair.SourcePath] = struct{}{}
+		n.sourcePkgs[pair.SourcePath] = struct{}{}
 	}
 
 	// 2. Populate from SourceType of ConversionRules (if PackagePairs is not exhaustive)
@@ -36,14 +44,8 @@ func NewNamer(config *config.Config, aliasMap map[string]string) *Namer {
 		lastDot := strings.LastIndex(rule.SourceType, ".")
 		if lastDot != -1 {
 			pkgPath := rule.SourceType[:lastDot]
-			sourcePkgs[pkgPath] = struct{}{}
+			n.sourcePkgs[pkgPath] = struct{}{}
 		}
-	}
-
-	return &Namer{
-		config:     config,
-		aliasMap:   aliasMap,
-		sourcePkgs: sourcePkgs,
 	}
 }
 

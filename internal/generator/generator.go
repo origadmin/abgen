@@ -93,6 +93,39 @@ func (g *Generator) Generate(typeInfos map[string]*model.TypeInfo) ([]byte, erro
 		slog.Debug("Implicit rule discovery finished", "discovered_rules", len(g.config.ConversionRules))
 	}
 
+	// Now that all rules are discovered, populate the namer's source package map.
+	g.namer.PopulateSourcePkgs(g.config)
+
+	// Intelligent default suffixes: Only apply if no explicit naming rules are set AND
+	// if there's at least one conversion rule with ambiguous (identical) base names.
+	if g.config.NamingRules.SourcePrefix == "" && g.config.NamingRules.SourceSuffix == "" &&
+		g.config.NamingRules.TargetPrefix == "" && g.config.NamingRules.TargetSuffix == "" {
+
+		needsDisambiguation := false
+		for _, rule := range g.config.ConversionRules {
+			sourceBaseName := ""
+			if lastDot := strings.LastIndex(rule.SourceType, "."); lastDot != -1 {
+				sourceBaseName = rule.SourceType[lastDot+1:]
+			}
+
+			targetBaseName := ""
+			if lastDot := strings.LastIndex(rule.TargetType, "."); lastDot != -1 {
+				targetBaseName = rule.TargetType[lastDot+1:]
+			}
+
+			if sourceBaseName != "" && sourceBaseName == targetBaseName {
+				needsDisambiguation = true
+				break
+			}
+		}
+
+		if needsDisambiguation {
+			slog.Debug("Ambiguous type names found with no explicit naming rules. Applying default 'Source'/'Target' suffixes.")
+			g.config.NamingRules.SourceSuffix = "Source"
+			g.config.NamingRules.TargetSuffix = "Target"
+		}
+	}
+
 	g.populateAliases()
 
 	var bodyBuf bytes.Buffer
