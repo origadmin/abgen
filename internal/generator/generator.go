@@ -437,7 +437,7 @@ func (g *Generator) getConversionExpression(
 			// Only proceed if the element types are different, otherwise direct assignment is fine.
 			if sourceElem.UniqueKey() != targetElem.UniqueKey() {
 				// Get the name of the dedicated slice conversion helper function
-				sliceConverterFuncName := g.namer.GetFunctionName(sourceElem, targetElem) // Pass element types for function name
+				sliceConverterFuncName := g.namer.GetFunctionName(sourceType, targetType)
 
 				// Add the slice conversion function to requiredConversionFunctions
 				g.requiredConversionFunctions[sliceConverterFuncName] = true
