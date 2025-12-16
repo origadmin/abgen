@@ -13,16 +13,16 @@ type Config struct {
 	PackagePairs        []*PackagePair
 	ConversionRules     []*ConversionRule
 	CustomFunctionRules map[string]string
-	NamingRules         NamingRule
+	NamingRules         NamingRules // Corrected: Renamed from NamingRule
 	GlobalBehaviorRules BehaviorRule
 }
 
 // GenerationContext holds information about the package where code is being generated.
 type GenerationContext struct {
-	PackageName     string
-	PackagePath     string
-	DirectivePath   string
-	MainOutputFile  string // New field for the main generated output file
+	PackageName      string
+	PackagePath      string
+	DirectivePath    string
+	MainOutputFile   string // New field for the main generated output file
 	CustomOutputFile string // New field for the custom stubs output file
 }
 
@@ -41,8 +41,9 @@ type ConversionRule struct {
 	CustomFunc string
 }
 
-// NamingRule defines naming conventions for generated types and functions.
-type NamingRule struct {
+// NamingRules defines naming conventions for generated types and functions.
+// Corrected: Renamed from NamingRule to NamingRules
+type NamingRules struct {
 	SourcePrefix string
 	SourceSuffix string
 	TargetPrefix string
@@ -78,7 +79,7 @@ func NewConfig() *Config {
 		PackagePairs:        []*PackagePair{},
 		ConversionRules:     []*ConversionRule{},
 		CustomFunctionRules: make(map[string]string),
-		NamingRules:         NamingRule{},
+		NamingRules:         NamingRules{}, // Corrected: Use the new type name
 		GlobalBehaviorRules: BehaviorRule{},
 	}
 }

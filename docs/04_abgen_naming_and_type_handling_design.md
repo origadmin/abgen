@@ -6,7 +6,6 @@
 *   **RawTypeName**: 从 `TypeInfo.Name` 或 `TypeInfo.Underlying.Name` 直接获取的原始类型字符串，未经任何大小写转换或前后缀处理。例如 `user`, `resourcecustom`。
 *   **CamelCasedName**: 经过 `toCamelCase` 函数处理后的字符串，符合 Go 语言的大驼峰命名规范。例如 `user_name` -> `UserName`, `usercustom` -> `Usercustom`。
 *   **ConfiguredPrefix/Suffix**: 在 `.abgen.yaml` 的 `naming_rules` 中为 `source` 或 `target` 配置的 `prefix` 和 `suffix`。
-*   **DisambiguationSuffix**: 当两个类型 `RawTypeName` 相同但 `ImportPath` 不同，且**没有**为它们配置任何 `ConfiguredPrefix/Suffix` 时，自动添加的 `Source` 或 `Target` 后缀。
 *   **FinalAlias**: 在生成的 `*.gen.go` 文件中，用于 `type FinalAlias = OriginalType` 声明的类型别名。这是 `abgen` 内部对某个 `TypeInfo` 的最终命名表示。
 *   **OriginalTypeString**: `FinalAlias` 声明右侧的原始类型字符串，可能包含包限定符（例如 `ent.User`）。
 *   **ConversionRule**: 定义了源类型 (SourceType FQN) 和目标类型 (TargetType FQN) 之间的转换关系，以及转换方向 (Direction) 和字段规则 (FieldRules)。
@@ -23,11 +22,11 @@
 
 ### 2.2. `Namer` 模块 (职责: 统一命名生成)
 
-*   **输入**: `TypeInfo` 对象，`isSource` 标志，`needsDisambiguation` 标志，`ConfiguredPrefix/Suffix`。
+*   **输入**: `TypeInfo` 对象，`isSource` 标志，`configuredPrefix`，`configuredSuffix`。
 *   **输出**: `CamelCasedName` 或 `FinalAlias`。
 *   **关键方法**:
     *   `toCamelCase(s string)`: 纯粹的字符串驼峰化工具。
-    *   `GetAlias(info *model.TypeInfo, isSource bool, needsDisambiguation bool)`: 生成 `FinalAlias` 的核心逻辑。
+    *   `GetAlias(info *model.TypeInfo, isSource bool, configuredPrefix string, configuredSuffix string)`: 生成 `FinalAlias` 的核心逻辑。
     *   `getAliasedOrBaseName(info *model.TypeInfo)`: 获取一个 `TypeInfo` 的最终可用名称（可能是 `FinalAlias`，也可能是其 `CamelCasedName`）。
 
 ### 2.3. `Generator` 模块 (职责: 协调与代码输出)
@@ -42,7 +41,7 @@
     *   `populateAliases()`: 协调 `Namer` 生成所有必要的**顶层** `FinalAlias` 并填充 `g.aliasMap` 和 `g.requiredAliases`。
     *   `writeAliases()`: 根据 `g.requiredAliases` 输出 `type FinalAlias = OriginalTypeString` 声明。
     *   `writeConversionFunctions()`: 输出转换函数，函数名和参数类型都通过 `Namer` 获取。
-    *   `getTypeString(info *model.TypeInfo, isSourceContext bool, needsDisambiguationContext bool, ignoreAliasMap bool)`: 获取一个 `TypeInfo` 在生成代码中应使用的字符串表示（优先 `FinalAlias`，其次动态构建），并**按需收集**别名到 `g.aliasMap` 和 `g.requiredAliases`。
+    *   `getTypeString(info *model.TypeInfo, isSourceContext bool, ignoreAliasMap bool)`: 获取一个 `TypeInfo` 在生成代码中应使用的字符串表示（优先 `FinalAlias`，其次动态构建），并**按需收集**别名到 `g.aliasMap` 和 `g.requiredAliases`。
 
 ## 3. 核心流程: 别名生成与类型处理
 
@@ -58,15 +57,17 @@
 *   **`Generator.populateAliases()` 步骤**:
     1.  遍历 `g.config.ConversionRules` 中的每一条 `rule` (SourceType FQN, TargetType FQN)。
     2.  获取 `sourceInfo = g.typeInfos[rule.SourceType]` 和 `targetInfo = g.typeInfos[rule.TargetType]`。
-    3.  **计算顶层歧义标志 (`topLevelNeedsDisambiguation`)**:
-        *   `topLevelNeedsDisambiguation = (sourceInfo.Name == targetInfo.Name && sourceInfo.ImportPath != targetInfo.ImportPath)`
+    3.  **判断是否需要默认 `Source/Target` 后缀**:
+        *   `useDefaultDisambiguationSuffix = (sourceInfo.Name == targetInfo.Name && sourceInfo.ImportPath != targetInfo.ImportPath)`
         *   这个标志仅在 `sourceInfo` 和 `targetInfo` 之间存在同名冲突时为 `true`。
     4.  **为源类型生成别名**:
-        *   `sourceAlias := g.namer.GetAlias(sourceInfo, true, topLevelNeedsDisambiguation)`
+        *   `sourcePrefix, sourceSuffix := g.namer.getEffectivePrefixAndSuffix(true, useDefaultDisambiguationSuffix)`
+        *   `sourceAlias := g.namer.GetAlias(sourceInfo, true, sourcePrefix, sourceSuffix)`
         *   将 `sourceAlias` 存储到 `g.aliasMap[sourceInfo.UniqueKey()]`。
         *   **将 `sourceInfo.UniqueKey()` 添加到 `g.requiredAliases` 中。**
     5.  **为目标类型生成别名**:
-        *   `targetAlias := g.namer.GetAlias(targetInfo, false, topLevelNeedsDisambiguation)`
+        *   `targetPrefix, targetSuffix := g.namer.getEffectivePrefixAndSuffix(false, useDefaultDisambiguationSuffix)`
+        *   `targetAlias := g.namer.GetAlias(targetInfo, false, targetPrefix, targetSuffix)`
         *   将 `targetAlias` 存储到 `g.aliasMap[targetInfo.UniqueKey()]`。
         *   **将 `targetInfo.UniqueKey()` 添加到 `g.requiredAliases` 中。**
     6.  **不再递归处理嵌套类型**。`populateAliases` 阶段不再负责递归发现和存储所有嵌套类型的别名。
@@ -78,16 +79,16 @@
 *   **`Generator.writeAliases()` 步骤**:
     1.  遍历 `g.aliasMap`。
     2.  **仅当 `fqn` 存在于 `g.requiredAliases` 中时，才生成 `type FinalAlias = OriginalTypeString` 声明。**
-    3.  `OriginalTypeString` 的获取通过 `g.getTypeString(g.typeInfos[fqn], false, topLevelNeedsDisambiguation, true)` 完成。
+    3.  `OriginalTypeString` 的获取通过 `g.getTypeString(g.typeInfos[fqn], false, true)` 完成。
 
 *   **`Generator.writeConversionFunctions()` 步骤**:
     1.  遍历 `g.config.ConversionRules` 中的每一条 `rule`。
     2.  获取 `sourceInfo = g.typeInfos[rule.SourceType]` 和 `targetInfo = g.typeInfos[rule.TargetType]`。
     3.  **生成函数名**: `funcName := g.namer.GetFunctionName(sourceInfo, targetInfo)`。
         *   `g.namer.GetFunctionName` 内部会调用 `g.namer.getAliasedOrBaseName(TypeInfo)`。
-    4.  **生成参数/返回值类型字符串**: `sourceTypeStr := g.getTypeString(sourceInfo, true, topLevelNeedsDisambiguation, false)`, `targetTypeStr := g.getTypeString(targetInfo, false, topLevelNeedsDisambiguation, false)`。
+    4.  **生成参数/返回值类型字符串**: `sourceTypeStr := g.getTypeString(sourceInfo, true, false)`, `targetTypeStr := g.getTypeString(targetInfo, false, false)`。
     5.  **仅当 `funcName` 存在于 `g.requiredConversionFunctions` 中时，才生成该转换函数。**
-    6.  在函数体内部，所有类型引用（包括字段类型、切片元素类型等）都通过 `g.getTypeString(TypeInfo, isSourceContext, topLevelNeedsDisambiguation, false)` 获取其字符串表示。
+    6.  在函数体内部，所有类型引用（包括字段类型、切片元素类型等）都通过 `g.getTypeString(TypeInfo, isSourceContext, false)` 获取其字符串表示。
 
 ## 4. `Namer` 模块的详细设计
 
@@ -119,33 +120,34 @@
     *   `getRawTypeName(TypeInfo{Kind: Pointer, Underlying: TypeInfo{Name: "User"}})` -> `"User"`
     *   `getRawTypeName(TypeInfo{Kind: Slice, Underlying: TypeInfo{Kind: Pointer, Underlying: TypeInfo{Name: "User"}}})` -> `"User"`
 
-### 4.3. `Namer.GetAlias(info *model.TypeInfo, isSource bool, needsDisambiguation bool)`
+### 4.3. `Namer.GetAlias(info *model.TypeInfo, isSource bool, configuredPrefix string, configuredSuffix string)`
 
-*   **职责**: 根据 `TypeInfo`、方向 (`isSource`) 和歧义标志 (`needsDisambiguation`)，以及配置的前缀/后缀，计算并返回 `FinalAlias`。
+*   **职责**: 根据 `TypeInfo`、方向 (`isSource`)，以及**已处理好默认歧义逻辑的** `configuredPrefix` 和 `configuredSuffix`，计算并返回 `FinalAlias`。
 *   **逻辑**:
     1.  **处理原始类型**: 如果 `info.Kind == model.Primitive`，直接返回 `n.toCamelCase(info.Name)`。
     2.  **获取最底层命名类型名称**: `rawBaseName := n.getRawTypeName(info)`。
     3.  **驼峰化 `rawBaseName`**: `camelCasedBase := n.toCamelCase(rawBaseName)`。
 
-    4.  **获取配置的前缀/后缀 (并处理默认歧义后缀)**:
-        *   `configuredPrefix, configuredSuffix := n.getEffectivePrefixAndSuffix(isSource, needsDisambiguation)`
+    4.  **驼峰化 `configuredPrefix` 和 `configuredSuffix`**:
         *   `camelCasedConfiguredPrefix := n.toCamelCase(configuredPrefix)`
         *   `camelCasedConfiguredSuffix := n.toCamelCase(configuredSuffix)`
 
-    5.  **构建基础别名 (应用配置的前缀/后缀)**:
-        *   `finalAlias = camelCasedConfiguredPrefix + camelCasedBase + camelCasedConfiguredSuffix`
+    5.  **构建基础别名**: `finalAlias = camelCasedConfiguredPrefix + camelCasedBase + camelCasedConfiguredSuffix`。
 
     6.  **处理切片复数化**: 如果 `info.Kind == model.Slice`，`finalAlias += "s"`。
 
     7.  返回 `finalAlias`。
 *   **示例**:
-    *   `info.Name="usercustom"`, `isSource=false`, `needsDisambiguation=false`, `target_suffix="custom"`
-        *   `rawTypeName="usercustom"`
-        *   `configuredSuffix="custom"` (来自 `getEffectivePrefixAndSuffix`)
-        *   驼峰化: `camelCasedBase="Usercustom"`, `camelCasedSuffix="Custom"`
-        *   拼接: `"UsercustomCustom"` (错误!)
-        *   **修正后**: `getEffectivePrefixAndSuffix` 会返回 `configuredSuffix="custom"`. `camelCasedBase="Usercustom"`, `camelCasedSuffix="Custom"`. `finalAlias="UsercustomCustom"`.
-        *   **再次修正**: `rawBaseName` 应该只取 `user` 部分，`custom` 应该被 `getEffectivePrefixAndSuffix` 识别为 `configuredSuffix`。
+    *   `info.Name="usercustom"`, `isSource=false`, `configuredPrefix=""`, `configuredSuffix="custom"`
+        *   `rawBaseName="usercustom"`
+        *   `camelCasedBase="Usercustom"`
+        *   `camelCasedConfiguredSuffix="Custom"`
+        *   `finalAlias="UsercustomCustom"` (正确)
+    *   `info.Name="User"`, `isSource=true`, `configuredPrefix=""`, `configuredSuffix="Source"` (由 `Generator` 层面判断冲突后传入)
+        *   `rawBaseName="User"`
+        *   `camelCasedBase="User"`
+        *   `camelCasedConfiguredSuffix="Source"`
+        *   `finalAlias="UserSource"` (正确)
 
 ### 4.4. `Namer.getAliasedOrBaseName(info *model.TypeInfo)`
 
@@ -155,7 +157,7 @@
     2.  尝试从 `g.aliasMap[info.UniqueKey()]` 中查找别名。如果找到，返回该别名。
     3.  **回退**: 如果 `g.aliasMap` 中没有找到别名，则直接返回 `n.toCamelCase(info.Name)`。这适用于那些不需要特殊别名的中间类型或未被 `populateAliases` 显式处理的类型。
 
-## 5. `Generator.getTypeString(info *model.TypeInfo, isSourceContext bool, needsDisambiguationContext bool, ignoreAliasMap bool)`
+## 5. `Generator.getTypeString(info *model.TypeInfo, isSourceContext bool, ignoreAliasMap bool)`
 
 *   **职责**: 获取一个 `TypeInfo` 在生成的 Go 代码中作为类型声明（例如函数参数、返回值、`type Alias = OriginalType` 右侧）的字符串表示，并**按需收集**别名到 `g.aliasMap` 和 `g.requiredAliases`。
 *   **逻辑**:
@@ -165,13 +167,14 @@
         *   如果 `!ignoreAliasMap` 且 `g.aliasMap` 中存在 `key` 对应的别名，则返回该别名。
     3.  **如果 `g.aliasMap` 中没有 (或被忽略)，则动态构建字符串，并按需收集别名**:
         *   **对于命名类型 (`info.IsNamedType()`) 或复合类型 (Slice, Map, Array, Pointer)**：
-            *   **按需生成别名**: 调用 `generatedAlias := g.namer.GetAlias(info, isSourceContext, needsDisambiguationContext)`。
+            *   **获取上下文中的前缀/后缀**: `currentPrefix, currentSuffix := g.namer.getEffectivePrefixAndSuffix(isSourceContext, false)` (这里 `needsDisambiguation` 传递 `false`，因为 `getTypeString` 内部不负责判断顶层冲突，只使用 `populateAliases` 传递的上下文)。
+            *   **按需生成别名**: 调用 `generatedAlias := g.namer.GetAlias(info, isSourceContext, currentPrefix, currentSuffix)`。
             *   **存储别名**: `g.aliasMap[key] = generatedAlias`。
             *   **标记为需要声明**: `g.requiredAliases[key] = struct{}`。
             *   **返回生成的别名**: `return generatedAlias`。
         *   **对于原始类型 (`model.Primitive`)**：直接返回 `info.Name`。
         *   **对于其他未处理的类型**：返回 `"interface{}"`。
-    4.  **递归处理底层类型**: 在构建复合类型（Slice, Map, Array, Pointer）的字符串时，递归调用 `g.getTypeString` 来获取其底层类型或元素类型的正确字符串表示，并**传递 `isSourceContext`, `needsDisambiguationContext` 和 `ignoreAliasMap` 参数**。
+    4.  **递归处理底层类型**: 在构建复合类型（Slice, Map, Array, Pointer）的字符串时，递归调用 `g.getTypeString` 来获取其底层类型或元素类型的正确字符串表示，并**传递 `isSourceContext` 和 `ignoreAliasMap` 参数**。
 
 ## 6. 隐式切片转换规则的发现 (`Generator.discoverImplicitConversionRules`)
 
@@ -182,4 +185,4 @@
 
 ## 7. 总结
 
-这份设计文档旨在提供一个清晰、无歧义的命名和类型处理流程。通过严格遵循这些职责划分和步骤，我们期望能够解决当前存在的所有命名问题，并为未来的功能扩展提供稳定的基础。<ctrl46>
+这份设计文档旨在提供一个清晰、无歧义的命名和类型处理流程。通过严格遵循这些职责划分和步骤，我们期望能够解决当前存在的所有命名问题，并为未来的功能扩展提供稳定的基础。<ctrl46>}
