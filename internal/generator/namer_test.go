@@ -92,3 +92,105 @@ func TestNamer_GetAlias_FinalCorrectLogic(t *testing.T) {
 		})
 	}
 }
+
+func TestNamer_GetTypeString(t *testing.T) {
+	// Mock TypeInfo objects
+	userStructType := &model.TypeInfo{Name: "User", ImportPath: "types", Kind: model.Struct}
+	intPrimitiveType := &model.TypeInfo{Name: "int", Kind: model.Primitive}
+	stringPrimitiveType := &model.TypeInfo{Name: "string", Kind: model.Primitive}
+
+	// Complex types
+	pointerToUser := &model.TypeInfo{Kind: model.Pointer, Underlying: userStructType}
+	sliceOfUser := &model.TypeInfo{Kind: model.Slice, Underlying: userStructType}
+	sliceOfInt := &model.TypeInfo{Kind: model.Slice, Underlying: intPrimitiveType}
+
+	// Array with specific length
+	array5OfUser := &model.TypeInfo{Kind: model.Array, ArrayLen: 5, Underlying: userStructType}
+
+	// Map with specific key type
+	mapOfStringToUser := &model.TypeInfo{Kind: model.Map, KeyType: stringPrimitiveType, Underlying: userStructType}
+
+	// Named struct type (e.g., ent.Resource)
+	entResourceStruct := &model.TypeInfo{Name: "Resource", ImportPath: "ent", Kind: model.Struct}
+	// Named type wrapping a struct (e.g., type MyResource ent.Resource)
+	myResourceNamedType := &model.TypeInfo{Name: "MyResource", ImportPath: "mypkg", Kind: model.Named, Underlying: entResourceStruct}
+	// Slice of a named type that ultimately points to a struct (e.g., []ent.Resource)
+	sliceOfEntResource := &model.TypeInfo{Kind: model.Slice, Underlying: entResourceStruct}
+	// Slice of a named type that ultimately points to a struct (e.g., []mypkg.MyResource)
+	sliceOfMyResourceNamedType := &model.TypeInfo{Kind: model.Slice, Underlying: myResourceNamedType}
+
+	testCases := []struct {
+		name     string
+		info     *model.TypeInfo
+		expected string
+	}{
+		{
+			name:     "Primitive Type (int)",
+			info:     intPrimitiveType,
+			expected: "int",
+		},
+		{
+			name:     "Primitive Type (string)",
+			info:     stringPrimitiveType,
+			expected: "string",
+		},
+		{
+			name:     "Struct Type (types.User)",
+			info:     userStructType,
+			expected: "types.User",
+		},
+		{
+			name:     "Pointer to Struct (*types.User)",
+			info:     pointerToUser,
+			expected: "*types.User",
+		},
+		{
+			name:     "Slice of Struct ([]*types.User)",
+			info:     sliceOfUser,
+			expected: "[]*types.User",
+		},
+		{
+			name:     "Slice of Primitive ([]int)",
+			info:     sliceOfInt,
+			expected: "[]int",
+		},
+		{
+			name:     "Array of Struct ([5]*types.User)",
+			info:     array5OfUser,
+			expected: "[5]*types.User",
+		},
+		{
+			name:     "Map of String to Struct (map[string]*types.User)",
+			info:     mapOfStringToUser,
+			expected: "map[string]*types.User",
+		},
+		{
+			name:     "Named Struct Type (ent.Resource)",
+			info:     entResourceStruct,
+			expected: "ent.Resource",
+		},
+		{
+			name:     "Named Type wrapping Struct (mypkg.MyResource)",
+			info:     myResourceNamedType,
+			expected: "mypkg.MyResource",
+		},
+		{
+			name:     "Slice of Named Struct Type ([]*ent.Resource)",
+			info:     sliceOfEntResource,
+			expected: "[]*ent.Resource",
+		},
+		{
+			name:     "Slice of Named Type wrapping Struct ([]*mypkg.MyResource)",
+			info:     sliceOfMyResourceNamedType,
+			expected: "[]*mypkg.MyResource",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			namer := NewNamer(&config.Config{}, make(map[string]string)) // Config not relevant for GetTypeString
+			result := namer.GetTypeString(tc.info)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}

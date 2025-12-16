@@ -128,6 +128,61 @@ func (n *Namer) GetAlias(info *model.TypeInfo, isSource bool) string {
 	return finalAlias
 }
 
+// GetTypeString generates the full string representation of a TypeInfo,
+// including pointers, slices, arrays, and maps, and handling package paths.
+// This is used for the right-hand side of type alias definitions.
+func (n *Namer) GetTypeString(info *model.TypeInfo) string {
+	if info == nil {
+		return ""
+	}
+
+	var sb strings.Builder
+
+	switch info.Kind {
+	case model.Pointer:
+		sb.WriteString("*")
+		if info.Underlying != nil {
+			sb.WriteString(n.GetTypeString(info.Underlying))
+		}
+	case model.Slice:
+		sb.WriteString("[]")
+		if info.Underlying != nil {
+			// If the underlying type of a slice is ultimately a struct, it should be a pointer in the slice.
+			if info.Underlying.IsUltimatelyStruct() {
+				sb.WriteString("*")
+			}
+			sb.WriteString(n.GetTypeString(info.Underlying))
+		}
+	case model.Array:
+		sb.WriteString(fmt.Sprintf("[%d]", info.ArrayLen)) // Use ArrayLen
+		if info.Underlying != nil {
+			if info.Underlying.IsUltimatelyStruct() {
+				sb.WriteString("*")
+			}
+			sb.WriteString(n.GetTypeString(info.Underlying))
+		}
+	case model.Map:
+		sb.WriteString("map[")
+		if info.KeyType != nil { // Use KeyType
+			sb.WriteString(n.GetTypeString(info.KeyType))
+		} else {
+			sb.WriteString("interface{}") // Fallback if KeyType is not set
+		}
+		sb.WriteString("]")
+		if info.Underlying != nil { // Underlying is the value type
+			if info.Underlying.IsUltimatelyStruct() {
+				sb.WriteString("*")
+			}
+			sb.WriteString(n.GetTypeString(info.Underlying))
+		}
+	default: // model.Struct, model.Primitive, etc.
+		// Use BuildQualifiedTypeName to correctly handle package paths
+		info.BuildQualifiedTypeName(&sb)
+	}
+
+	return sb.String()
+}
+
 // getAliasedOrBaseName returns the alias if it exists in the map, or the simple name.
 func (n *Namer) getAliasedOrBaseName(info *model.TypeInfo) string {
 	if info == nil {

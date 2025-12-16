@@ -194,9 +194,8 @@ func (g *Generator) writeAliases() {
 
 	for _, item := range validAliases {
 		typeInfo := g.typeInfos[item.fqn]
-		// 使用 getTypeString 获取原始类型名称，强制忽略别名查找
-		// isSourceContext 和 useDefaultDisambiguationSuffixContext 对于 writeAliases 的右侧类型不重要，因为我们只需要原始类型名
-		originalTypeName := g.getTypeString(typeInfo, false, false, true)
+		// 使用 g.namer.GetTypeString 获取原始类型名称，强制忽略别名查找
+		originalTypeName := g.namer.GetTypeString(typeInfo) // <--- Corrected: Use namer.GetTypeString
 		g.buf.WriteString(fmt.Sprintf("\t%s = %s\n", item.aliasName, originalTypeName))
 	}
 	g.buf.WriteString(")\n\n")
@@ -285,15 +284,15 @@ func (g *Generator) doGenerateConversionFunction(sourceInfo, targetInfo *model.T
 
 	funcName := g.namer.GetFunctionName(sourceInfo, targetInfo)
 	// 获取顶层歧义标志，用于传递给 getTypeString
-	topLevelNeedsDisambiguation := sourceInfo.Name == targetInfo.Name && sourceInfo.ImportPath != targetInfo.ImportPath
+	// topLevelNeedsDisambiguation := sourceInfo.Name == targetInfo.Name && sourceInfo.ImportPath != targetInfo.ImportPath // This is no longer used in getTypeString
 
-	sourceTypeStr := g.getTypeString(sourceInfo, true, topLevelNeedsDisambiguation, false)
-	targetTypeStr := g.getTypeString(targetInfo, false, topLevelNeedsDisambiguation, false)
+	sourceTypeStr := g.namer.GetTypeString(sourceInfo) // <--- Corrected: Use namer.GetTypeString
+	targetTypeStr := g.namer.GetTypeString(targetInfo) // <--- Corrected: Use namer.GetTypeString
 
 	g.buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceTypeStr, targetTypeStr))
 	g.buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, sourceTypeStr, targetTypeStr))
 	g.buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n\n")
-	g.generateStructToStructConversion(sourceInfo, targetInfo, rule, topLevelNeedsDisambiguation)
+	g.generateStructToStructConversion(sourceInfo, targetInfo, rule) // Removed topLevelNeedsDisambiguation
 	g.buf.WriteString("}\n\n")
 }
 
@@ -301,15 +300,10 @@ func (g *Generator) generateSliceToSliceConversion(funcName string, sourceInfo, 
 	sourceElem := g.converter.GetElementType(sourceInfo)
 	targetElem := g.converter.GetElementType(targetInfo)
 
-	// 对于切片转换函数，其参数和返回值类型字符串的生成，需要知道其上下文的 isSourceContext 和 needsDisambiguationContext
-	// 这里假设切片转换函数本身是顶层转换的一部分，所以 isSourceContext 和 needsDisambiguationContext 应该与 generateConversionFunction 的调用保持一致
-	// 但由于 generateSliceToSliceConversion 是从 doGenerateConversionFunction 调用的，
-	// 且 doGenerateConversionFunction 已经处理了顶层 isSource 和 needsDisambiguation，
-	// 所以这里需要将这些上下文信息传递下去。
-	// 暂时将 isSourceContext 和 needsDisambiguationContext 设置为 false，这可能需要根据实际调用链进行调整。
-	// TODO: 考虑如何正确传递 isSourceContext 和 needsDisambiguationContext 到这里
-	sourceSliceStr := g.getTypeString(sourceInfo, false, false, false)
-	targetSliceStr := g.getTypeString(targetInfo, false, false, false)
+	// For slice conversion functions, the parameter and return type strings should be generated
+	// using namer.GetTypeString to ensure correct pointer handling.
+	sourceSliceStr := g.namer.GetTypeString(sourceInfo) // <--- Corrected: Use namer.GetTypeString
+	targetSliceStr := g.namer.GetTypeString(targetInfo) // <--- Corrected: Use namer.GetTypeString
 
 	g.buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceSliceStr, targetSliceStr)) // Add comment for helper
 	g.buf.WriteString(fmt.Sprintf("func %s(froms %s) %s {\n", funcName, sourceSliceStr, targetSliceStr))
@@ -344,8 +338,8 @@ func (g *Generator) generateSliceToSliceConversion(funcName string, sourceInfo, 
 	g.buf.WriteString("}\n\n")
 }
 
-func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule, topLevelNeedsDisambiguation bool) {
-	g.buf.WriteString("\tto := &" + g.getTypeString(targetInfo, false, topLevelNeedsDisambiguation, false) + "{\n")
+func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule) { // Removed topLevelNeedsDisambiguation
+	g.buf.WriteString("\tto := &" + g.namer.GetTypeString(targetInfo) + "{\n") // <--- Corrected: Use namer.GetTypeString
 	for _, sourceField := range sourceInfo.Fields {
 		if _, shouldIgnore := rule.FieldRules.Ignore[sourceField.Name]; shouldIgnore {
 			continue
@@ -374,7 +368,7 @@ func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *mod
 		}
 		if targetField != nil {
 			// Corrected: Pass targetField (which is *model.FieldInfo) to getConversionExpression
-			conversionExpr := g.getConversionExpression(sourceInfo, sourceField, targetInfo, targetField, "from", topLevelNeedsDisambiguation)
+			conversionExpr := g.getConversionExpression(sourceInfo, sourceField, targetInfo, targetField, "from") // Removed topLevelNeedsDisambiguation
 			g.buf.WriteString(fmt.Sprintf("\t\t%s: %s,\n", targetField.Name, conversionExpr))
 		}
 	}
@@ -436,8 +430,7 @@ func (g *Generator) getConversionExpression(
 	parentSource *model.TypeInfo, sourceField *model.FieldInfo,
 	parentTarget *model.TypeInfo, targetField *model.FieldInfo, // Corrected: targetField is now *model.FieldInfo
 	fromVar string,
-	topLevelNeedsDisambiguation bool, // Add this parameter
-) string {
+) string { // Removed topLevelNeedsDisambiguation
 	sourceType := sourceField.Type
 	targetType := targetField.Type // Corrected: targetField is *model.FieldInfo, so targetField.Type is *model.TypeInfo
 	sourceFieldExpr := fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
@@ -491,32 +484,32 @@ func (g *Generator) getConversionExpression(
 
 	// Handle underlying types for named types that are not primitive
 	if sourceType.Underlying != nil && targetType.Underlying != nil && sourceType.Underlying.UniqueKey() == targetType.Underlying.UniqueKey() {
-		return fmt.Sprintf("%s(%s)", g.getTypeString(targetType, false, topLevelNeedsDisambiguation, false), sourceFieldExpr)
+		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr) // <--- Corrected: Use namer.GetTypeString
 	}
 	if sourceType.Underlying != nil && sourceType.Underlying.UniqueKey() == targetKey {
-		return fmt.Sprintf("%s(%s)", g.getTypeString(targetType, false, topLevelNeedsDisambiguation, false), sourceFieldExpr)
+		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr) // <--- Corrected: Use namer.GetTypeString
 	}
 	if targetType.Underlying != nil && targetType.Underlying.UniqueKey() == sourceKey {
-		return fmt.Sprintf("%s(%s)", g.getTypeString(targetType, false, topLevelNeedsDisambiguation, false), sourceFieldExpr)
+		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr) // <--- Corrected: Use namer.GetTypeString
 	}
 
 	// Handle numeric primitive conversions (e.g., int to int32)
 	if sourceType.Kind == model.Primitive && targetType.Kind == model.Primitive &&
 		isNumericPrimitive(sourceType.Name) && isNumericPrimitive(targetType.Name) {
-		return fmt.Sprintf("%s(%s)", g.getTypeString(targetType, false, topLevelNeedsDisambiguation, false), sourceFieldExpr)
+		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr) // <--- Corrected: Use namer.GetTypeString
 	}
 
 	if sourceType.Kind == model.Primitive && targetType.Kind == model.Primitive {
 		if canDirectlyConvertPrimitives(sourceType.Name, targetType.Name) {
-			return fmt.Sprintf("%s(%s)", g.getTypeString(targetType, false, topLevelNeedsDisambiguation, false), sourceFieldExpr)
+			return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr) // <--- Corrected: Use namer.GetTypeString
 		} else {
 			// Corrected: Pass targetField (which is *model.FieldInfo) to GetPrimitiveConversionStubName
 			stubFuncName := g.namer.GetPrimitiveConversionStubName(parentSource, sourceField, parentTarget, targetField)
 			if _, exists := g.customStubs[stubFuncName]; !exists {
 				g.customStubs[stubFuncName] = generatePrimitiveConversionStub(
 					stubFuncName,
-					g.getTypeString(sourceType, true, topLevelNeedsDisambiguation, false),
-					g.getTypeString(targetType, false, topLevelNeedsDisambiguation, false),
+					g.namer.GetTypeString(sourceType), // <--- Corrected: Use namer.GetTypeString
+					g.namer.GetTypeString(targetType), // <--- Corrected: Use namer.GetTypeString
 				)
 			}
 			g.requiredConversionFunctions[stubFuncName] = true // Mark stub function as required
@@ -650,27 +643,8 @@ func (g *Generator) getTypeString(info *model.TypeInfo, isSourceContext bool, us
 	}
 
 	// 5. 对于其他未处理的类型，构建其原始的 Go 类型字符串
-	switch info.Kind {
-	case model.Slice:
-		// 递归调用时，传递 isSourceContext, useDefaultDisambiguationSuffixContext 和 ignoreAliasMap
-		return "[]" + g.getTypeString(info.Underlying, isSourceContext, useDefaultDisambiguationSuffixContext, ignoreAliasMap)
-	case model.Pointer:
-		return "*" + g.getTypeString(info.Underlying, isSourceContext, useDefaultDisambiguationSuffixContext, ignoreAliasMap)
-	case model.Map:
-		keyStr := g.getTypeString(info.KeyType, isSourceContext, useDefaultDisambiguationSuffixContext, ignoreAliasMap)
-		valStr := g.getTypeString(info.Underlying, isSourceContext, useDefaultDisambiguationSuffixContext, ignoreAliasMap)
-		return fmt.Sprintf("map[%s]%s", keyStr, valStr)
-	case model.Array:
-		return fmt.Sprintf("[%d]%s", info.ArrayLen, g.getTypeString(info.Underlying, isSourceContext, useDefaultDisambiguationSuffixContext, ignoreAliasMap))
-	case model.Struct, model.Interface, model.Named, model.Chan, model.Func:
-		if info.ImportPath != "" && !g.isCurrentPackage(info.ImportPath) {
-			pkgAlias := g.importMgr.GetAlias(info.ImportPath)
-			return fmt.Sprintf("%s.%s", pkgAlias, info.Name)
-		}
-		return info.Name
-	default:
-		return "interface{}" // Fallback
-	}
+	// DELEGATE TO NAMER.GETTYPESTRING FOR ACCURATE CONSTRUCTION
+	return g.namer.GetTypeString(info) // <--- CHANGE IS HERE
 }
 
 func (g *Generator) discoverImplicitConversionRules() {

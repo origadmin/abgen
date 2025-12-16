@@ -217,14 +217,12 @@ func (ti *TypeInfo) GoTypeString() string {
 		slog.Debug("GoTypeString", "ti", "nil", "result", "nil")
 		return "nil"
 	}
-
-
-
 	return ti.buildTypeStringFromUnderlying()
 }
 
-// buildQualifiedTypeName builds the qualified type name with package prefix if needed.
-func (ti *TypeInfo) buildQualifiedTypeName(sb *strings.Builder) {
+// BuildQualifiedTypeName builds the qualified type name with package prefix if needed.
+// This method is now exported.
+func (ti *TypeInfo) BuildQualifiedTypeName(sb *strings.Builder) {
 	if ti.Name == "" {
 		sb.WriteString("interface{}")
 		return
@@ -236,6 +234,21 @@ func (ti *TypeInfo) buildQualifiedTypeName(sb *strings.Builder) {
 		sb.WriteString(".")
 	}
 	sb.WriteString(ti.Name)
+}
+
+// IsUltimatelyStruct checks if the type itself is a struct, or if it's a named type
+// whose underlying type is ultimately a struct.
+func (ti *TypeInfo) IsUltimatelyStruct() bool {
+	if ti == nil {
+		return false
+	}
+	if ti.Kind == Struct {
+		return true
+	}
+	if ti.Kind == Named && ti.Underlying != nil {
+		return ti.Underlying.IsUltimatelyStruct() // Recursively check the underlying type
+	}
+	return false
 }
 
 func (ti *TypeInfo) buildTypeStringFromUnderlying() string {
@@ -278,22 +291,22 @@ func (ti *TypeInfo) buildTypeStringFromUnderlying() string {
 		}
 	case Chan:
 		if ti.Name != "" {
-			ti.buildQualifiedTypeName(&sb)
+			ti.BuildQualifiedTypeName(&sb)
 		} else {
 			sb.WriteString("chan interface{}")
 		}
 	case Func:
 		if ti.Name != "" {
-			ti.buildQualifiedTypeName(&sb)
+			ti.BuildQualifiedTypeName(&sb)
 		} else {
 			sb.WriteString("func()")
 		}
 	case Named:
 		// For named types, we should show the type name, not the underlying type
 		// This preserves the semantic meaning of the defined type
-		ti.buildQualifiedTypeName(&sb)
+		ti.BuildQualifiedTypeName(&sb)
 	case Primitive, Struct, Interface:
-		ti.buildQualifiedTypeName(&sb)
+		ti.BuildQualifiedTypeName(&sb)
 	default:
 		sb.WriteString("unknown")
 	}
