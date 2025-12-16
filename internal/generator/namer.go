@@ -2,7 +2,9 @@ package generator
 
 import (
 	"fmt"
+	"log/slog"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -12,17 +14,36 @@ import (
 
 // Namer is responsible for generating names for functions and type aliases.
 type Namer struct {
-	config   *config.Config
-	aliasMap map[string]string
+	config     *config.Config
+	aliasMap   map[string]string
+	sourcePkgs map[string]struct{}
 }
 
 var camelCaseRegexp = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
 // NewNamer creates a new Namer.
 func NewNamer(config *config.Config, aliasMap map[string]string) *Namer {
+	sourcePkgs := make(map[string]struct{})
+
+	// 1. Populate from explicit PackagePairs
+	for _, pair := range config.PackagePairs {
+		sourcePkgs[pair.SourcePath] = struct{}{}
+	}
+
+	// 2. Populate from SourceType of ConversionRules (if PackagePairs is not exhaustive)
+	for _, rule := range config.ConversionRules {
+		// rule.SourceType is an FQN like "pkg/path.TypeName"
+		lastDot := strings.LastIndex(rule.SourceType, ".")
+		if lastDot != -1 {
+			pkgPath := rule.SourceType[:lastDot]
+			sourcePkgs[pkgPath] = struct{}{}
+		}
+	}
+
 	return &Namer{
-		config:   config,
-		aliasMap: aliasMap,
+		config:     config,
+		aliasMap:   aliasMap,
+		sourcePkgs: sourcePkgs,
 	}
 }
 
@@ -67,6 +88,13 @@ func (n *Namer) GetPrimitiveConversionStubName(
 
 // getPrefixAndSuffix returns the configured prefix and suffix for either a source or a target type.
 func (n *Namer) getPrefixAndSuffix(isSource bool) (prefix string, suffix string) {
+	slog.Debug("getPrefixAndSuffix",
+		"isSource", isSource,
+		"SourcePrefix", n.config.NamingRules.SourcePrefix,
+		"SourceSuffix", n.config.NamingRules.SourceSuffix,
+		"TargetPrefix", n.config.NamingRules.TargetPrefix,
+		"TargetSuffix", n.config.NamingRules.TargetSuffix,
+	)
 	if isSource {
 		return n.config.NamingRules.SourcePrefix, n.config.NamingRules.SourceSuffix
 	}
@@ -204,11 +232,28 @@ func (n *Namer) getAliasedOrBaseName(info *model.TypeInfo) string {
 	if info == nil {
 		return ""
 	}
-	if alias, ok := n.aliasMap[info.UniqueKey()]; ok {
+	if alias, ok := n.aliasMap[info.UniqueKey()]; ok && alias != "" {
+		slog.Debug("getAliasedOrBaseName: found cached alias", "fqn", info.FQN(), "alias", alias)
 		return alias
 	}
-	// For function naming, we generate the alias on the fly.
-	// We assume 'source' as a default context. This is a simplification, but
-	// sufficient for creating consistent function names.
-	return n.GetAlias(info, true)
+
+	// Determine the logical role of the type by its package path.
+	_, isSource := n.sourcePkgs[info.ImportPath]
+
+	// For debugging: print sourcePkgs keys
+	sourcePkgKeys := make([]string, 0, len(n.sourcePkgs))
+	for k := range n.sourcePkgs {
+		sourcePkgKeys = append(sourcePkgKeys, k)
+	}
+	sort.Strings(sourcePkgKeys) // Sort for consistent logging order
+
+	slog.Debug("getAliasedOrBaseName: determining isSource",
+		"fqn", info.FQN(),
+		"importPath", info.ImportPath,
+		"sourcePkgs_keys", sourcePkgKeys,
+		"determined_isSource", isSource,
+	)
+
+	// For function naming, we generate the alias on the fly, respecting the source/target context.
+	return n.GetAlias(info, isSource)
 }
