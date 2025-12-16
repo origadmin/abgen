@@ -9,22 +9,21 @@ package field_ignore_remap
 import (
 	source "github.com/origadmin/abgen/testdata/02_basic_conversions/field_ignore_remap/source"
 	target "github.com/origadmin/abgen/testdata/02_basic_conversions/field_ignore_remap/target"
-	time "time"
 )
 
 // Local type aliases for external types.
 type (
 	User    = source.User
-	Userdto = target.UserDTO
+	UserDTO = target.UserDTO
 )
 
-// ConvertUserToUserdto converts User to Userdto
-func ConvertUserToUserdto(from *User) *Userdto {
+// ConvertUserToUserDTO converts User to UserDTO
+func ConvertUserToUserDTO(from *User) *UserDTO {
 	if from == nil {
 		return nil
 	}
 
-	to := &Userdto{
+	to := &target.UserDTO{
 		ID:         from.ID,
 		FullName:   from.Name,
 		UserEmail:  from.Email,
@@ -33,13 +32,13 @@ func ConvertUserToUserdto(from *User) *Userdto {
 	return to
 }
 
-// ConvertUserdtoToUser converts Userdto to User
-func ConvertUserdtoToUser(from *Userdto) *User {
+// ConvertUserDTOToUser converts UserDTO to User
+func ConvertUserDTOToUser(from *UserDTO) *User {
 	if from == nil {
 		return nil
 	}
 
-	to := &User{
+	to := &source.User{
 		ID:        from.ID,
 		Name:      from.FullName,
 		Email:     from.UserEmail,

@@ -16,13 +16,12 @@ import (
 type (
 	Department    = source.Department
 	DepartmentPB  = target.Department
-	Departments   = []Department
-	DepartmentsPB = []DepartmentPB
-	Time          = time.Time
+	Departments   = []*source.Department
+	DepartmentsPB = []*target.Department
 	User          = source.User
 	UserPB        = target.User
-	Users         = []User
-	UsersPB       = []UserPB
+	Users         = []*source.User
+	UsersPB       = []*target.User
 )
 
 // ConvertDepartmentsToDepartmentsPB converts Departments to DepartmentsPB
@@ -32,10 +31,7 @@ func ConvertDepartmentsToDepartmentsPB(froms Departments) DepartmentsPB {
 	}
 	tos := make(DepartmentsPB, len(froms))
 	for i, f := range froms {
-		converted := ConvertDepartmentToDepartmentPB(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertDepartmentToDepartmentPB(f.f)
 	}
 	return tos
 }
@@ -47,10 +43,7 @@ func ConvertDepartmentsPBToDepartments(froms DepartmentsPB) Departments {
 	}
 	tos := make(Departments, len(froms))
 	for i, f := range froms {
-		converted := ConvertDepartmentPBToDepartment(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertDepartmentPBToDepartment(f.f)
 	}
 	return tos
 }
@@ -62,10 +55,7 @@ func ConvertUsersToUsersPB(froms Users) UsersPB {
 	}
 	tos := make(UsersPB, len(froms))
 	for i, f := range froms {
-		converted := ConvertUserToUserPB(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertUserToUserPB(f.f)
 	}
 	return tos
 }
@@ -77,10 +67,7 @@ func ConvertUsersPBToUsers(froms UsersPB) Users {
 	}
 	tos := make(Users, len(froms))
 	for i, f := range froms {
-		converted := ConvertUserPBToUser(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertUserPBToUser(f.f)
 	}
 	return tos
 }
@@ -91,7 +78,7 @@ func ConvertDepartmentToDepartmentPB(from *Department) *DepartmentPB {
 		return nil
 	}
 
-	to := &DepartmentPB{
+	to := &target.Department{
 		Id:          int32(from.ID),
 		Name:        from.Name,
 		Description: from.Description,
@@ -106,7 +93,7 @@ func ConvertDepartmentPBToDepartment(from *DepartmentPB) *Department {
 		return nil
 	}
 
-	to := &Department{
+	to := &source.Department{
 		ID:          int(from.Id),
 		Name:        from.Name,
 		Description: from.Description,
@@ -121,7 +108,7 @@ func ConvertUserToUserPB(from *User) *UserPB {
 		return nil
 	}
 
-	to := &UserPB{
+	to := &target.User{
 		Id:        int32(from.ID),
 		Username:  from.Username,
 		Age:       int32(from.Age),
@@ -138,7 +125,7 @@ func ConvertUserPBToUser(from *UserPB) *User {
 		return nil
 	}
 
-	to := &User{
+	to := &source.User{
 		ID:        int(from.Id),
 		Username:  from.Username,
 		Age:       int(from.Age),

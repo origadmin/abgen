@@ -15,12 +15,12 @@ import (
 type (
 	ItemSource   = source.Item
 	ItemTarget   = target.Item
-	ItemsSource  = []ItemSource
-	ItemsTarget  = []ItemTarget
+	ItemsSource  = []*source.Item
+	ItemsTarget  = []*target.Item
 	OrderSource  = source.Order
 	OrderTarget  = target.Order
-	OrdersSource = []OrderSource
-	OrdersTarget = []OrderTarget
+	OrdersSource = []*source.Order
+	OrdersTarget = []*target.Order
 )
 
 // ConvertItemsSourceToItemsTarget converts ItemsSource to ItemsTarget
@@ -30,10 +30,7 @@ func ConvertItemsSourceToItemsTarget(froms ItemsSource) ItemsTarget {
 	}
 	tos := make(ItemsTarget, len(froms))
 	for i, f := range froms {
-		converted := ConvertItemSourceToItemTarget(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertItemSourceToItemTarget(f.f)
 	}
 	return tos
 }
@@ -45,10 +42,7 @@ func ConvertItemsTargetToItemsSource(froms ItemsTarget) ItemsSource {
 	}
 	tos := make(ItemsSource, len(froms))
 	for i, f := range froms {
-		converted := ConvertItemTargetToItemSource(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertItemTargetToItemSource(f.f)
 	}
 	return tos
 }
@@ -60,10 +54,7 @@ func ConvertOrdersSourceToOrdersTarget(froms OrdersSource) OrdersTarget {
 	}
 	tos := make(OrdersTarget, len(froms))
 	for i, f := range froms {
-		converted := ConvertOrderSourceToOrderTarget(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertOrderSourceToOrderTarget(f.f)
 	}
 	return tos
 }
@@ -75,10 +66,7 @@ func ConvertOrdersTargetToOrdersSource(froms OrdersTarget) OrdersSource {
 	}
 	tos := make(OrdersSource, len(froms))
 	for i, f := range froms {
-		converted := ConvertOrderTargetToOrderSource(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertOrderTargetToOrderSource(f.f)
 	}
 	return tos
 }
@@ -89,7 +77,7 @@ func ConvertItemSourceToItemTarget(from *ItemSource) *ItemTarget {
 		return nil
 	}
 
-	to := &ItemTarget{
+	to := &target.Item{
 		ID: from.ID,
 	}
 	return to
@@ -101,7 +89,7 @@ func ConvertItemTargetToItemSource(from *ItemTarget) *ItemSource {
 		return nil
 	}
 
-	to := &ItemSource{
+	to := &source.Item{
 		ID: from.ID,
 	}
 	return to
@@ -113,7 +101,7 @@ func ConvertOrderSourceToOrderTarget(from *OrderSource) *OrderTarget {
 		return nil
 	}
 
-	to := &OrderTarget{
+	to := &target.Order{
 		ID:    from.ID,
 		Items: ConvertItemsSourceToItemsTarget(from.Items),
 	}
@@ -126,9 +114,11 @@ func ConvertOrderTargetToOrderSource(from *OrderTarget) *OrderSource {
 		return nil
 	}
 
-	to := &OrderSource{
+	to := &source.Order{
 		ID:    from.ID,
 		Items: ConvertItemsTargetToItemsSource(from.Items),
 	}
 	return to
 }
+
+// --- Helper Functions ---

@@ -14,22 +14,18 @@ import (
 
 // Local type aliases for external types.
 type (
-	Permission         = ent.Permission
-	Permissionresource = ent.PermissionResource
-	Resource           = ent.Resource
-	ResourceSlice      = types.Resource
-	Resourceedges      = ent.ResourceEdges
-	Resources          = []Resource
-	ResourcesSlice     = []ResourceSlice
-	Role               = ent.Role
-	RoleSlice          = types.Role
-	Roles              = []Role
-	RolesSlice         = []RoleSlice
-	Time               = time.Time
-	User               = ent.User
-	UserSlice          = types.User
-	Users              = []User
-	UsersSlice         = []UserSlice
+	Resource       = ent.Resource
+	ResourceSlice  = types.Resource
+	Resources      = []*ent.Resource
+	ResourcesSlice = []*types.Resource
+	Role           = ent.Role
+	RoleSlice      = types.Role
+	Roles          = []*ent.Role
+	RolesSlice     = []*types.Role
+	User           = ent.User
+	UserSlice      = types.User
+	Users          = []*ent.User
+	UsersSlice     = []*types.User
 )
 
 // ConvertResourcesToResourcesSlice converts Resources to ResourcesSlice
@@ -39,10 +35,7 @@ func ConvertResourcesToResourcesSlice(froms Resources) ResourcesSlice {
 	}
 	tos := make(ResourcesSlice, len(froms))
 	for i, f := range froms {
-		converted := ConvertResourceToResourceSlice(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertResourceToResourceSlice(f.f)
 	}
 	return tos
 }
@@ -54,10 +47,7 @@ func ConvertResourcesSliceToResources(froms ResourcesSlice) Resources {
 	}
 	tos := make(Resources, len(froms))
 	for i, f := range froms {
-		converted := ConvertResourceSliceToResource(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertResourceSliceToResource(f.f)
 	}
 	return tos
 }
@@ -69,10 +59,7 @@ func ConvertRolesToRolesSlice(froms Roles) RolesSlice {
 	}
 	tos := make(RolesSlice, len(froms))
 	for i, f := range froms {
-		converted := ConvertRoleToRoleSlice(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertRoleToRoleSlice(f.f)
 	}
 	return tos
 }
@@ -84,10 +71,7 @@ func ConvertRolesSliceToRoles(froms RolesSlice) Roles {
 	}
 	tos := make(Roles, len(froms))
 	for i, f := range froms {
-		converted := ConvertRoleSliceToRole(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertRoleSliceToRole(f.f)
 	}
 	return tos
 }
@@ -99,10 +83,7 @@ func ConvertUsersToUsersSlice(froms Users) UsersSlice {
 	}
 	tos := make(UsersSlice, len(froms))
 	for i, f := range froms {
-		converted := ConvertUserToUserSlice(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertUserToUserSlice(f.f)
 	}
 	return tos
 }
@@ -114,10 +95,7 @@ func ConvertUsersSliceToUsers(froms UsersSlice) Users {
 	}
 	tos := make(Users, len(froms))
 	for i, f := range froms {
-		converted := ConvertUserSliceToUser(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertUserSliceToUser(f.f)
 	}
 	return tos
 }
@@ -128,7 +106,7 @@ func ConvertResourceToResourceSlice(from *Resource) *ResourceSlice {
 		return nil
 	}
 
-	to := &ResourceSlice{
+	to := &types.Resource{
 		Id:       from.ID,
 		Name:     from.Name,
 		ParentId: from.ParentID,
@@ -142,7 +120,7 @@ func ConvertResourceSliceToResource(from *ResourceSlice) *Resource {
 		return nil
 	}
 
-	to := &Resource{
+	to := &ent.Resource{
 		ID:       from.Id,
 		Name:     from.Name,
 		ParentID: from.ParentId,
@@ -156,7 +134,7 @@ func ConvertRoleToRoleSlice(from *Role) *RoleSlice {
 		return nil
 	}
 
-	to := &RoleSlice{
+	to := &types.Role{
 		Id:   from.ID,
 		Name: from.Name,
 	}
@@ -169,7 +147,7 @@ func ConvertRoleSliceToRole(from *RoleSlice) *Role {
 		return nil
 	}
 
-	to := &Role{
+	to := &ent.Role{
 		ID:   from.Id,
 		Name: from.Name,
 	}
@@ -182,7 +160,7 @@ func ConvertUserToUserSlice(from *User) *UserSlice {
 		return nil
 	}
 
-	to := &UserSlice{
+	to := &types.User{
 		Id:        from.ID,
 		Username:  from.Username,
 		Age:       from.Age,
@@ -199,7 +177,7 @@ func ConvertUserSliceToUser(from *UserSlice) *User {
 		return nil
 	}
 
-	to := &User{
+	to := &ent.User{
 		ID:        from.Id,
 		Username:  from.Username,
 		Age:       from.Age,

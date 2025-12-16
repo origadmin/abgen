@@ -14,20 +14,16 @@ import (
 
 // Local type aliases for external types.
 type (
-	Permission         = ent.Permission
-	Permissionresource = ent.PermissionResource
-	Resource           = ent.Resource
-	ResourcePB         = types.Resource
-	Resourceedges      = ent.ResourceEdges
-	Resources          = []Resource
-	ResourcesPB        = []ResourcePB
-	Role               = ent.Role
-	RolePB             = types.Role
-	Roles              = []Role
-	RolesPB            = []RolePB
-	Time               = time.Time
-	Users              = []User
-	UsersPB            = []UserPB
+	Resource    = ent.Resource
+	ResourcePB  = types.Resource
+	Resources   = []*ent.Resource
+	ResourcesPB = []*types.Resource
+	Role        = ent.Role
+	RolePB      = types.Role
+	Roles       = []*ent.Role
+	RolesPB     = []*types.Role
+	Users       = []*ent.User
+	UsersPB     = []*types.User
 )
 
 // ConvertResourcesToResourcesPB converts Resources to ResourcesPB
@@ -37,10 +33,7 @@ func ConvertResourcesToResourcesPB(froms Resources) ResourcesPB {
 	}
 	tos := make(ResourcesPB, len(froms))
 	for i, f := range froms {
-		converted := ConvertResourceToResourcePB(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertResourceToResourcePB(f.f)
 	}
 	return tos
 }
@@ -52,10 +45,7 @@ func ConvertResourcesPBToResources(froms ResourcesPB) Resources {
 	}
 	tos := make(Resources, len(froms))
 	for i, f := range froms {
-		converted := ConvertResourcePBToResource(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertResourcePBToResource(f.f)
 	}
 	return tos
 }
@@ -67,10 +57,7 @@ func ConvertRolesToRolesPB(froms Roles) RolesPB {
 	}
 	tos := make(RolesPB, len(froms))
 	for i, f := range froms {
-		converted := ConvertRoleToRolePB(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertRoleToRolePB(f.f)
 	}
 	return tos
 }
@@ -82,10 +69,7 @@ func ConvertRolesPBToRoles(froms RolesPB) Roles {
 	}
 	tos := make(Roles, len(froms))
 	for i, f := range froms {
-		converted := ConvertRolePBToRole(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertRolePBToRole(f.f)
 	}
 	return tos
 }
@@ -97,10 +81,7 @@ func ConvertUsersToUsersPB(froms Users) UsersPB {
 	}
 	tos := make(UsersPB, len(froms))
 	for i, f := range froms {
-		converted := ConvertUserToUserPB(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertUserToUserPB(f.f)
 	}
 	return tos
 }
@@ -112,10 +93,7 @@ func ConvertUsersPBToUsers(froms UsersPB) Users {
 	}
 	tos := make(Users, len(froms))
 	for i, f := range froms {
-		converted := ConvertUserPBToUser(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertUserPBToUser(f.f)
 	}
 	return tos
 }
@@ -126,7 +104,7 @@ func ConvertResourceToResourcePB(from *Resource) *ResourcePB {
 		return nil
 	}
 
-	to := &ResourcePB{
+	to := &types.Resource{
 		Id:       from.ID,
 		Name:     from.Name,
 		ParentId: from.ParentID,
@@ -140,7 +118,7 @@ func ConvertResourcePBToResource(from *ResourcePB) *Resource {
 		return nil
 	}
 
-	to := &Resource{
+	to := &ent.Resource{
 		ID:       from.Id,
 		Name:     from.Name,
 		ParentID: from.ParentId,
@@ -154,7 +132,7 @@ func ConvertRoleToRolePB(from *Role) *RolePB {
 		return nil
 	}
 
-	to := &RolePB{
+	to := &types.Role{
 		Id:   from.ID,
 		Name: from.Name,
 	}
@@ -167,7 +145,7 @@ func ConvertRolePBToRole(from *RolePB) *Role {
 		return nil
 	}
 
-	to := &Role{
+	to := &ent.Role{
 		ID:   from.Id,
 		Name: from.Name,
 	}
@@ -180,7 +158,7 @@ func ConvertUserToUserPB(from *User) *UserPB {
 		return nil
 	}
 
-	to := &UserPB{
+	to := &types.User{
 		Id:        from.ID,
 		Username:  from.Username,
 		Age:       from.Age,
@@ -197,7 +175,7 @@ func ConvertUserPBToUser(from *UserPB) *User {
 		return nil
 	}
 
-	to := &User{
+	to := &ent.User{
 		ID:        from.Id,
 		Username:  from.Username,
 		Age:       from.Age,

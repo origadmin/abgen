@@ -14,22 +14,18 @@ import (
 
 // Local type aliases for external types.
 type (
-	Permission         = ent.Permission
-	Permissionresource = ent.PermissionResource
-	Resource           = ent.Resource
-	ResourceAlias      = types.Resource
-	Resourceedges      = ent.ResourceEdges
-	Resources          = []Resource
-	ResourcesAlias     = []ResourceAlias
-	Role               = ent.Role
-	RoleAlias          = types.Role
-	Roles              = []Role
-	RolesAlias         = []RoleAlias
-	Time               = time.Time
-	User               = ent.User
-	UserAlias          = types.User
-	Users              = []User
-	UsersAlias         = []UserAlias
+	Resource       = ent.Resource
+	ResourceAlias  = types.Resource
+	Resources      = []*ent.Resource
+	ResourcesAlias = []*types.Resource
+	Role           = ent.Role
+	RoleAlias      = types.Role
+	Roles          = []*ent.Role
+	RolesAlias     = []*types.Role
+	User           = ent.User
+	UserAlias      = types.User
+	Users          = []*ent.User
+	UsersAlias     = []*types.User
 )
 
 // ConvertResourcesToResourcesAlias converts Resources to ResourcesAlias
@@ -39,10 +35,7 @@ func ConvertResourcesToResourcesAlias(froms Resources) ResourcesAlias {
 	}
 	tos := make(ResourcesAlias, len(froms))
 	for i, f := range froms {
-		converted := ConvertResourceToResourceAlias(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertResourceToResourceAlias(f.f)
 	}
 	return tos
 }
@@ -54,10 +47,7 @@ func ConvertResourcesAliasToResources(froms ResourcesAlias) Resources {
 	}
 	tos := make(Resources, len(froms))
 	for i, f := range froms {
-		converted := ConvertResourceAliasToResource(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertResourceAliasToResource(f.f)
 	}
 	return tos
 }
@@ -69,10 +59,7 @@ func ConvertRolesToRolesAlias(froms Roles) RolesAlias {
 	}
 	tos := make(RolesAlias, len(froms))
 	for i, f := range froms {
-		converted := ConvertRoleToRoleAlias(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertRoleToRoleAlias(f.f)
 	}
 	return tos
 }
@@ -84,10 +71,7 @@ func ConvertRolesAliasToRoles(froms RolesAlias) Roles {
 	}
 	tos := make(Roles, len(froms))
 	for i, f := range froms {
-		converted := ConvertRoleAliasToRole(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertRoleAliasToRole(f.f)
 	}
 	return tos
 }
@@ -99,10 +83,7 @@ func ConvertUsersToUsersAlias(froms Users) UsersAlias {
 	}
 	tos := make(UsersAlias, len(froms))
 	for i, f := range froms {
-		converted := ConvertUserToUserAlias(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertUserToUserAlias(f.f)
 	}
 	return tos
 }
@@ -114,10 +95,7 @@ func ConvertUsersAliasToUsers(froms UsersAlias) Users {
 	}
 	tos := make(Users, len(froms))
 	for i, f := range froms {
-		converted := ConvertUserAliasToUser(&f)
-		if converted != nil {
-			tos[i] = *converted
-		}
+		tos[i] = ConvertUserAliasToUser(f.f)
 	}
 	return tos
 }
@@ -128,7 +106,7 @@ func ConvertResourceToResourceAlias(from *Resource) *ResourceAlias {
 		return nil
 	}
 
-	to := &ResourceAlias{
+	to := &types.Resource{
 		Id:       from.ID,
 		Name:     from.Name,
 		ParentId: from.ParentID,
@@ -142,7 +120,7 @@ func ConvertResourceAliasToResource(from *ResourceAlias) *Resource {
 		return nil
 	}
 
-	to := &Resource{
+	to := &ent.Resource{
 		ID:       from.Id,
 		Name:     from.Name,
 		ParentID: from.ParentId,
@@ -156,7 +134,7 @@ func ConvertRoleToRoleAlias(from *Role) *RoleAlias {
 		return nil
 	}
 
-	to := &RoleAlias{
+	to := &types.Role{
 		Id:   from.ID,
 		Name: from.Name,
 	}
@@ -169,7 +147,7 @@ func ConvertRoleAliasToRole(from *RoleAlias) *Role {
 		return nil
 	}
 
-	to := &Role{
+	to := &ent.Role{
 		ID:   from.Id,
 		Name: from.Name,
 	}
@@ -182,7 +160,7 @@ func ConvertUserToUserAlias(from *User) *UserAlias {
 		return nil
 	}
 
-	to := &UserAlias{
+	to := &types.User{
 		Id:        from.ID,
 		Username:  from.Username,
 		Age:       from.Age,
@@ -199,7 +177,7 @@ func ConvertUserAliasToUser(from *UserAlias) *User {
 		return nil
 	}
 
-	to := &User{
+	to := &ent.User{
 		ID:        from.Id,
 		Username:  from.Username,
 		Age:       from.Age,

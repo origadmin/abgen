@@ -239,8 +239,22 @@ func (n *Namer) getAliasedOrBaseName(info *model.TypeInfo) string {
 		return alias
 	}
 
-	// Determine the logical role of the type by its package path.
-	_, isSource := n.sourcePkgs[info.ImportPath]
+	// Recursively find the base named type to determine the package path.
+	// This is crucial for composite types like slices and pointers, whose own ImportPath is empty.
+	baseType := info
+	for baseType != nil && (baseType.Kind == model.Slice || baseType.Kind == model.Array || baseType.Kind == model.Pointer) {
+		if baseType.Underlying == nil {
+			// Stop if we can't go deeper, to prevent nil pointer dereference.
+			break
+		}
+		baseType = baseType.Underlying
+	}
+
+	// Determine the logical role using the base type's package path.
+	var isSource bool
+	if baseType != nil {
+		_, isSource = n.sourcePkgs[baseType.ImportPath]
+	}
 
 	// For debugging: print sourcePkgs keys
 	sourcePkgKeys := make([]string, 0, len(n.sourcePkgs))
@@ -250,12 +264,13 @@ func (n *Namer) getAliasedOrBaseName(info *model.TypeInfo) string {
 	sort.Strings(sourcePkgKeys) // Sort for consistent logging order
 
 	slog.Debug("getAliasedOrBaseName: determining isSource",
-		"fqn", info.FQN(),
-		"importPath", info.ImportPath,
+		"original_fqn", info.FQN(),
+		"baseType_fqn", baseType.FQN(),
+		"baseType_importPath", baseType.ImportPath,
 		"sourcePkgs_keys", sourcePkgKeys,
 		"determined_isSource", isSource,
 	)
 
-	// For function naming, we generate the alias on the fly, respecting the source/target context.
+	// Call GetAlias with the original type 'info' but the correctly determined 'isSource' flag.
 	return n.GetAlias(info, isSource)
 }
