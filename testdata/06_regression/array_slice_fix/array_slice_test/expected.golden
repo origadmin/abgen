@@ -24,6 +24,130 @@ type (
 	UsersPB       = []*target.User
 )
 
+// ConvertDepartmentToDepartmentPB converts *[]*source.Department to *[]*target.Department
+func ConvertDepartmentToDepartmentPB(from *[]*source.Department) *[]*target.Department {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertDepartmentsToDepartmentsPB(*from)
+	return &tos
+}
+
+// ConvertDepartmentPBToDepartment converts *[]*target.Department to *[]*source.Department
+func ConvertDepartmentPBToDepartment(from *[]*target.Department) *[]*source.Department {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertDepartmentsPBToDepartments(*from)
+	return &tos
+}
+
+// ConvertUserToUserPB converts *[]*source.User to *[]*target.User
+func ConvertUserToUserPB(from *[]*source.User) *[]*target.User {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertUsersToUsersPB(*from)
+	return &tos
+}
+
+// ConvertUserPBToUser converts *[]*target.User to *[]*source.User
+func ConvertUserPBToUser(from *[]*target.User) *[]*source.User {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertUsersPBToUsers(*from)
+	return &tos
+}
+
+// ConvertDepartmentToDepartmentPB converts *[]*source.Department to *[]*target.Department
+func ConvertDepartmentToDepartmentPB(from *[]*source.Department) *[]*target.Department {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertDepartmentsToDepartmentsPB(*from)
+	return &tos
+}
+
+// ConvertDepartmentPBToDepartment converts *[]*target.Department to *[]*source.Department
+func ConvertDepartmentPBToDepartment(from *[]*target.Department) *[]*source.Department {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertDepartmentsPBToDepartments(*from)
+	return &tos
+}
+
+// ConvertUserToUserPB converts *[]*source.User to *[]*target.User
+func ConvertUserToUserPB(from *[]*source.User) *[]*target.User {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertUsersToUsersPB(*from)
+	return &tos
+}
+
+// ConvertUserPBToUser converts *[]*target.User to *[]*source.User
+func ConvertUserPBToUser(from *[]*target.User) *[]*source.User {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertUsersPBToUsers(*from)
+	return &tos
+}
+
+// ConvertDepartmentsToDepartmentsPB converts Departments to DepartmentsPB
+func ConvertDepartmentsToDepartmentsPB(froms Departments) DepartmentsPB {
+	if froms == nil {
+		return nil
+	}
+	tos := make(DepartmentsPB, len(froms))
+	for i, f := range froms {
+		tmp := ConvertDepartmentsToDepartmentsPB(f)
+		tos[i] = &tmp
+	}
+	return tos
+}
+
+// ConvertDepartmentsPBToDepartments converts DepartmentsPB to Departments
+func ConvertDepartmentsPBToDepartments(froms DepartmentsPB) Departments {
+	if froms == nil {
+		return nil
+	}
+	tos := make(Departments, len(froms))
+	for i, f := range froms {
+		tmp := ConvertDepartmentsPBToDepartments(f)
+		tos[i] = &tmp
+	}
+	return tos
+}
+
+// ConvertUsersToUsersPB converts Users to UsersPB
+func ConvertUsersToUsersPB(froms Users) UsersPB {
+	if froms == nil {
+		return nil
+	}
+	tos := make(UsersPB, len(froms))
+	for i, f := range froms {
+		tmp := ConvertUsersToUsersPB(f)
+		tos[i] = &tmp
+	}
+	return tos
+}
+
+// ConvertUsersPBToUsers converts UsersPB to Users
+func ConvertUsersPBToUsers(froms UsersPB) Users {
+	if froms == nil {
+		return nil
+	}
+	tos := make(Users, len(froms))
+	for i, f := range froms {
+		tmp := ConvertUsersPBToUsers(f)
+		tos[i] = &tmp
+	}
+	return tos
+}
+
 // ConvertDepartmentsToDepartmentsPB converts Departments to DepartmentsPB
 func ConvertDepartmentsToDepartmentsPB(froms Departments) DepartmentsPB {
 	if froms == nil {

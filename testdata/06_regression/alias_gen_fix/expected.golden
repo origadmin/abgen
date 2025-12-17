@@ -26,6 +26,192 @@ type (
 	UsersPB     = []*types.User
 )
 
+// ConvertResourceToResourcePB converts *[]*ent.Resource to *[]*types.Resource
+func ConvertResourceToResourcePB(from *[]*ent.Resource) *[]*types.Resource {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertResourcesToResourcesPB(*from)
+	return &tos
+}
+
+// ConvertResourcePBToResource converts *[]*types.Resource to *[]*ent.Resource
+func ConvertResourcePBToResource(from *[]*types.Resource) *[]*ent.Resource {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertResourcesPBToResources(*from)
+	return &tos
+}
+
+// ConvertRoleToRolePB converts *[]*ent.Role to *[]*types.Role
+func ConvertRoleToRolePB(from *[]*ent.Role) *[]*types.Role {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertRolesToRolesPB(*from)
+	return &tos
+}
+
+// ConvertRolePBToRole converts *[]*types.Role to *[]*ent.Role
+func ConvertRolePBToRole(from *[]*types.Role) *[]*ent.Role {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertRolesPBToRoles(*from)
+	return &tos
+}
+
+// ConvertUserToUserPB converts *[]*ent.User to *[]*types.User
+func ConvertUserToUserPB(from *[]*ent.User) *[]*types.User {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertUsersToUsersPB(*from)
+	return &tos
+}
+
+// ConvertUserPBToUser converts *[]*types.User to *[]*ent.User
+func ConvertUserPBToUser(from *[]*types.User) *[]*ent.User {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertUsersPBToUsers(*from)
+	return &tos
+}
+
+// ConvertResourceToResourcePB converts *[]*ent.Resource to *[]*types.Resource
+func ConvertResourceToResourcePB(from *[]*ent.Resource) *[]*types.Resource {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertResourcesToResourcesPB(*from)
+	return &tos
+}
+
+// ConvertResourcePBToResource converts *[]*types.Resource to *[]*ent.Resource
+func ConvertResourcePBToResource(from *[]*types.Resource) *[]*ent.Resource {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertResourcesPBToResources(*from)
+	return &tos
+}
+
+// ConvertRoleToRolePB converts *[]*ent.Role to *[]*types.Role
+func ConvertRoleToRolePB(from *[]*ent.Role) *[]*types.Role {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertRolesToRolesPB(*from)
+	return &tos
+}
+
+// ConvertRolePBToRole converts *[]*types.Role to *[]*ent.Role
+func ConvertRolePBToRole(from *[]*types.Role) *[]*ent.Role {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertRolesPBToRoles(*from)
+	return &tos
+}
+
+// ConvertUserToUserPB converts *[]*ent.User to *[]*types.User
+func ConvertUserToUserPB(from *[]*ent.User) *[]*types.User {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertUsersToUsersPB(*from)
+	return &tos
+}
+
+// ConvertUserPBToUser converts *[]*types.User to *[]*ent.User
+func ConvertUserPBToUser(from *[]*types.User) *[]*ent.User {
+	if from == nil {
+		return nil
+	}
+	tos := ConvertUsersPBToUsers(*from)
+	return &tos
+}
+
+// ConvertResourcesToResourcesPB converts Resources to ResourcesPB
+func ConvertResourcesToResourcesPB(froms Resources) ResourcesPB {
+	if froms == nil {
+		return nil
+	}
+	tos := make(ResourcesPB, len(froms))
+	for i, f := range froms {
+		tmp := ConvertResourcesToResourcesPB(f)
+		tos[i] = &tmp
+	}
+	return tos
+}
+
+// ConvertResourcesPBToResources converts ResourcesPB to Resources
+func ConvertResourcesPBToResources(froms ResourcesPB) Resources {
+	if froms == nil {
+		return nil
+	}
+	tos := make(Resources, len(froms))
+	for i, f := range froms {
+		tmp := ConvertResourcesPBToResources(f)
+		tos[i] = &tmp
+	}
+	return tos
+}
+
+// ConvertRolesToRolesPB converts Roles to RolesPB
+func ConvertRolesToRolesPB(froms Roles) RolesPB {
+	if froms == nil {
+		return nil
+	}
+	tos := make(RolesPB, len(froms))
+	for i, f := range froms {
+		tmp := ConvertRolesToRolesPB(f)
+		tos[i] = &tmp
+	}
+	return tos
+}
+
+// ConvertRolesPBToRoles converts RolesPB to Roles
+func ConvertRolesPBToRoles(froms RolesPB) Roles {
+	if froms == nil {
+		return nil
+	}
+	tos := make(Roles, len(froms))
+	for i, f := range froms {
+		tmp := ConvertRolesPBToRoles(f)
+		tos[i] = &tmp
+	}
+	return tos
+}
+
+// ConvertUsersToUsersPB converts Users to UsersPB
+func ConvertUsersToUsersPB(froms Users) UsersPB {
+	if froms == nil {
+		return nil
+	}
+	tos := make(UsersPB, len(froms))
+	for i, f := range froms {
+		tmp := ConvertUsersToUsersPB(f)
+		tos[i] = &tmp
+	}
+	return tos
+}
+
+// ConvertUsersPBToUsers converts UsersPB to Users
+func ConvertUsersPBToUsers(froms UsersPB) Users {
+	if froms == nil {
+		return nil
+	}
+	tos := make(Users, len(froms))
+	for i, f := range froms {
+		tmp := ConvertUsersPBToUsers(f)
+		tos[i] = &tmp
+	}
+	return tos
+}
+
 // ConvertResourcesToResourcesPB converts Resources to ResourcesPB
 func ConvertResourcesToResourcesPB(froms Resources) ResourcesPB {
 	if froms == nil {

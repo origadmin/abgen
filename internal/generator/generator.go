@@ -769,51 +769,6 @@ func (g *Generator) discoverImplicitConversionRules() {
 	}
 
 	g.config.ConversionRules = append(g.config.ConversionRules, initialRules...)
-
-	// Now, generate rules for slice types based on the initial named type rules
-	for _, rule := range initialRules {
-		sourceInfo := g.typeInfos[rule.SourceType]
-		targetInfo := g.typeInfos[rule.TargetType]
-
-		sourceSliceType := &model.TypeInfo{
-			Kind:       model.Slice,
-			Underlying: sourceInfo,
-		}
-		targetSliceType := &model.TypeInfo{
-			Kind:       model.Slice,
-			Underlying: targetInfo,
-		}
-		g.typeInfos[sourceSliceType.UniqueKey()] = sourceSliceType
-		g.typeInfos[targetSliceType.UniqueKey()] = targetSliceType
-
-		sliceRule := &config.ConversionRule{
-			SourceType: sourceSliceType.UniqueKey(),
-			TargetType: targetSliceType.UniqueKey(),
-			Direction:  config.DirectionBoth,
-		}
-
-		// Check if there are already rules related to sourceSliceType or targetSliceType
-		// Avoid generating duplicate or conflicting implicit slice rules
-		foundExistingSliceRule := false
-		for _, existingRule := range g.config.ConversionRules {
-			if (existingRule.SourceType == sliceRule.SourceType && existingRule.TargetType == sliceRule.TargetType) ||
-				(existingRule.SourceType == sliceRule.TargetType && existingRule.TargetType == sliceRule.SourceType && existingRule.Direction == config.DirectionBoth) {
-				foundExistingSliceRule = true
-				break
-			}
-		}
-
-		if !foundExistingSliceRule {
-			g.config.ConversionRules = append(g.config.ConversionRules, sliceRule)
-		}
-	}
-
-	sort.Slice(g.config.ConversionRules, func(i, j int) bool {
-		if g.config.ConversionRules[i].SourceType != g.config.ConversionRules[j].SourceType {
-			return g.config.ConversionRules[i].SourceType < g.config.ConversionRules[j].SourceType
-		}
-		return g.config.ConversionRules[i].TargetType < g.config.ConversionRules[j].TargetType
-	})
 }
 
 func (g *Generator) getPackageName() string {
