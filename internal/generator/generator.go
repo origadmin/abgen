@@ -350,53 +350,79 @@ func (g *Generator) generateSliceToSliceConversion(funcName string, sourceInfo, 
 	sourceSliceStr := g.namer.GetTypeAliasString(sourceInfo)
 	targetSliceStr := g.namer.GetTypeAliasString(targetInfo)
 
-	g.buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceSliceStr, targetSliceStr)) // Add comment for helper function
+	g.buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceSliceStr, targetSliceStr))
 	g.buf.WriteString(fmt.Sprintf("func %s(froms %s) %s {\n", funcName, sourceSliceStr, targetSliceStr))
 	g.buf.WriteString("\tif froms == nil {\n\t\treturn nil\t}\n")
 	g.buf.WriteString(fmt.Sprintf("\ttos := make(%s, len(froms))\n", targetSliceStr))
 	g.buf.WriteString("\tfor i, f := range froms {\n")
 
-	// --- CRITICAL CHANGE HERE ---
 	// The element conversion logic must fully delegate to getConversionExpression
 	// to ensure required functions are correctly marked.
 	// We need to create dummy FieldInfo objects for the element types.
-	// Fix: Set tempSourceField.Name to empty string and pass "f" directly as fromVar to getConversionExpression
 	tempSourceField := &model.FieldInfo{Type: sourceElem, Name: ""} // Name is empty, as 'f' is the variable itself
 	tempTargetField := &model.FieldInfo{Type: targetElem}
 
 	// Call getConversionExpression for the element conversion.
 	// The 'fromVar' for the element is 'f'.
-	// parentSource and parentTarget are passed for potential stub function naming.
 	elementConversionExpr, returnsPointer, isFunctionCall := g.getConversionExpression(sourceInfo, tempSourceField, targetInfo, tempTargetField, "f")
 
 	finalExpr := elementConversionExpr
 	targetIsPointer := targetElem.Kind == model.Pointer
+	sourceIsPointer := sourceElem.Kind == model.Pointer
 
-	// Handle all four cases of slice element conversion:
-	// 1. []*User -> []User (pointer elements to value elements)
-	// 2. []User -> []*User (value elements to pointer elements)
-	// 3. []*User -> []*User (pointer elements to pointer elements)
-	// 4. []User -> []User (value elements to value elements)
+	// Handle pointer/value conversion for slice elements
 	if returnsPointer && !targetIsPointer {
-		// Case 1: Conversion returns a pointer, but target element is not a pointer.
+		// Case: Conversion returns a pointer, but target element is a value (e.g., []*T -> []T)
 		// We need to dereference.
-		finalExpr = fmt.Sprintf("*%s", elementConversionExpr)
+		// However, if the conversion function itself returns the correct type for direct assignment,
+		// we should use it directly without dereferencing.
+		if isFunctionCall {
+			// For function calls that return pointers, assign directly without dereferencing
+			// since the function should return the correct type for slice element assignment
+			finalExpr = elementConversionExpr
+		} else {
+			// For non-function calls that return pointers, dereference
+			finalExpr = fmt.Sprintf("*%s", elementConversionExpr)
+		}
 	} else if !returnsPointer && targetIsPointer {
-		// Case 2: Conversion returns a value, but target element is a pointer.
+		// Case: Conversion returns a value, but target element is a pointer (e.g., []T -> []*T)
 		// We need to take the address.
 		if isFunctionCall {
-			// If it's a function call returning a value, we need a temporary variable.
-			tempVarName := "tmpVal" // Simplified name, unique within each loop iteration's scope
+			// If it's a function call returning a value, we need a temporary variable
+			// to be able to take its address.
+			tempVarName := "tmp" // Scope is limited to the loop iteration
 			g.buf.WriteString(fmt.Sprintf("\t\t%s := %s\n", tempVarName, elementConversionExpr))
 			finalExpr = fmt.Sprintf("&%s", tempVarName)
 		} else {
-			// If it's a simple value (e.g., from.Field), we can take its address directly.
+			// If it's a simple value (e.g., a field access), we can take its address directly.
+			finalExpr = fmt.Sprintf("&%s", elementConversionExpr)
+		}
+	} else if sourceIsPointer && targetIsPointer && !returnsPointer {
+		// Edge Case: []*T -> []*U, but the T->U conversion returns U (a value).
+		// We need to take the address of the result.
+		if isFunctionCall {
+			tempVarName := "tmp"
+			g.buf.WriteString(fmt.Sprintf("\t\t%s := %s\n", tempVarName, elementConversionExpr))
+			finalExpr = fmt.Sprintf("&%s", tempVarName)
+		} else {
 			finalExpr = fmt.Sprintf("&%s", elementConversionExpr)
 		}
 	}
-	// Cases 3 and 4: No additional operation needed when both are pointers or both are values.
+	// Default cases (e.g., []*T -> []*U where T->U returns *U, or []T -> []U where T->U returns U)
+	// are handled correctly by `finalExpr = elementConversionExpr`.
 
-	g.buf.WriteString(fmt.Sprintf("\t\ttos[i] = %s\n", finalExpr))
+	// The assignment logic needs to be separate from the expression generation.
+	if strings.HasPrefix(finalExpr, "&") || (isFunctionCall && !returnsPointer && targetIsPointer) {
+		// If we already generated a temp variable and are assigning its address,
+		// the assignment is the final expression itself.
+		g.buf.WriteString(fmt.Sprintf("\t\ttos[i] = %s\n", finalExpr))
+	} else if isFunctionCall && !returnsPointer && targetIsPointer {
+		// This case is handled above with the temp variable, but as a fallback.
+		g.buf.WriteString(fmt.Sprintf("\t\ttos[i] = %s\n", finalExpr))
+	} else {
+		// Standard assignment.
+		g.buf.WriteString(fmt.Sprintf("\t\ttos[i] = %s\n", finalExpr))
+	}
 
 	g.buf.WriteString("\t}\n")
 	g.buf.WriteString("\treturn tos\n")

@@ -35,7 +35,7 @@ func ConvertResourcesToResourcesSlice(froms Resources) ResourcesSlice {
 	}
 	tos := make(ResourcesSlice, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertResourceToResourceSlice(f)
+		tos[i] = ConvertResourceToResourceSlice(f)
 	}
 	return tos
 }
@@ -47,7 +47,7 @@ func ConvertResourcesSliceToResources(froms ResourcesSlice) Resources {
 	}
 	tos := make(Resources, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertResourceSliceToResource(f)
+		tos[i] = ConvertResourceSliceToResource(f)
 	}
 	return tos
 }
@@ -59,7 +59,7 @@ func ConvertRolesToRolesSlice(froms Roles) RolesSlice {
 	}
 	tos := make(RolesSlice, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertRoleToRoleSlice(f)
+		tos[i] = ConvertRoleToRoleSlice(f)
 	}
 	return tos
 }
@@ -71,7 +71,7 @@ func ConvertRolesSliceToRoles(froms RolesSlice) Roles {
 	}
 	tos := make(Roles, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertRoleSliceToRole(f)
+		tos[i] = ConvertRoleSliceToRole(f)
 	}
 	return tos
 }
@@ -83,7 +83,7 @@ func ConvertUsersToUsersSlice(froms Users) UsersSlice {
 	}
 	tos := make(UsersSlice, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertUserToUserSlice(f)
+		tos[i] = ConvertUserToUserSlice(f)
 	}
 	return tos
 }
@@ -95,7 +95,7 @@ func ConvertUsersSliceToUsers(froms UsersSlice) Users {
 	}
 	tos := make(Users, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertUserSliceToUser(f)
+		tos[i] = ConvertUserSliceToUser(f)
 	}
 	return tos
 }

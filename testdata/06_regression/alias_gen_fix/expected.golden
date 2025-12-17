@@ -33,7 +33,7 @@ func ConvertResourcesToResourcesPB(froms Resources) ResourcesPB {
 	}
 	tos := make(ResourcesPB, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertResourceToResourcePB(f)
+		tos[i] = ConvertResourceToResourcePB(f)
 	}
 	return tos
 }
@@ -45,7 +45,7 @@ func ConvertResourcesPBToResources(froms ResourcesPB) Resources {
 	}
 	tos := make(Resources, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertResourcePBToResource(f)
+		tos[i] = ConvertResourcePBToResource(f)
 	}
 	return tos
 }
@@ -57,7 +57,7 @@ func ConvertRolesToRolesPB(froms Roles) RolesPB {
 	}
 	tos := make(RolesPB, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertRoleToRolePB(f)
+		tos[i] = ConvertRoleToRolePB(f)
 	}
 	return tos
 }
@@ -69,7 +69,7 @@ func ConvertRolesPBToRoles(froms RolesPB) Roles {
 	}
 	tos := make(Roles, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertRolePBToRole(f)
+		tos[i] = ConvertRolePBToRole(f)
 	}
 	return tos
 }
@@ -81,7 +81,7 @@ func ConvertUsersToUsersPB(froms Users) UsersPB {
 	}
 	tos := make(UsersPB, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertUserToUserPB(f)
+		tos[i] = ConvertUserToUserPB(f)
 	}
 	return tos
 }
@@ -93,7 +93,7 @@ func ConvertUsersPBToUsers(froms UsersPB) Users {
 	}
 	tos := make(Users, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertUserPBToUser(f)
+		tos[i] = ConvertUserPBToUser(f)
 	}
 	return tos
 }

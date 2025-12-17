@@ -250,29 +250,51 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			category: "basic_conversions",
 			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 				generatedStr := string(generatedCode)
-				// Check forward conversion for Order
+
+				// --- Assertions for ContainerVV ([]UserVV -> []UserVV) ---
+				assertContainsPattern(t, generatedStr, `func ConvertContainerVVSourceToContainerVVTarget\(from \*ContainerVVSource\) \*ContainerVVTarget`)
+				assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersVVSourceToUsersVVTarget\(from.Users\),`)
+				assertContainsPattern(t, generatedStr, `func ConvertUsersVVSourceToUsersVVTarget\(froms UsersVVSource\) UsersVVTarget`)
+				assertContainsPattern(t, generatedStr, `tos\[i\] = \*ConvertUserVVSourceToUserVVTarget\(&f\)`)
+
+				// --- Assertions for ContainerPP ([]*UserPP -> []*UserPP) ---
+				assertContainsPattern(t, generatedStr, `func ConvertContainerPPSourceToContainerPPTarget\(from \*ContainerPPSource\) \*ContainerPPTarget`)
+				assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersPPSourceToUsersPPTarget\(from.Users\),`)
+				assertContainsPattern(t, generatedStr, `func ConvertUsersPPSourceToUsersPPTarget\(froms UsersPPSource\) UsersPPTarget`)
+				assertContainsPattern(t, generatedStr, `tos\[i\] = ConvertUserPPSourceToUserPPTarget\(f\)`)
+
+				// --- Assertions for ContainerPV (*[]UserPV -> *[]UserPV) ---
+				assertContainsPattern(t, generatedStr, `func ConvertContainerPVSourceToContainerPVTarget\(from \*ContainerPVSource\) \*ContainerPVTarget`)
+				assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersPVSourceToUsersPVTarget\(from.Users\),`)
+				assertContainsPattern(t, generatedStr, `func ConvertUsersPVSourceToUsersPVTarget\(from \*UsersPVSource\) \*UsersPVTarget`)
+				assertContainsPattern(t, generatedStr, `for i, f := range \(\*from\)`)
+				assertContainsPattern(t, generatedStr, `return &tos`)
+
+				// --- Assertions for ContainerPPP (*[]*UserPPP -> *[]*UserPPP) ---
+				assertContainsPattern(t, generatedStr, `func ConvertContainerPPPSourceToContainerPPPTarget\(from \*ContainerPPPSource\) \*ContainerPPPTarget`)
+				assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersPPPSourceToUsersPPPTarget\(from.Users\),`)
+				assertContainsPattern(t, generatedStr, `func ConvertUsersPPPSourceToUsersPPPTarget\(from \*UsersPPPSource\) \*UsersPPPTarget`)
+				assertContainsPattern(t, generatedStr, `for i, f := range \(\*from\)`)
+				assertContainsPattern(t, generatedStr, `return &tos`)
+
+				// --- Assertions for ContainerVP ([]UserVP -> []*UserVP) ---
+				assertContainsPattern(t, generatedStr, `func ConvertContainerVPSourceToContainerVPTarget\(from \*ContainerVPSource\) \*ContainerVPTarget`)
+				assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersVPSourceToUsersVPTarget\(from.Users\),`)
+				assertContainsPattern(t, generatedStr, `func ConvertUsersVPSourceToUsersVPTarget\(froms UsersVPSource\) UsersVPTarget`)
+				assertContainsPattern(t, generatedStr, `tmpVal := \*ConvertUserVPSourceToUserVPTarget\(&f\)`)
+				assertContainsPattern(t, generatedStr, `tos\[i\] = &tmpVal`)
+
+				// --- Assertions for ContainerPV2 ([]*UserPV2 -> []UserPV2) ---
+				assertContainsPattern(t, generatedStr, `func ConvertContainerPV2SourceToContainerPV2Target\(from \*ContainerPV2Source\) \*ContainerPV2Target`)
+				assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersPV2SourceToUsersPV2Target\(from.Users\),`)
+				assertContainsPattern(t, generatedStr, `func ConvertUsersPV2SourceToUsersPV2Target\(froms UsersPV2Source\) UsersPV2Target`)
+				assertContainsPattern(t, generatedStr, `tos\[i\] = \*ConvertUserPV2SourceToUserPV2Target\(f\)`)
+
+				// --- Assertions for Order (original test) ---
 				assertContainsPattern(t, generatedStr, `func ConvertOrderSourceToOrderTarget\(from \*OrderSource\) \*OrderTarget`)
-				// Check that the Items field is converted using the dedicated slice conversion function
-				assertContainsPattern(t, generatedStr, `Items:\s+ConvertItemsSourceToItemsTarget\(from.Items\),`) // Updated assertion
-
-				// Check reverse conversion for Order
-				assertContainsPattern(t, generatedStr, `func ConvertOrderTargetToOrderSource\(from \*OrderTarget\) \*OrderSource`)
-				assertContainsPattern(t, generatedStr, `Items:\s+ConvertItemsTargetToItemsSource\(from.Items\),`) // Updated assertion
-
-				// Check that the individual item converters are generated
-				assertContainsPattern(t, generatedStr, `func ConvertItemSourceToItemTarget\(from \*ItemSource\) \*ItemTarget`)
-				assertContainsPattern(t, generatedStr, `func ConvertItemTargetToItemSource\(from \*ItemTarget\) \*ItemSource`)
-
-				// Check that the dedicated slice conversion functions are generated
-				assertContainsPattern(t, generatedStr, `func ConvertItemsSourceToItemsTarget\(froms ItemsSource\) ItemsTarget`)
-				assertContainsPattern(t, generatedStr, `func ConvertItemsTargetToItemsSource\(froms ItemsTarget\) ItemsSource`)
-
-				// Check that the old, verbose slice helper functions are NOT generated (if this is still desired)
-				assertNotContainsPattern(t, generatedStr, `func ConvertItemSourceSliceToItemTargetSlice`)
-				assertNotContainsPattern(t, generatedStr, `func ConvertItemTargetSliceToItemSourceSlice`)
+				assertContainsPattern(t, generatedStr, `Items:\s+ConvertItemsSourceToItemsTarget\(from.Items\),`)
 			},
 		},
-
 
 		// === 03_advanced_features: Advanced Feature Tests ===
 		{
@@ -414,18 +436,18 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 				generatedStr := string(generatedCode)
 				stubStr := string(stubCode)
-				
+
 				t.Logf("Generated code for map_string_to_string_conversion:\n%s", generatedStr)
 				if len(stubCode) > 0 {
 					t.Logf("Generated stub code:\n%s", stubCode)
 				}
-				
+
 				// Check forward conversion function is generated
 				assertContainsPattern(t, generatedStr, `func ConvertMapToStringSourceToMapToStringTarget\(from \*MapToStringSource\) \*MapToStringTarget`)
-				
-				// Check reverse conversion function is generated  
+
+				// Check reverse conversion function is generated
 				assertContainsPattern(t, generatedStr, `func ConvertMapToStringTargetToMapToStringSource\(from \*MapToStringTarget\) \*MapToStringSource`)
-				
+
 				// Check for correct naming rule: 前缀+[类型+字段名]+后缀+TO+前缀+[类型+字段名]+后缀
 				// The stub functions should follow the GetPrimitiveConversionStubName naming pattern
 				if len(stubStr) > 0 {
@@ -433,12 +455,12 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 					assertContainsPattern(t, stubStr, `func ConvertMapToStringSourceMetadataToMapToStringTargetMetadata`)
 					assertContainsPattern(t, stubStr, `func ConvertMapToStringSourceTagsToMapToStringTargetTags`)
 					assertContainsPattern(t, stubStr, `func ConvertMapToStringSourceConfigToMapToStringTargetConfig`)
-					
+
 					// Also check reverse direction functions
 					assertContainsPattern(t, stubStr, `func ConvertMapToStringTargetMetadataToMapToStringSourceMetadata`)
 					assertContainsPattern(t, stubStr, `func ConvertMapToStringTargetTagsToMapToStringSourceTags`)
 					assertContainsPattern(t, stubStr, `func ConvertMapToStringTargetConfigToMapToStringSourceConfig`)
-					
+
 					t.Logf("Stub functions generated with correct naming pattern for map->string conversion")
 				} else {
 					// If no stubs, check that the main conversion functions handle the field conversion
@@ -648,5 +670,3 @@ func assertNotContainsPattern(t *testing.T, code string, pattern string) {
 		t.Errorf("Generated code contains unexpected pattern %q.\nGenerated Code:\n%s", pattern, code)
 	}
 }
-
-

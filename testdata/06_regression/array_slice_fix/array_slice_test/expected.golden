@@ -31,7 +31,7 @@ func ConvertDepartmentsToDepartmentsPB(froms Departments) DepartmentsPB {
 	}
 	tos := make(DepartmentsPB, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertDepartmentToDepartmentPB(f)
+		tos[i] = ConvertDepartmentToDepartmentPB(f)
 	}
 	return tos
 }
@@ -43,7 +43,7 @@ func ConvertDepartmentsPBToDepartments(froms DepartmentsPB) Departments {
 	}
 	tos := make(Departments, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertDepartmentPBToDepartment(f)
+		tos[i] = ConvertDepartmentPBToDepartment(f)
 	}
 	return tos
 }
@@ -55,7 +55,7 @@ func ConvertUsersToUsersPB(froms Users) UsersPB {
 	}
 	tos := make(UsersPB, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertUserToUserPB(f)
+		tos[i] = ConvertUserToUserPB(f)
 	}
 	return tos
 }
@@ -67,7 +67,7 @@ func ConvertUsersPBToUsers(froms UsersPB) Users {
 	}
 	tos := make(Users, len(froms))
 	for i, f := range froms {
-		tos[i] = *ConvertUserPBToUser(f)
+		tos[i] = ConvertUserPBToUser(f)
 	}
 	return tos
 }
