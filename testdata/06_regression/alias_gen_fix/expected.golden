@@ -162,7 +162,7 @@ func ConvertUserToUserPB(from *User) *UserPB {
 		Id:        from.ID,
 		Username:  from.Username,
 		Age:       from.Age,
-		Gender:    *ConvertGenderToGenderPB(from.Gender),
+		Gender:    ConvertGenderToGenderPB(from.Gender),
 		CreatedAt: ConvertTimeToString(from.CreatedAt),
 		Status:    ConvertUserStatusToUserPBStatus(from.Status),
 	}
@@ -179,7 +179,7 @@ func ConvertUserPBToUser(from *UserPB) *User {
 		ID:        from.Id,
 		Username:  from.Username,
 		Age:       from.Age,
-		Gender:    *ConvertGenderPBToGender(from.Gender),
+		Gender:    ConvertGenderPBToGender(from.Gender),
 		Status:    ConvertUserPBStatusToUserStatus(from.Status),
 		CreatedAt: ConvertStringToTime(from.CreatedAt),
 	}

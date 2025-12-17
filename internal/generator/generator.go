@@ -619,10 +619,15 @@ func (g *Generator) getConversionExpression(
 	}
 
 	// Fallback to generating/using a dedicated conversion function for complex types (structs, etc.)
-	// These functions are generated as func ConvertAtoB(from *A) *B, so they always return a pointer.
 	funcName := g.namer.GetFunctionName(sourceType, targetType)
 	g.requiredConversionFunctions[funcName] = true
-	return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), true, true // Generated function is a function call, returns pointer
+
+	// Determine if the generated function should return a pointer.
+	// If the target type is ultimately a struct, the generated function typically returns a pointer to it.
+	// If the target type is ultimately a primitive, the generated function typically returns the value.
+	shouldReturnPointer := targetType.IsUltimatelyStruct() // <-- Change here
+
+	return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), shouldReturnPointer, true // Generated function is a function call
 }
 
 // populateAliases populates the aliasMap with generated aliases for source and target types.

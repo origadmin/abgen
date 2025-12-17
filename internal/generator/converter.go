@@ -84,3 +84,9 @@ func (c *TypeConverter) IsPrimitive(info *model.TypeInfo) bool {
 	info = c.resolveConcreteType(info)
 	return info != nil && info.Kind == model.Primitive
 }
+
+// IsUltimatelyPrimitive checks if the given TypeInfo or its underlying type is ultimately a primitive type.
+func (c *TypeConverter) IsUltimatelyPrimitive(info *model.TypeInfo) bool {
+	info = c.resolveConcreteType(info)
+	return info != nil && info.Kind == model.Primitive
+}

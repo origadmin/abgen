@@ -164,7 +164,7 @@ func ConvertUserToUserSlice(from *User) *UserSlice {
 		Id:        from.ID,
 		Username:  from.Username,
 		Age:       from.Age,
-		Gender:    *ConvertGenderToGenderSlice(from.Gender),
+		Gender:    ConvertGenderToGenderSlice(from.Gender),
 		CreatedAt: ConvertTimeToString(from.CreatedAt),
 		Status:    ConvertUserStatusToUserSliceStatus(from.Status),
 	}
@@ -181,7 +181,7 @@ func ConvertUserSliceToUser(from *UserSlice) *User {
 		ID:        from.Id,
 		Username:  from.Username,
 		Age:       from.Age,
-		Gender:    *ConvertGenderSliceToGender(from.Gender),
+		Gender:    ConvertGenderSliceToGender(from.Gender),
 		Status:    ConvertUserSliceStatusToUserStatus(from.Status),
 		CreatedAt: ConvertStringToTime(from.CreatedAt),
 	}

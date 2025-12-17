@@ -164,7 +164,7 @@ func ConvertUserToUserAlias(from *User) *UserAlias {
 		Id:        from.ID,
 		Username:  from.Username,
 		Age:       from.Age,
-		Gender:    *ConvertGenderToGenderAlias(from.Gender),
+		Gender:    ConvertGenderToGenderAlias(from.Gender),
 		CreatedAt: ConvertTimeToString(from.CreatedAt),
 		Status:    ConvertUserStatusToUserAliasStatus(from.Status),
 	}
@@ -181,7 +181,7 @@ func ConvertUserAliasToUser(from *UserAlias) *User {
 		ID:        from.Id,
 		Username:  from.Username,
 		Age:       from.Age,
-		Gender:    *ConvertGenderAliasToGender(from.Gender),
+		Gender:    ConvertGenderAliasToGender(from.Gender),
 		Status:    ConvertUserAliasStatusToUserStatus(from.Status),
 		CreatedAt: ConvertStringToTime(from.CreatedAt),
 	}
