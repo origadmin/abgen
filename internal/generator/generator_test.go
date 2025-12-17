@@ -402,6 +402,52 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			priority:       "P0",
 			category:       "regression",
 		},
+		{
+			name:          "map_string_to_string_conversion",
+			directivePath: "../../testdata/06_regression/map_string_to_string_fix",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/06_regression/map_string_to_string_fix/source",
+				"github.com/origadmin/abgen/testdata/06_regression/map_string_to_string_fix/target",
+			},
+			priority: "P0",
+			category: "regression",
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+				generatedStr := string(generatedCode)
+				stubStr := string(stubCode)
+				
+				t.Logf("Generated code for map_string_to_string_conversion:\n%s", generatedStr)
+				if len(stubCode) > 0 {
+					t.Logf("Generated stub code:\n%s", stubCode)
+				}
+				
+				// Check forward conversion function is generated
+				assertContainsPattern(t, generatedStr, `func ConvertMapToStringSourceToMapToStringTarget\(from \*MapToStringSource\) \*MapToStringTarget`)
+				
+				// Check reverse conversion function is generated  
+				assertContainsPattern(t, generatedStr, `func ConvertMapToStringTargetToMapToStringSource\(from \*MapToStringTarget\) \*MapToStringSource`)
+				
+				// Check for correct naming rule: 前缀+[类型+字段名]+后缀+TO+前缀+[类型+字段名]+后缀
+				// The stub functions should follow the GetPrimitiveConversionStubName naming pattern
+				if len(stubStr) > 0 {
+					// Expected naming pattern: ConvertMapToStringSourceMetadataToMapToStringTargetMetadata
+					assertContainsPattern(t, stubStr, `func ConvertMapToStringSourceMetadataToMapToStringTargetMetadata`)
+					assertContainsPattern(t, stubStr, `func ConvertMapToStringSourceTagsToMapToStringTargetTags`)
+					assertContainsPattern(t, stubStr, `func ConvertMapToStringSourceConfigToMapToStringTargetConfig`)
+					
+					// Also check reverse direction functions
+					assertContainsPattern(t, stubStr, `func ConvertMapToStringTargetMetadataToMapToStringSourceMetadata`)
+					assertContainsPattern(t, stubStr, `func ConvertMapToStringTargetTagsToMapToStringSourceTags`)
+					assertContainsPattern(t, stubStr, `func ConvertMapToStringTargetConfigToMapToStringSourceConfig`)
+					
+					t.Logf("Stub functions generated with correct naming pattern for map->string conversion")
+				} else {
+					// If no stubs, check that the main conversion functions handle the field conversion
+					// The main code should call the conversion stubs for these field conversions
+					assertContainsPattern(t, generatedStr, `ConvertMapToStringSourceMetadataToMapToStringTargetMetadata`)
+					t.Logf("Main code handles map->string conversion through named conversion functions")
+				}
+			},
+		},
 	}
 
 	// Sort test cases for consistent execution order
@@ -602,3 +648,5 @@ func assertNotContainsPattern(t *testing.T, code string, pattern string) {
 		t.Errorf("Generated code contains unexpected pattern %q.\nGenerated Code:\n%s", pattern, code)
 	}
 }
+
+

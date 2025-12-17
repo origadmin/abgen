@@ -536,6 +536,16 @@ func (g *Generator) getConversionExpression(
 		sourceFieldExpr = fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
 	}
 
+	// Debug: Log the conversion being attempted
+	slog.Debug("getConversionExpression",
+		"sourceField", sourceField.Name,
+		"sourceType.Kind", sourceType.Kind,
+		"sourceType.Name", sourceType.Name,
+		"targetField", targetField.Name,
+		"targetType.Kind", targetType.Kind,
+		"targetType.Name", targetType.Name,
+	)
+
 	// Prioritize slice conversion logic
 	if sourceType.Kind == model.Slice && targetType.Kind == model.Slice {
 		sourceElem := g.converter.GetElementType(sourceType)
@@ -559,7 +569,9 @@ func (g *Generator) getConversionExpression(
 
 	// Check in the unified conversionFunctions map
 	conversionKey := sourceKey + "->" + targetKey
+	slog.Debug("getConversionExpression", "action", "checking conversionFunctions", "conversionKey", conversionKey)
 	if funcName, ok := conversionFunctions[conversionKey]; ok {
+		slog.Debug("getConversionExpression", "action", "found in conversionFunctions", "funcName", funcName)
 		g.requiredConversionFunctions[funcName] = true
 		if strings.Contains(funcName, "Time") {
 			g.importMgr.Add("time")
@@ -585,15 +597,25 @@ func (g *Generator) getConversionExpression(
 	}
 
 	// Handle underlying types for named types that are not primitive
+	// But avoid direct conversions from Map to its element type, as these are not valid in Go
 	if sourceType.Underlying != nil && targetType.Underlying != nil && sourceType.Underlying.UniqueKey() == targetType.Underlying.UniqueKey() {
-		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr), targetType.Kind == model.Pointer, true // Type conversion is a function call
+		// Skip if source is a Map and target is its element type
+		if !(sourceType.Kind == model.Map && targetType.Kind == model.Primitive) {
+			slog.Debug("getConversionExpression", "action", "underlying types match", "underlyingKey", sourceType.Underlying.UniqueKey())
+			return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr), targetType.Kind == model.Pointer, true // Type conversion is a function call
+		}
 	}
 	if sourceType.Underlying != nil && sourceType.Underlying.UniqueKey() == targetKey {
-		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr), targetType.Kind == model.Pointer, true // Type conversion is a function call
+		// Skip if source is a Map and target is its element type
+		if !(sourceType.Kind == model.Map && targetType.Kind == model.Primitive) {
+			slog.Debug("getConversionExpression", "action", "source underlying matches target", "underlyingKey", sourceType.Underlying.UniqueKey())
+			return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr), targetType.Kind == model.Pointer, true // Type conversion is a function call
+		}
 	}
-	if targetType.Underlying != nil && targetType.Underlying.UniqueKey() == sourceKey {
-		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr), targetType.Kind == model.Pointer, true // Type conversion is a function call
-	}
+	//if targetType.Underlying != nil && targetType.Underlying.UniqueKey() == sourceKey {
+	//	slog.Debug("getConversionExpression", "action", "target underlying matches source", "underlyingKey", targetType.Underlying.UniqueKey())
+	//	return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr), targetType.Kind == model.Pointer, true // Type conversion is a function call
+	//}
 
 	// Handle numeric primitive conversions (e.g., int to int32)
 	if sourceType.Kind == model.Primitive && targetType.Kind == model.Primitive &&
@@ -618,16 +640,34 @@ func (g *Generator) getConversionExpression(
 		}
 	}
 
-	// Fallback to generating/using a dedicated conversion function for complex types (structs, etc.)
-	funcName := g.namer.GetFunctionName(sourceType, targetType)
-	g.requiredConversionFunctions[funcName] = true
+	// Fallback: all non-directly-convertible types should use unified naming rule
+	// Check if this is a defined type conversion (struct-to-struct, etc.)
+	if (sourceType.Kind == model.Struct || targetType.Kind == model.Struct) ||
+		(sourceType.IsNamedType() && targetType.IsNamedType()) {
+		slog.Debug("getConversionExpression", "action", "using GetFunctionName for defined type conversion")
+		// This is a defined type conversion, use GetFunctionName
+		funcName := g.namer.GetFunctionName(sourceType, targetType)
+		g.requiredConversionFunctions[funcName] = true
+		shouldReturnPointer := targetType.IsUltimatelyStruct()
+		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), shouldReturnPointer, true
+	}
 
-	// Determine if the generated function should return a pointer.
-	// If the target type is ultimately a struct, the generated function typically returns a pointer to it.
-	// If the target type is ultimately a primitive, the generated function typically returns the value.
-	shouldReturnPointer := targetType.IsUltimatelyStruct() // <-- Change here
-
-	return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), shouldReturnPointer, true // Generated function is a function call
+	slog.Debug("getConversionExpression", "action", "generating primitive conversion stub")
+	// This is a primitive-to-primitive or complex-to-primitive conversion that can't be handled directly
+	// This includes cases like map[string]string -> string, string -> map[string]string, etc.
+	// Use the unified naming rule: 前缀+[类型+字段名]+后缀+TO+前缀+[类型+字段名]+后缀
+	stubFuncName := g.namer.GetPrimitiveConversionStubName(parentSource, sourceField, parentTarget, targetField)
+	slog.Debug("getConversionExpression", "stubFuncName", stubFuncName)
+	if _, exists := g.customStubs[stubFuncName]; !exists {
+		g.customStubs[stubFuncName] = generatePrimitiveConversionStub(
+			stubFuncName,
+			g.namer.GetTypeString(sourceType),
+			g.namer.GetTypeString(targetType),
+		)
+		slog.Debug("getConversionExpression", "action", "created new stub", "stubFuncName", stubFuncName)
+	}
+	g.requiredConversionFunctions[stubFuncName] = true
+	return fmt.Sprintf("%s(%s)", stubFuncName, sourceFieldExpr), false, true // Stub function is a function call, returns value
 }
 
 // populateAliases populates the aliasMap with generated aliases for source and target types.
