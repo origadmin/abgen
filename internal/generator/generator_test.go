@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/origadmin/abgen/internal/analyzer"
-
 	"github.com/origadmin/abgen/internal/config"
 )
 
@@ -87,7 +86,6 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
 				assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
 
-
 				// Check forward and reverse conversion for Item
 				assertContainsPattern(t, generatedStr, `func ConvertItemSourceToItemTarget\(from \*ItemSource\) \*ItemTarget`)
 				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
@@ -140,7 +138,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			},
 		},
 		{
-			name:         "simple_bilateral",
+			name:          "simple_bilateral",
 			directivePath: "../../testdata/02_basic_conversions/simple_bilateral",
 			dependencies:  baseDependencies,
 			priority:      "P0",
@@ -154,12 +152,12 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 
 				// Check forward conversion: ent.User -> types.User (using aliased types User and UserBilateral)
 				assertContainsPattern(t, generatedStr, `func ConvertUserToUserBilateral\(from \*User\) \*UserBilateral`)
-				assertContainsPattern(t, generatedStr, `Id:\s+from.ID,`)           // ent.ID (int) -> types.Id (int)
-				assertContainsPattern(t, generatedStr, `Username:\s+from.Username,`) // string -> string
-				assertContainsPattern(t, generatedStr, `Age:\s+from.Age,`)         // int -> int
-				assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderToGenderBilateral\(from.Gender\),`) // ent.Gender -> types.Gender, custom func
+				assertContainsPattern(t, generatedStr, `Id:\s+from.ID,`)                                                   // ent.ID (int) -> types.Id (int)
+				assertContainsPattern(t, generatedStr, `Username:\s+from.Username,`)                                       // string -> string
+				assertContainsPattern(t, generatedStr, `Age:\s+from.Age,`)                                                 // int -> int
+				assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderToGenderBilateral\(from.Gender\),`)         // ent.Gender -> types.Gender, custom func
 				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserStatusToUserBilateralStatus\(from.Status\),`) // string -> int32, custom func
-				assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertTimeToString\(from.CreatedAt\),`) // time.Time -> string
+				assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertTimeToString\(from.CreatedAt\),`)              // time.Time -> string
 
 				// Verify fields that should NOT be present in types.User conversion (or handled implicitly as zero values)
 				assertNotContainsPattern(t, generatedStr, `Password:`)
@@ -173,13 +171,13 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				assertContainsPattern(t, generatedStr, `ID:\s+from.Id,`)
 				assertContainsPattern(t, generatedStr, `Username:\s+from.Username,`)
 				assertContainsPattern(t, generatedStr, `Age:\s+from.Age,`)
-				assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderBilateralToGender\(from.Gender\),`) // types.Gender -> ent.Gender, custom func
+				assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderBilateralToGender\(from.Gender\),`)         // types.Gender -> ent.Gender, custom func
 				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserBilateralStatusToUserStatus\(from.Status\),`) // int32 -> string, custom func
-				assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertStringToTime\(from.CreatedAt\),`) // string -> time.Time
+				assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertStringToTime\(from.CreatedAt\),`)              // string -> time.Time
 			},
 		},
 		{
-			name:         "standard_trilateral",
+			name:          "standard_trilateral",
 			directivePath: "../../testdata/02_basic_conversions/standard_trilateral",
 			dependencies:  baseDependencies,
 			priority:      "P0",
@@ -196,7 +194,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				assertContainsPattern(t, generatedStr, `Id:\s+from.ID,`)
 				assertContainsPattern(t, generatedStr, `Username:\s+from.Username,`)
 				assertContainsPattern(t, generatedStr, `Age:\s+from.Age,`)
-				assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderToGenderTrilateral\(from.Gender\),`) // Use custom function
+				assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderToGenderTrilateral\(from.Gender\),`)         // Use custom function
 				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserStatusToUserTrilateralStatus\(from.Status\),`) // Use custom function
 				assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertTimeToString\(from.CreatedAt\),`)
 
@@ -205,7 +203,7 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				assertContainsPattern(t, generatedStr, `ID:\s+from.Id,`)
 				assertContainsPattern(t, generatedStr, `Username:\s+from.Username,`)
 				assertContainsPattern(t, generatedStr, `Age:\s+from.Age,`)
-				assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderTrilateralToGender\(from.Gender\),`) // Use custom function
+				assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderTrilateralToGender\(from.Gender\),`)         // Use custom function
 				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserTrilateralStatusToUserStatus\(from.Status\),`) // Use custom function
 				assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertStringToTime\(from.CreatedAt\),`)
 
@@ -215,8 +213,8 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			},
 		},
 		{
-			name:          "field_ignore_remap",
-			directivePath: "../../testdata/02_basic_conversions/field_ignore_remap",
+			name:           "field_ignore_remap",
+			directivePath:  "../../testdata/02_basic_conversions/field_ignore_remap",
 			goldenFileName: "expected.golden", // Will generate this later
 			dependencies: []string{
 				"github.com/origadmin/abgen/testdata/02_basic_conversions/field_ignore_remap/source",
@@ -235,9 +233,9 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 				assertContainsPattern(t, generatedStr, `FullName:\s+from.Name,`)
 				assertContainsPattern(t, generatedStr, `UserEmail:\s+from.Email,`)
 				// Non-remapped, non-ignored fields should be present with original names (if types match)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`) // Corrected to `ID` as in generated code and `Id` for source
+				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)                // Corrected to `ID` as in generated code and `Id` for source
 				assertContainsPattern(t, generatedStr, `LastUpdate:\s+from.UpdatedAt,`) // The generator directly assigns time.Time fields when compatible.
-				assertNotContainsPattern(t, generatedStr, `CreatedDate:`) // It shouldn't be explicitly assigned if no source
+				assertNotContainsPattern(t, generatedStr, `CreatedDate:`)               // It shouldn't be explicitly assigned if no source
 			},
 		},
 		{
@@ -437,7 +435,6 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			// This prevents "redeclared in this block" errors when running tests repeatedly.
 			cleanTestFiles(t, tc.directivePath)
 			defer cleanTestFiles(t, tc.directivePath)
-
 
 			// Step 1: Parse config from the directive path using the new high-level API.
 			parser := config.NewParser()

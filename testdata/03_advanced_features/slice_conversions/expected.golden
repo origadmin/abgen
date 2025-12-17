@@ -35,7 +35,7 @@ func ConvertResourcesToResourcesSlice(froms Resources) ResourcesSlice {
 	}
 	tos := make(ResourcesSlice, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertResourceToResourceSlice(f.f)
+		tos[i] = *ConvertResourceToResourceSlice(f)
 	}
 	return tos
 }
@@ -47,7 +47,7 @@ func ConvertResourcesSliceToResources(froms ResourcesSlice) Resources {
 	}
 	tos := make(Resources, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertResourceSliceToResource(f.f)
+		tos[i] = *ConvertResourceSliceToResource(f)
 	}
 	return tos
 }
@@ -59,7 +59,7 @@ func ConvertRolesToRolesSlice(froms Roles) RolesSlice {
 	}
 	tos := make(RolesSlice, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertRoleToRoleSlice(f.f)
+		tos[i] = *ConvertRoleToRoleSlice(f)
 	}
 	return tos
 }
@@ -71,7 +71,7 @@ func ConvertRolesSliceToRoles(froms RolesSlice) Roles {
 	}
 	tos := make(Roles, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertRoleSliceToRole(f.f)
+		tos[i] = *ConvertRoleSliceToRole(f)
 	}
 	return tos
 }
@@ -83,7 +83,7 @@ func ConvertUsersToUsersSlice(froms Users) UsersSlice {
 	}
 	tos := make(UsersSlice, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertUserToUserSlice(f.f)
+		tos[i] = *ConvertUserToUserSlice(f)
 	}
 	return tos
 }
@@ -95,7 +95,7 @@ func ConvertUsersSliceToUsers(froms UsersSlice) Users {
 	}
 	tos := make(Users, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertUserSliceToUser(f.f)
+		tos[i] = *ConvertUserSliceToUser(f)
 	}
 	return tos
 }
@@ -164,7 +164,7 @@ func ConvertUserToUserSlice(from *User) *UserSlice {
 		Id:        from.ID,
 		Username:  from.Username,
 		Age:       from.Age,
-		Gender:    ConvertGenderToGenderSlice(from.Gender),
+		Gender:    *ConvertGenderToGenderSlice(from.Gender),
 		CreatedAt: ConvertTimeToString(from.CreatedAt),
 		Status:    ConvertUserStatusToUserSliceStatus(from.Status),
 	}
@@ -181,7 +181,7 @@ func ConvertUserSliceToUser(from *UserSlice) *User {
 		ID:        from.Id,
 		Username:  from.Username,
 		Age:       from.Age,
-		Gender:    ConvertGenderSliceToGender(from.Gender),
+		Gender:    *ConvertGenderSliceToGender(from.Gender),
 		Status:    ConvertUserSliceStatusToUserStatus(from.Status),
 		CreatedAt: ConvertStringToTime(from.CreatedAt),
 	}

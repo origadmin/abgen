@@ -30,7 +30,7 @@ func ConvertItemsSourceToItemsTarget(froms ItemsSource) ItemsTarget {
 	}
 	tos := make(ItemsTarget, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertItemSourceToItemTarget(f.f)
+		tos[i] = *ConvertItemSourceToItemTarget(f)
 	}
 	return tos
 }
@@ -42,7 +42,7 @@ func ConvertItemsTargetToItemsSource(froms ItemsTarget) ItemsSource {
 	}
 	tos := make(ItemsSource, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertItemTargetToItemSource(f.f)
+		tos[i] = *ConvertItemTargetToItemSource(f)
 	}
 	return tos
 }
@@ -54,7 +54,7 @@ func ConvertOrdersSourceToOrdersTarget(froms OrdersSource) OrdersTarget {
 	}
 	tos := make(OrdersTarget, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertOrderSourceToOrderTarget(f.f)
+		tos[i] = *ConvertOrderSourceToOrderTarget(f)
 	}
 	return tos
 }
@@ -66,7 +66,7 @@ func ConvertOrdersTargetToOrdersSource(froms OrdersTarget) OrdersSource {
 	}
 	tos := make(OrdersSource, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertOrderTargetToOrderSource(f.f)
+		tos[i] = *ConvertOrderTargetToOrderSource(f)
 	}
 	return tos
 }

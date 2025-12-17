@@ -27,6 +27,7 @@ func TestParser_Comprehensive(t *testing.T) {
 	testCases := []struct {
 		name           string
 		directives     []string
+		setupFunc      func(*Parser) // Optional setup function for the parser
 		expectedConfig *Config
 	}{
 		{
@@ -38,6 +39,9 @@ func TestParser_Comprehensive(t *testing.T) {
 				`//go:abgen:convert:rule="source:ent.User,target:pb.User,func:ConvertUserWithPermissions"`,
 				`//go:abgen:convert:source:suffix=Entity`,
 				`//go:abgen:convert:target:prefix=Proto`,
+			},
+			setupFunc: func(p *Parser) {
+				p.config.GenerationContext.PackagePath = mockPackage().ID
 			},
 			expectedConfig: &Config{
 				PackageAliases: map[string]string{
@@ -56,18 +60,47 @@ func TestParser_Comprehensive(t *testing.T) {
 						CustomFunc: "ConvertUserWithPermissions",
 					},
 				},
-				NamingRules: NamingRule{
+				NamingRules: NamingRules{
 					SourceSuffix: "Entity",
 					TargetPrefix: "Proto",
 				},
 			},
 		},
 		{
-			name: "Custom Func Rule Before Main Convert Rule",
+			name: "Custom Func Rule Before Main Convert Rule (No PackagePath)",
 			directives: []string{
 				`//go:abgen:package:path=path/to/ent,alias=ent`,
 				`//go:abgen:convert:rule="source:ent.Role,target:Role,func:ConvertRoleFunc"`,
 				`//go:abgen:convert="source=ent.Role,target=Role"`,
+			},
+			setupFunc: nil, // PackagePath remains empty
+			expectedConfig: &Config{
+				PackageAliases: map[string]string{
+					"ent": "path/to/ent",
+				},
+				ConversionRules: []*ConversionRule{
+					{
+						SourceType: "path/to/ent.Role",
+						TargetType: "Role", // Expected to be "Role" when PackagePath is empty
+						Direction:  DirectionBoth,
+						CustomFunc: "ConvertRoleFunc",
+						FieldRules: FieldRuleSet{
+							Ignore: make(map[string]struct{}),
+							Remap:  make(map[string]string),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Custom Func Rule Before Main Convert Rule (With PackagePath)",
+			directives: []string{
+				`//go:abgen:package:path=path/to/ent,alias=ent`,
+				`//go:abgen:convert:rule="source:ent.Role,target:Role,func:ConvertRoleFunc"`,
+				`//go:abgen:convert="source=ent.Role,target=Role"`,
+			},
+			setupFunc: func(p *Parser) {
+				p.config.GenerationContext.PackagePath = mockPackage().ID // Set PackagePath
 			},
 			expectedConfig: &Config{
 				PackageAliases: map[string]string{
@@ -76,7 +109,7 @@ func TestParser_Comprehensive(t *testing.T) {
 				ConversionRules: []*ConversionRule{
 					{
 						SourceType: "path/to/ent.Role",
-						TargetType: "Role",
+						TargetType: "github.com/my/project/current.Role", // Expected to be fully qualified
 						Direction:  DirectionBoth,
 						CustomFunc: "ConvertRoleFunc",
 						FieldRules: FieldRuleSet{
@@ -93,6 +126,9 @@ func TestParser_Comprehensive(t *testing.T) {
 				`//go:abgen:package:path=github.com/my/source,alias=s`,
 				`//go:abgen:pair:packages=s,github.com/my/target`,
 			},
+			setupFunc: func(p *Parser) {
+				p.config.GenerationContext.PackagePath = mockPackage().ID
+			},
 			expectedConfig: &Config{
 				PackageAliases: map[string]string{
 					"s": "github.com/my/source",
@@ -108,6 +144,9 @@ func TestParser_Comprehensive(t *testing.T) {
 				`//go:abgen:package:path=builtin,alias=builtin`,
 				`//go:abgen:convert="source=builtin.int,target=builtin.string"`,
 				`//go:abgen:convert:rule="source:builtin.int,target:builtin.string,func:IntStatusToString"`,
+			},
+			setupFunc: func(p *Parser) {
+				p.config.GenerationContext.PackagePath = mockPackage().ID
 			},
 			expectedConfig: &Config{
 				PackageAliases: map[string]string{
@@ -134,6 +173,9 @@ func TestParser_Comprehensive(t *testing.T) {
 				`//go:abgen:package:path=github.com/my/project/target,alias=target`,
 				`//go:abgen:convert="source=source.User,target=target.UserDTO,ignore=Password;CreatedAt,remap=Name:FullName;Email:UserEmail"`,
 			},
+			setupFunc: func(p *Parser) {
+				p.config.GenerationContext.PackagePath = mockPackage().ID
+			},
 			expectedConfig: &Config{
 				PackageAliases: map[string]string{
 					"source": "github.com/my/project/source",
@@ -157,6 +199,9 @@ func TestParser_Comprehensive(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			p := NewParser()
+			if tc.setupFunc != nil {
+				tc.setupFunc(p)
+			}
 
 			for _, d := range tc.directives {
 				if err := p.parseSingleDirective(d); err != nil {

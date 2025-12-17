@@ -39,7 +39,8 @@ func (p *Parser) Parse(sourceDir string) (*Config, error) {
 	p.config.GenerationContext.DirectivePath = sourceDir
 
 	initialLoaderCfg := &packages.Config{
-		Mode:       packages.NeedName | packages.NeedSyntax | packages.NeedFiles | packages.NeedModule | packages.NeedTypes | packages.NeedTypesInfo,
+		Mode: packages.NeedName | packages.NeedSyntax | packages.NeedFiles | packages.NeedModule | packages.
+			NeedTypes | packages.NeedTypesInfo,
 		Dir:        sourceDir,
 		Tests:      false,
 		BuildFlags: []string{"-tags=abgen_source"},
@@ -49,8 +50,13 @@ func (p *Parser) Parse(sourceDir string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load initial package at %s: %w", sourceDir, err)
 	}
-	if packages.PrintErrors(initialPkgs) > 0 {
-		return nil, fmt.Errorf("initial package at %s contains errors", sourceDir)
+	for _, pkg := range initialPkgs {
+		for _, pkgErr := range pkg.Errors {
+			slog.Warn("Package contains errors",
+				"pkg", pkg.PkgPath,
+				"error", pkgErr,
+				"pos", pkgErr.Pos)
+		}
 	}
 	if len(initialPkgs) == 0 {
 		return nil, fmt.Errorf("no initial package found at %s", sourceDir)
@@ -248,8 +254,14 @@ func (p *Parser) mergeCustomFuncRules() {
 func (p *Parser) resolveTypeFQN(typeStr string) string {
 	lastDot := strings.LastIndex(typeStr, ".")
 	if lastDot == -1 {
-		// Assume it's a type in the current package if no package identifier is present
-		return p.config.GenerationContext.PackagePath + "." + typeStr
+		// If no package identifier is present in typeStr
+		if p.config.GenerationContext.PackagePath != "" {
+			// If the current package path is known, assume it's a type in the current package
+			return p.config.GenerationContext.PackagePath + "." + typeStr
+		}
+		// Otherwise, return the type name as is.
+		// The decision to prepend a package path will be made during code generation.
+		return typeStr
 	}
 	packageIdentifier := typeStr[:lastDot]
 	typeName := typeStr[lastDot+1:]

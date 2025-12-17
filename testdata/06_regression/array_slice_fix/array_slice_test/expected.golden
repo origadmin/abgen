@@ -31,7 +31,7 @@ func ConvertDepartmentsToDepartmentsPB(froms Departments) DepartmentsPB {
 	}
 	tos := make(DepartmentsPB, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertDepartmentToDepartmentPB(f.f)
+		tos[i] = *ConvertDepartmentToDepartmentPB(f)
 	}
 	return tos
 }
@@ -43,7 +43,7 @@ func ConvertDepartmentsPBToDepartments(froms DepartmentsPB) Departments {
 	}
 	tos := make(Departments, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertDepartmentPBToDepartment(f.f)
+		tos[i] = *ConvertDepartmentPBToDepartment(f)
 	}
 	return tos
 }
@@ -55,7 +55,7 @@ func ConvertUsersToUsersPB(froms Users) UsersPB {
 	}
 	tos := make(UsersPB, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertUserToUserPB(f.f)
+		tos[i] = *ConvertUserToUserPB(f)
 	}
 	return tos
 }
@@ -67,7 +67,7 @@ func ConvertUsersPBToUsers(froms UsersPB) Users {
 	}
 	tos := make(Users, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertUserPBToUser(f.f)
+		tos[i] = *ConvertUserPBToUser(f)
 	}
 	return tos
 }
@@ -112,7 +112,7 @@ func ConvertUserToUserPB(from *User) *UserPB {
 		Id:        int32(from.ID),
 		Username:  from.Username,
 		Age:       int32(from.Age),
-		Gender:    ConvertGenderToGenderPB(from.Gender),
+		Gender:    *ConvertGenderToGenderPB(from.Gender),
 		Status:    ConvertUserStatusToUserPBStatus(from.Status),
 		CreatedAt: ConvertTimeToString(from.CreatedAt),
 	}
@@ -129,7 +129,7 @@ func ConvertUserPBToUser(from *UserPB) *User {
 		ID:        int(from.Id),
 		Username:  from.Username,
 		Age:       int(from.Age),
-		Gender:    ConvertGenderPBToGender(from.Gender),
+		Gender:    *ConvertGenderPBToGender(from.Gender),
 		Status:    ConvertUserPBStatusToUserStatus(from.Status),
 		CreatedAt: ConvertStringToTime(from.CreatedAt),
 	}

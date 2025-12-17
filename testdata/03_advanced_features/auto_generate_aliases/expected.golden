@@ -35,7 +35,7 @@ func ConvertResourcesToResourcesAlias(froms Resources) ResourcesAlias {
 	}
 	tos := make(ResourcesAlias, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertResourceToResourceAlias(f.f)
+		tos[i] = *ConvertResourceToResourceAlias(f)
 	}
 	return tos
 }
@@ -47,7 +47,7 @@ func ConvertResourcesAliasToResources(froms ResourcesAlias) Resources {
 	}
 	tos := make(Resources, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertResourceAliasToResource(f.f)
+		tos[i] = *ConvertResourceAliasToResource(f)
 	}
 	return tos
 }
@@ -59,7 +59,7 @@ func ConvertRolesToRolesAlias(froms Roles) RolesAlias {
 	}
 	tos := make(RolesAlias, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertRoleToRoleAlias(f.f)
+		tos[i] = *ConvertRoleToRoleAlias(f)
 	}
 	return tos
 }
@@ -71,7 +71,7 @@ func ConvertRolesAliasToRoles(froms RolesAlias) Roles {
 	}
 	tos := make(Roles, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertRoleAliasToRole(f.f)
+		tos[i] = *ConvertRoleAliasToRole(f)
 	}
 	return tos
 }
@@ -83,7 +83,7 @@ func ConvertUsersToUsersAlias(froms Users) UsersAlias {
 	}
 	tos := make(UsersAlias, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertUserToUserAlias(f.f)
+		tos[i] = *ConvertUserToUserAlias(f)
 	}
 	return tos
 }
@@ -95,7 +95,7 @@ func ConvertUsersAliasToUsers(froms UsersAlias) Users {
 	}
 	tos := make(Users, len(froms))
 	for i, f := range froms {
-		tos[i] = ConvertUserAliasToUser(f.f)
+		tos[i] = *ConvertUserAliasToUser(f)
 	}
 	return tos
 }
@@ -164,7 +164,7 @@ func ConvertUserToUserAlias(from *User) *UserAlias {
 		Id:        from.ID,
 		Username:  from.Username,
 		Age:       from.Age,
-		Gender:    ConvertGenderToGenderAlias(from.Gender),
+		Gender:    *ConvertGenderToGenderAlias(from.Gender),
 		CreatedAt: ConvertTimeToString(from.CreatedAt),
 		Status:    ConvertUserStatusToUserAliasStatus(from.Status),
 	}
@@ -181,7 +181,7 @@ func ConvertUserAliasToUser(from *UserAlias) *User {
 		ID:        from.Id,
 		Username:  from.Username,
 		Age:       from.Age,
-		Gender:    ConvertGenderAliasToGender(from.Gender),
+		Gender:    *ConvertGenderAliasToGender(from.Gender),
 		Status:    ConvertUserAliasStatusToUserStatus(from.Status),
 		CreatedAt: ConvertStringToTime(from.CreatedAt),
 	}

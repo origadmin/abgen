@@ -21,9 +21,12 @@ var conversionFunctions = map[string]string{ // Renamed from helperBasedConverte
 	"string->uuid.UUID": "ConvertStringToUUID",
 	"time.Time->string": "ConvertTimeToString",
 	"uuid.UUID->string": "ConvertUUIDToString",
+	// Add new timestamp conversion functions with FQN keys
+	"time.Time->*google.golang.org/protobuf/types/known/timestamppb.Timestamp": "ConvertTimeToTimestamp",
+	"*google.golang.org/protobuf/types/known/timestamppb.Timestamp->time.Time": "ConvertTimestampToTime",
 }
 
-var conversionFunctionBodies = map[string]string{ // Renamed from helperFunctionBodies
+var conversionFunctionBodies = map[string]string{ // Renamed from helperBasedConverters
 	"ConvertStringToTime": `
 func ConvertStringToTime(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339, s)
@@ -44,6 +47,23 @@ func ConvertTimeToString(t time.Time) string {
 	"ConvertUUIDToString": `
 func ConvertUUIDToString(u uuid.UUID) string {
 	return u.String()
+}
+`,
+	// Add new timestamp conversion function bodies
+	"ConvertTimeToTimestamp": `
+func ConvertTimeToTimestamp(t time.Time) *timestamppb.Timestamp {
+	if t.IsZero() {
+		return nil
+	}
+	return timestamppb.New(t)
+}
+`,
+	"ConvertTimestampToTime": `
+func ConvertTimestampToTime(ts *timestamppb.Timestamp) time.Time {
+	if ts == nil {
+		return time.Time{}
+	}
+	return ts.AsTime()
 }
 `,
 }
@@ -340,24 +360,37 @@ func (g *Generator) generateSliceToSliceConversion(funcName string, sourceInfo, 
 	// The element conversion logic must fully delegate to getConversionExpression
 	// to ensure required functions are correctly marked.
 	// We need to create dummy FieldInfo objects for the element types.
-	tempSourceField := &model.FieldInfo{Type: sourceElem, Name: "f"}
+	// 修复：将 tempSourceField.Name 设置为空字符串，并直接将 "f" 作为 fromVar 传递给 getConversionExpression
+	tempSourceField := &model.FieldInfo{Type: sourceElem, Name: ""} // Name is empty, as 'f' is the variable itself
 	tempTargetField := &model.FieldInfo{Type: targetElem}
 
 	// Call getConversionExpression for the element conversion.
 	// The 'fromVar' for the element is 'f'.
 	// parentSource and parentTarget are passed for potential stub function naming.
-	elementConversionExpr := g.getConversionExpression(sourceInfo, tempSourceField, targetInfo, tempTargetField, "f")
+	elementConversionExpr, returnsPointer, isFunctionCall := g.getConversionExpression(sourceInfo, tempSourceField, targetInfo, tempTargetField, "f")
 
-	// Now, use the generated elementConversionExpr
-	if targetElem.IsUltimatelyStruct() || targetElem.Kind == model.Pointer { // Check if target element is a struct or pointer
-		g.buf.WriteString(fmt.Sprintf("\t\ttos[i] = %s\n", elementConversionExpr))
-	} else {
-		// For non-pointer, non-struct target elements, we need to dereference if the conversion returns a pointer.
-		g.buf.WriteString(fmt.Sprintf("\t\tconverted := %s\n", elementConversionExpr))
-		g.buf.WriteString("\t\tif converted != nil {\n")
-		g.buf.WriteString("\t\t\ttos[i] = *converted\n")
-		g.buf.WriteString("\t\t}\n")
+	finalExpr := elementConversionExpr
+	targetIsPointer := targetElem.Kind == model.Pointer
+
+	if returnsPointer && !targetIsPointer {
+		// Conversion returns a pointer, but target element is not a pointer.
+		// We need to dereference.
+		finalExpr = fmt.Sprintf("*%s", elementConversionExpr)
+	} else if !returnsPointer && targetIsPointer {
+		// Conversion returns a value, but target element is a pointer.
+		// We need to take the address.
+		if isFunctionCall {
+			// If it's a function call returning a value, we need a temporary variable.
+			tempVarName := "tmpVal" // Simplified name, unique within each loop iteration's scope
+			g.buf.WriteString(fmt.Sprintf("\t\t%s := %s\n", tempVarName, elementConversionExpr))
+			finalExpr = fmt.Sprintf("&%s", tempVarName)
+		} else {
+			// If it's a simple value (e.g., from.Field), we can take its address directly.
+			finalExpr = fmt.Sprintf("&%s", elementConversionExpr)
+		}
 	}
+
+	g.buf.WriteString(fmt.Sprintf("\t\ttos[i] = %s\n", finalExpr))
 
 	g.buf.WriteString("\t}\n")
 	g.buf.WriteString("\treturn tos\n")
@@ -365,7 +398,10 @@ func (g *Generator) generateSliceToSliceConversion(funcName string, sourceInfo, 
 }
 
 func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule) {
-	g.buf.WriteString("\tto := &" + g.namer.GetTypeString(targetInfo) + "{\n")
+	// Collect temporary variable declarations
+	var tempVarDecls []string
+	var fieldAssignments []string // To store "FieldName: finalExpr,"
+
 	for _, sourceField := range sourceInfo.Fields {
 		if _, shouldIgnore := rule.FieldRules.Ignore[sourceField.Name]; shouldIgnore {
 			continue
@@ -392,11 +428,47 @@ func (g *Generator) generateStructToStructConversion(sourceInfo, targetInfo *mod
 				}
 			}
 		}
+
 		if targetField != nil {
-			// Corrected: Pass targetField (which is *model.FieldInfo) to getConversionExpression
-			conversionExpr := g.getConversionExpression(sourceInfo, sourceField, targetInfo, targetField, "from")
-			g.buf.WriteString(fmt.Sprintf("\t\t%s: %s,\n", targetField.Name, conversionExpr))
+			conversionExpr, returnsPointer, isFunctionCall := g.getConversionExpression(sourceInfo, sourceField, targetInfo, targetField, "from")
+
+			finalExpr := conversionExpr
+			targetIsPointer := targetField.Type.Kind == model.Pointer
+
+			if returnsPointer && !targetIsPointer {
+				// Conversion returns a pointer, but target field is not a pointer.
+				// We need to dereference.
+				finalExpr = fmt.Sprintf("*%s", conversionExpr)
+			} else if !returnsPointer && targetIsPointer {
+				// Conversion returns a value, but target field is a pointer.
+				// We need to take the address.
+				if isFunctionCall {
+					// If it's a function call returning a value, we need a temporary variable.
+					tempVarName := fmt.Sprintf("tmp%s", targetField.Name) // Generate a unique temp var name
+					tempVarDecls = append(tempVarDecls, fmt.Sprintf("\t%s := %s\n", tempVarName, conversionExpr))
+					finalExpr = fmt.Sprintf("&%s", tempVarName)
+				} else {
+					// If it's a simple value (e.g., from.Field), we can take its address directly.
+					finalExpr = fmt.Sprintf("&%s", conversionExpr)
+				}
+			}
+			// If both are pointers or both are values, no extra operation needed.
+
+			fieldAssignments = append(fieldAssignments, fmt.Sprintf("\t\t%s: %s,", targetField.Name, finalExpr))
 		}
+	}
+
+	// Write temporary variable declarations
+	if len(tempVarDecls) > 0 {
+		for _, decl := range tempVarDecls {
+			g.buf.WriteString(decl)
+		}
+		g.buf.WriteString("\n") // Add a newline for separation
+	}
+
+	g.buf.WriteString("\tto := &" + g.namer.GetTypeString(targetInfo) + "{\n")
+	for _, assignment := range fieldAssignments {
+		g.buf.WriteString(assignment + "\n")
 	}
 	g.buf.WriteString("\t}\n")
 	g.buf.WriteString("\treturn to\n")
@@ -430,7 +502,7 @@ func canDirectlyConvertPrimitives(sourceKind, targetKind string) bool {
 
 	// string and []byte, []rune can be converted
 	if (sourceKind == "string" && (targetKind == "[]byte" || targetKind == "[]rune")) ||
-		((sourceKind == "[]byte" || sourceKind == "[]rune") && targetKind == "string") {
+		((sourceKind == "[]byte" || targetKind == "[]rune") && targetKind == "string") {
 		return true
 	}
 
@@ -454,12 +526,15 @@ func %s(from %s) %s {
 
 func (g *Generator) getConversionExpression(
 	parentSource *model.TypeInfo, sourceField *model.FieldInfo,
-	parentTarget *model.TypeInfo, targetField *model.FieldInfo, // Corrected: targetField is now *model.FieldInfo
+	parentTarget *model.TypeInfo, targetField *model.FieldInfo,
 	fromVar string,
-) string { // Removed topLevelNeedsDisambiguation
+) (expression string, returnsPointer bool, isFunctionCall bool) {
 	sourceType := sourceField.Type
-	targetType := targetField.Type // Corrected: targetField is *model.FieldInfo, so targetField.Type is *model.TypeInfo
-	sourceFieldExpr := fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
+	targetType := targetField.Type
+	sourceFieldExpr := fromVar
+	if sourceField.Name != "" {
+		sourceFieldExpr = fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
+	}
 
 	// Prioritize slice conversion logic
 	if sourceType.Kind == model.Slice && targetType.Kind == model.Slice {
@@ -467,16 +542,10 @@ func (g *Generator) getConversionExpression(
 		targetElem := g.converter.GetElementType(targetType)
 
 		if sourceElem != nil && targetElem != nil {
-			// Only proceed if the element types are different, otherwise direct assignment is fine.
 			if sourceElem.UniqueKey() != targetElem.UniqueKey() {
-				// Get the name of the dedicated slice conversion helper function
 				sliceConverterFuncName := g.namer.GetFunctionName(sourceType, targetType)
-
-				// Add the slice conversion function to requiredConversionFunctions
 				g.requiredConversionFunctions[sliceConverterFuncName] = true
-
-				// Return the call to the dedicated helper function
-				return fmt.Sprintf("%s(%s)", sliceConverterFuncName, sourceFieldExpr)
+				return fmt.Sprintf("%s(%s)", sliceConverterFuncName, sourceFieldExpr), false, true // Slice conversion is a function call, returns value
 			}
 		}
 	}
@@ -485,7 +554,7 @@ func (g *Generator) getConversionExpression(
 	targetKey := targetType.UniqueKey()
 
 	if sourceKey == targetKey {
-		return sourceFieldExpr
+		return sourceFieldExpr, sourceType.Kind == model.Pointer, false // Direct field access, not a function call
 	}
 
 	// Check in the unified conversionFunctions map
@@ -498,38 +567,44 @@ func (g *Generator) getConversionExpression(
 		if strings.Contains(funcName, "UUID") {
 			g.importMgr.Add("github.com/google/uuid")
 		}
-		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr)
+		if strings.Contains(funcName, "Timestamp") {
+			g.importMgr.Add("google.golang.org/protobuf/types/known/timestamppb")
+		}
+		// Determine if the helper function returns a pointer based on targetKey
+		isPointerReturn := strings.HasPrefix(targetKey, "*")                           // More robust check
+		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), isPointerReturn, true // Helper function is a function call
 	}
 
 	// Check for custom function rules from config
 	customFuncKey := sourceKey + "->" + targetKey
 	if customFuncName, ok := g.config.CustomFunctionRules[customFuncKey]; ok {
 		g.requiredConversionFunctions[customFuncName] = true // Mark custom function as required
-		return fmt.Sprintf("%s(%s)", customFuncName, sourceFieldExpr)
+		// Determine if the custom function returns a pointer based on targetKey
+		isPointerReturn := strings.HasPrefix(targetKey, "*")                                 // More robust check
+		return fmt.Sprintf("%s(%s)", customFuncName, sourceFieldExpr), isPointerReturn, true // Custom function is a function call
 	}
 
 	// Handle underlying types for named types that are not primitive
 	if sourceType.Underlying != nil && targetType.Underlying != nil && sourceType.Underlying.UniqueKey() == targetType.Underlying.UniqueKey() {
-		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr)
+		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr), targetType.Kind == model.Pointer, true // Type conversion is a function call
 	}
 	if sourceType.Underlying != nil && sourceType.Underlying.UniqueKey() == targetKey {
-		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr)
+		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr), targetType.Kind == model.Pointer, true // Type conversion is a function call
 	}
 	if targetType.Underlying != nil && targetType.Underlying.UniqueKey() == sourceKey {
-		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr)
+		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr), targetType.Kind == model.Pointer, true // Type conversion is a function call
 	}
 
 	// Handle numeric primitive conversions (e.g., int to int32)
 	if sourceType.Kind == model.Primitive && targetType.Kind == model.Primitive &&
 		isNumericPrimitive(sourceType.Name) && isNumericPrimitive(targetType.Name) {
-		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr)
+		return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr), false, true // Type conversion is a function call, returns value
 	}
 
 	if sourceType.Kind == model.Primitive && targetType.Kind == model.Primitive {
 		if canDirectlyConvertPrimitives(sourceType.Name, targetType.Name) {
-			return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr)
+			return fmt.Sprintf("%s(%s)", g.namer.GetTypeString(targetType), sourceFieldExpr), false, true // Type conversion is a function call, returns value
 		} else {
-			// Corrected: Pass targetField (which is *model.FieldInfo) to GetPrimitiveConversionStubName
 			stubFuncName := g.namer.GetPrimitiveConversionStubName(parentSource, sourceField, parentTarget, targetField)
 			if _, exists := g.customStubs[stubFuncName]; !exists {
 				g.customStubs[stubFuncName] = generatePrimitiveConversionStub(
@@ -538,15 +613,16 @@ func (g *Generator) getConversionExpression(
 					g.namer.GetTypeString(targetType),
 				)
 			}
-			g.requiredConversionFunctions[stubFuncName] = true // Mark stub function as required
-			return fmt.Sprintf("%s(%s)", stubFuncName, sourceFieldExpr)
+			g.requiredConversionFunctions[stubFuncName] = true
+			return fmt.Sprintf("%s(%s)", stubFuncName, sourceFieldExpr), false, true // Stub function is a function call, returns value
 		}
 	}
 
 	// Fallback to generating/using a dedicated conversion function for complex types (structs, etc.)
+	// These functions are generated as func ConvertAtoB(from *A) *B, so they always return a pointer.
 	funcName := g.namer.GetFunctionName(sourceType, targetType)
-	g.requiredConversionFunctions[funcName] = true // Mark generated function as required
-	return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr)
+	g.requiredConversionFunctions[funcName] = true
+	return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), true, true // Generated function is a function call, returns pointer
 }
 
 // populateAliases populates the aliasMap with generated aliases for source and target types.
