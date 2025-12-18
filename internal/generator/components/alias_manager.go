@@ -112,12 +112,34 @@ func (am *AliasManager) PopulateAliases() {
 		am.EnsureTypeAlias(sourceInfo, true)
 		am.EnsureTypeAlias(targetInfo, false)
 		
+		// 新增：递归处理结构体字段中的类型别名
+		am.ensureFieldTypeAliases(sourceInfo, true)
+		am.ensureFieldTypeAliases(targetInfo, false)
+		
 		// 新增：添加源包和目标包的导入
 		if sourceInfo.ImportPath != "" && !am.isCurrentPackage(sourceInfo.ImportPath) {
 			am.importManager.Add(sourceInfo.ImportPath)
 		}
 		if targetInfo.ImportPath != "" && !am.isCurrentPackage(targetInfo.ImportPath) {
 			am.importManager.Add(targetInfo.ImportPath)
+		}
+	}
+}
+
+// ensureFieldTypeAliases recursively ensures aliases for all field types in a struct
+func (am *AliasManager) ensureFieldTypeAliases(typeInfo *model.TypeInfo, isSource bool) {
+	if typeInfo == nil {
+		return
+	}
+
+	// 对于结构体类型，递归处理所有字段
+	if typeInfo.Kind == model.Struct {
+		for _, field := range typeInfo.Fields {
+			if field.Type != nil {
+				am.EnsureTypeAlias(field.Type, isSource)
+				// 递归处理字段的类型
+				am.ensureFieldTypeAliases(field.Type, isSource)
+			}
 		}
 	}
 }

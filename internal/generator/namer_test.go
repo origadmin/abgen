@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/origadmin/abgen/internal/config"
+	"github.com/origadmin/abgen/internal/generator/components"
 	"github.com/origadmin/abgen/internal/model"
 )
 
@@ -320,4 +321,167 @@ func TestNamer_GetTypeString_EdgeCases(t *testing.T) {
 			assert.Equal(t, tc.expected, result, "Test case '%s' failed", tc.name)
 		})
 	}
+}
+
+// TestNamer_GetTypeString_PointerSliceAliases 专门测试指针类型切片别名的全面覆盖
+func TestNamer_GetTypeString_PointerSliceAliases(t *testing.T) {
+	// Mock TypeInfo objects for pointer slice types
+	userPPType := &model.TypeInfo{Name: "UserPP", ImportPath: "types", Kind: model.Struct}
+	userPV2Type := &model.TypeInfo{Name: "UserPV2", ImportPath: "types", Kind: model.Struct}
+	userPPPType := &model.TypeInfo{Name: "UserPPP", ImportPath: "types", Kind: model.Struct}
+
+	// Pointer types
+	pointerToUserPP := &model.TypeInfo{Kind: model.Pointer, Underlying: userPPType}
+	pointerToUserPV2 := &model.TypeInfo{Kind: model.Pointer, Underlying: userPV2Type}
+	pointerToUserPPP := &model.TypeInfo{Kind: model.Pointer, Underlying: userPPPType}
+
+	// Slice of pointer types
+	sliceOfPointerToUserPP := &model.TypeInfo{Kind: model.Slice, Underlying: pointerToUserPP}
+	sliceOfPointerToUserPV2 := &model.TypeInfo{Kind: model.Slice, Underlying: pointerToUserPV2}
+	sliceOfPointerToUserPPP := &model.TypeInfo{Kind: model.Slice, Underlying: pointerToUserPPP}
+
+	// Pointer to slice of pointer types
+	pointerToSliceOfPointerToUserPPP := &model.TypeInfo{Kind: model.Pointer, Underlying: sliceOfPointerToUserPPP}
+
+	testCases := []struct {
+		name     string
+		info     *model.TypeInfo
+		expected string
+	}{
+		{
+			name:     "Slice of Pointer to Struct ([]*types.UserPP)",
+			info:     sliceOfPointerToUserPP,
+			expected: "[]*types.UserPP",
+		},
+		{
+			name:     "Slice of Pointer to Struct ([]*types.UserPV2)",
+			info:     sliceOfPointerToUserPV2,
+			expected: "[]*types.UserPV2",
+		},
+		{
+			name:     "Slice of Pointer to Struct ([]*types.UserPPP)",
+			info:     sliceOfPointerToUserPPP,
+			expected: "[]*types.UserPPP",
+		},
+		{
+			name:     "Pointer to Slice of Pointer to Struct (*[]*types.UserPPP)",
+			info:     pointerToSliceOfPointerToUserPPP,
+			expected: "*[]*types.UserPPP",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			namer := NewNamer(&config.Config{}, make(map[string]string))
+			result := namer.GetTypeString(tc.info)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+// TestAliasManager_PointerSliceAliasGeneration 测试指针类型切片别名的生成
+func TestAliasManager_PointerSliceAliasGeneration(t *testing.T) {
+	// Mock TypeInfo objects for pointer slice types
+	userPPType := &model.TypeInfo{Name: "UserPP", ImportPath: "source", Kind: model.Struct}
+	userPV2Type := &model.TypeInfo{Name: "UserPV2", ImportPath: "source", Kind: model.Struct}
+
+	// Pointer types
+	pointerToUserPP := &model.TypeInfo{Kind: model.Pointer, Underlying: userPPType}
+	pointerToUserPV2 := &model.TypeInfo{Kind: model.Pointer, Underlying: userPV2Type}
+
+	// Slice of pointer types
+	sliceOfPointerToUserPP := &model.TypeInfo{Kind: model.Slice, Underlying: pointerToUserPP}
+	sliceOfPointerToUserPV2 := &model.TypeInfo{Kind: model.Slice, Underlying: pointerToUserPV2}
+
+	// Create mock config with conversion rules and naming rules
+	config := &config.Config{
+		ConversionRules: []*config.ConversionRule{
+			{
+				SourceType: "source.ContainerPP",
+				TargetType: "target.ContainerPP",
+			},
+			{
+				SourceType: "source.ContainerPV2", 
+				TargetType: "target.ContainerPV2",
+			},
+		},
+		NamingRules: config.NamingRules{
+			SourceSuffix: "Source", // 添加源类型后缀
+		},
+	}
+
+	// Create type info map - 添加指针类型切片的唯一键
+	typeInfos := map[string]*model.TypeInfo{
+		"source.ContainerPP": {
+			Name: "ContainerPP", ImportPath: "source", Kind: model.Struct,
+			Fields: []*model.FieldInfo{
+				{Name: "Users", Type: sliceOfPointerToUserPP},
+			},
+		},
+		"target.ContainerPP": {
+			Name: "ContainerPP", ImportPath: "target", Kind: model.Struct,
+			Fields: []*model.FieldInfo{
+				{Name: "Users", Type: sliceOfPointerToUserPP},
+			},
+		},
+		"source.ContainerPV2": {
+			Name: "ContainerPV2", ImportPath: "source", Kind: model.Struct,
+			Fields: []*model.FieldInfo{
+				{Name: "Users", Type: sliceOfPointerToUserPV2},
+			},
+		},
+		"target.ContainerPV2": {
+			Name: "ContainerPV2", ImportPath: "target", Kind: model.Struct,
+			Fields: []*model.FieldInfo{
+				{Name: "Users", Type: sliceOfPointerToUserPV2},
+			},
+		},
+		// 添加指针类型切片到typeInfos映射中
+		sliceOfPointerToUserPP.UniqueKey(): sliceOfPointerToUserPP,
+		sliceOfPointerToUserPV2.UniqueKey(): sliceOfPointerToUserPV2,
+	}
+
+	// Create alias manager
+	nameGenerator := NewNamer(config, make(map[string]string))
+	importManager := &mockImportManager{}
+	aliasManager := components.NewAliasManager(config, nameGenerator, importManager, typeInfos)
+
+	// Populate aliases
+	aliasManager.PopulateAliases()
+
+	// Get aliases to render
+	aliases := aliasManager.GetAliasesToRender()
+
+	// Verify that pointer slice aliases are generated
+	foundUserPPsSource := false
+	foundUserPV2sSource := false
+
+	for _, alias := range aliases {
+		if alias.AliasName == "UserPPsSource" {
+			foundUserPPsSource = true
+			assert.Equal(t, "[]*source.UserPP", alias.OriginalTypeName)
+		}
+		if alias.AliasName == "UserPV2sSource" {
+			foundUserPV2sSource = true
+			assert.Equal(t, "[]*source.UserPV2", alias.OriginalTypeName)
+		}
+	}
+
+	assert.True(t, foundUserPPsSource, "UserPPsSource alias should be generated")
+	assert.True(t, foundUserPV2sSource, "UserPV2sSource alias should be generated")
+}
+
+// Mock import manager for testing
+type mockImportManager struct{}
+
+func (m *mockImportManager) Add(importPath string) string {
+	return ""
+}
+
+func (m *mockImportManager) GetAlias(importPath string) string {
+	return ""
+}
+
+func (m *mockImportManager) GetAllImports() []string {
+	return nil
 }
