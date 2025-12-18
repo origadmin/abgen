@@ -87,7 +87,7 @@ func NewGenerator(config *config.Config) *Generator {
 		config:                      config,
 		importMgr:                   NewImportManager(),
 		aliasMap:                    make(map[string]string),
-		requiredAliases:             make(map[string]struct{}), // 初始化
+		requiredAliases:             make(map[string]struct{}),
 		requiredConversionFunctions: make(map[string]bool),
 		customStubs:                 make(map[string]string),
 		involvedPackages:            make(map[string]struct{}),
@@ -95,6 +95,11 @@ func NewGenerator(config *config.Config) *Generator {
 	g.converter = NewTypeConverter()
 	g.namer = NewNamer(config, g.aliasMap)
 	return g
+}
+
+// NewOrchestratorGenerator 创建使用新架构的生成器
+func NewOrchestratorGenerator(config *config.Config, typeInfos map[string]*model.TypeInfo) model.CodeGenerator {
+	return NewOrchestrator(config, typeInfos)
 }
 
 func (g *Generator) Generate(typeInfos map[string]*model.TypeInfo) ([]byte, error) {
@@ -255,6 +260,7 @@ func (g *Generator) writeAliases() {
 }
 
 func (g *Generator) writeConversionFunctions() {
+	// 1. 首先生成配置规则中的转换函数
 	rules := g.config.ConversionRules
 	sort.Slice(rules, func(i, j int) bool { return rules[i].SourceType < rules[j].SourceType })
 
@@ -266,6 +272,72 @@ func (g *Generator) writeConversionFunctions() {
 			continue
 		}
 		g.generateConversionFunction(sourceInfo, targetInfo, rule)
+	}
+
+	// 2. 然后生成动态发现的转换函数（如切片转换函数）
+	// 直接使用我们之前记录的函数名，通过重新调用getConversionExpression来找到对应的类型信息
+	g.generateDynamicConversionFunctions()
+}
+
+// generateDynamicConversionFunctions 生成动态发现的转换函数
+func (g *Generator) generateDynamicConversionFunctions() {
+	// 收集所有需要切片转换的类型对
+	sliceConversions := make(map[string]struct {
+		sourceInfo *model.TypeInfo
+		targetInfo *model.TypeInfo
+		funcName   string
+	})
+
+	// 扫描所有结构体的字段，找到需要切片转换的地方
+	for _, rule := range g.config.ConversionRules {
+		sourceInfo := g.typeInfos[rule.SourceType]
+		targetInfo := g.typeInfos[rule.TargetType]
+		if sourceInfo == nil || targetInfo == nil {
+			continue
+		}
+
+		// 检查字段中的切片类型
+		for _, sourceField := range sourceInfo.Fields {
+			var targetField *model.FieldInfo
+			// 找到对应的目标字段
+			for _, tf := range targetInfo.Fields {
+				if tf.Name == sourceField.Name {
+					targetField = tf
+					break
+				}
+			}
+
+			if targetField != nil &&
+				g.converter.IsSlice(sourceField.Type) &&
+				g.converter.IsSlice(targetField.Type) {
+
+				sourceElem := g.converter.GetElementType(sourceField.Type)
+				targetElem := g.converter.GetElementType(targetField.Type)
+
+				if sourceElem != nil && targetElem != nil && sourceElem.UniqueKey() != targetElem.UniqueKey() {
+					funcName := g.namer.GetFunctionName(sourceField.Type, targetField.Type)
+					key := sourceField.Type.UniqueKey() + "->" + targetField.Type.UniqueKey()
+					sliceConversions[key] = struct {
+						sourceInfo *model.TypeInfo
+						targetInfo *model.TypeInfo
+						funcName   string
+					}{
+						sourceInfo: sourceField.Type,
+						targetInfo: targetField.Type,
+						funcName:   funcName,
+					}
+				}
+			}
+		}
+	}
+
+	// 生成切片转换函数
+	for _, conversion := range sliceConversions {
+		slog.Debug("Generating slice conversion function",
+			"funcName", conversion.funcName,
+			"sourceType", conversion.sourceInfo.TypeString(),
+			"targetType", conversion.targetInfo.TypeString())
+		g.generateSliceToSliceConversion(conversion.funcName, conversion.sourceInfo, conversion.targetInfo)
 	}
 }
 
@@ -347,8 +419,34 @@ func (g *Generator) generateSliceToSliceConversion(funcName string, sourceInfo, 
 	sourceElem := g.converter.GetElementType(sourceInfo)
 	targetElem := g.converter.GetElementType(targetInfo)
 
+	// 🔧 关键修复：确保切片类型在 writeAliases() 之前就被添加到 requiredAliases
+	// 这样 writeAliases() 就会生成这些类型的别名声明
+	g.requiredAliases[sourceInfo.UniqueKey()] = struct{}{}
+	g.requiredAliases[targetInfo.UniqueKey()] = struct{}{}
+	g.requiredAliases[sourceElem.UniqueKey()] = struct{}{}
+	g.requiredAliases[targetElem.UniqueKey()] = struct{}{}
+
+	// 确保别名映射中存在这些类型
+	if _, exists := g.aliasMap[sourceInfo.UniqueKey()]; !exists {
+		g.aliasMap[sourceInfo.UniqueKey()] = g.namer.GetAlias(sourceInfo, true)
+	}
+	if _, exists := g.aliasMap[targetInfo.UniqueKey()]; !exists {
+		g.aliasMap[targetInfo.UniqueKey()] = g.namer.GetAlias(targetInfo, false)
+	}
+	if _, exists := g.aliasMap[sourceElem.UniqueKey()]; !exists {
+		g.aliasMap[sourceElem.UniqueKey()] = g.namer.GetAlias(sourceElem, true)
+	}
+	if _, exists := g.aliasMap[targetElem.UniqueKey()]; !exists {
+		g.aliasMap[targetElem.UniqueKey()] = g.namer.GetAlias(targetElem, false)
+	}
+
 	sourceSliceStr := g.namer.GetTypeAliasString(sourceInfo)
 	targetSliceStr := g.namer.GetTypeAliasString(targetInfo)
+
+	slog.Debug("Generating slice conversion",
+		"funcName", funcName,
+		"sourceSliceStr", sourceSliceStr,
+		"targetSliceStr", targetSliceStr)
 
 	g.buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceSliceStr, targetSliceStr))
 	g.buf.WriteString(fmt.Sprintf("func %s(froms %s) %s {\n", funcName, sourceSliceStr, targetSliceStr))
@@ -356,15 +454,35 @@ func (g *Generator) generateSliceToSliceConversion(funcName string, sourceInfo, 
 	g.buf.WriteString(fmt.Sprintf("\ttos := make(%s, len(froms))\n", targetSliceStr))
 	g.buf.WriteString("\tfor i, f := range froms {\n")
 
-	// The element conversion logic must fully delegate to getConversionExpression
-	// to ensure required functions are correctly marked.
-	// We need to create dummy FieldInfo objects for the element types.
-	tempSourceField := &model.FieldInfo{Type: sourceElem, Name: ""} // Name is empty, as 'f' is the variable itself
-	tempTargetField := &model.FieldInfo{Type: targetElem}
+	// For slice element conversion, we need to determine the correct conversion function
+	// and handle pointer/value semantics correctly
 
-	// Call getConversionExpression for the element conversion.
-	// The 'fromVar' for the element is 'f'.
-	elementConversionExpr, returnsPointer, isFunctionCall := g.getConversionExpression(sourceInfo, tempSourceField, targetInfo, tempTargetField, "f")
+	// Get the element conversion function name
+	elemFuncName := g.namer.GetFunctionName(sourceElem, targetElem)
+
+	// Determine the conversion expression based on element types
+	var elementConversionExpr string
+	var returnsPointer bool
+	var isFunctionCall bool = true
+
+	// For any conversion, the function name is elemFuncName + "(f)"
+	// The key is to understand what this function returns:
+	// - If both source and target are pointers (*T -> *U), the function returns *U (pointer)
+	// - If source is pointer, target is value (*T -> U), the function returns U (value) 
+	// - If source is value, target is pointer (T -> *U), the function returns U (value)
+	// - If both are values (T -> U), the function returns U (value)
+
+	elementConversionExpr = elemFuncName + "(f)"
+
+	if sourceElem.Kind == model.Pointer && targetElem.Kind == model.Pointer {
+		returnsPointer = true // *T -> *U returns *U
+	} else if sourceElem.Kind == model.Pointer && targetElem.Kind != model.Pointer {
+		returnsPointer = false // *T -> U returns U
+	} else if sourceElem.Kind != model.Pointer && targetElem.Kind == model.Pointer {
+		returnsPointer = false // T -> *U returns U  
+	} else {
+		returnsPointer = true // T -> U returns U
+	}
 
 	finalExpr := elementConversionExpr
 	targetIsPointer := targetElem.Kind == model.Pointer
@@ -584,13 +702,36 @@ func (g *Generator) getConversionExpression(
 
 		if sourceElem != nil && targetElem != nil {
 			if sourceElem.UniqueKey() != targetElem.UniqueKey() {
+				// 🔧 关键修复：确保切片类型在 writeAliases() 之前就被添加到 requiredAliases
+				g.requiredAliases[sourceType.UniqueKey()] = struct{}{}
+				g.requiredAliases[targetType.UniqueKey()] = struct{}{}
+				g.requiredAliases[sourceElem.UniqueKey()] = struct{}{}
+				g.requiredAliases[targetElem.UniqueKey()] = struct{}{}
+
+				// 确保别名映射中存在这些类型
+				if _, exists := g.aliasMap[sourceType.UniqueKey()]; !exists {
+					g.aliasMap[sourceType.UniqueKey()] = g.namer.GetAlias(sourceType, true)
+				}
+				if _, exists := g.aliasMap[targetType.UniqueKey()]; !exists {
+					g.aliasMap[targetType.UniqueKey()] = g.namer.GetAlias(targetType, false)
+				}
+				if _, exists := g.aliasMap[sourceElem.UniqueKey()]; !exists {
+					g.aliasMap[sourceElem.UniqueKey()] = g.namer.GetAlias(sourceElem, true)
+				}
+				if _, exists := g.aliasMap[targetElem.UniqueKey()]; !exists {
+					g.aliasMap[targetElem.UniqueKey()] = g.namer.GetAlias(targetElem, false)
+				}
+
 				sliceConverterFuncName := g.namer.GetFunctionName(sourceType, targetType)
 				g.requiredConversionFunctions[sliceConverterFuncName] = true
+
+				slog.Debug("Slice conversion prepared",
+					"sourceType", sourceType.TypeString(),
+					"targetType", targetType.TypeString(),
+					"funcName", sliceConverterFuncName)
+
 				// Slice conversion function returns a slice, not a pointer
-				// For slice element conversion, the conversion function's return type should match
-				// the target element type, so we return false for returnsPointer to avoid any
-				// unnecessary dereferencing or referencing operations
-				return fmt.Sprintf("%s(%s)", sliceConverterFuncName, sourceFieldExpr), false, true // Slice conversion is a function call, returns value
+				return fmt.Sprintf("%s(%s)", sliceConverterFuncName, sourceFieldExpr), false, true
 			}
 		}
 	}
@@ -708,7 +849,6 @@ func (g *Generator) getConversionExpression(
 
 // populateAliases populates the aliasMap with generated aliases for source and target types.
 func (g *Generator) populateAliases() {
-	// visited := make(map[string]struct{}) // No longer needed as we no longer recurse
 	for _, rule := range g.config.ConversionRules {
 		sourceInfo := g.typeInfos[rule.SourceType]
 		targetInfo := g.typeInfos[rule.TargetType]
@@ -716,23 +856,9 @@ func (g *Generator) populateAliases() {
 			continue
 		}
 
-		// Generate alias for source type and store
-		sourceAlias := g.namer.GetAlias(sourceInfo, true)
-		g.aliasMap[sourceInfo.UniqueKey()] = sourceAlias
-		g.requiredAliases[sourceInfo.UniqueKey()] = struct{}{}
-
-		// Generate alias for target type and store
-		targetAlias := g.namer.GetAlias(targetInfo, false)
-		g.aliasMap[targetInfo.UniqueKey()] = targetAlias
-		g.requiredAliases[targetInfo.UniqueKey()] = struct{}{}
-
-		// Add imports for source and target types
-		if sourceInfo.ImportPath != "" && !g.isCurrentPackage(sourceInfo.ImportPath) {
-			g.importMgr.Add(sourceInfo.ImportPath)
-		}
-		if targetInfo.ImportPath != "" && !g.isCurrentPackage(targetInfo.ImportPath) {
-			g.importMgr.Add(targetInfo.ImportPath)
-		}
+		// 确保基础类型有别名
+		g.ensureTypeAlias(sourceInfo, true)
+		g.ensureTypeAlias(targetInfo, false)
 	}
 }
 
@@ -780,4 +906,50 @@ func (g *Generator) getPackageName() string {
 
 func (g *Generator) isCurrentPackage(importPath string) bool {
 	return importPath == g.config.GenerationContext.PackagePath
+}
+
+// ensureTypeAlias 确保指定类型有别名，如果没有则创建
+func (g *Generator) ensureTypeAlias(typeInfo *model.TypeInfo, isSource bool) {
+	if typeInfo == nil {
+		return
+	}
+
+	uniqueKey := typeInfo.UniqueKey()
+
+	// 如果别名已存在，直接返回
+	if _, exists := g.aliasMap[uniqueKey]; exists {
+		return
+	}
+
+	// 创建新别名
+	alias := g.namer.GetAlias(typeInfo, isSource)
+
+	// 立即存储到映射中
+	g.aliasMap[uniqueKey] = alias
+	g.requiredAliases[uniqueKey] = struct{}{}
+
+	// 递归处理复合类型的元素类型
+	g.ensureElementTypeAlias(typeInfo, isSource)
+}
+
+// ensureElementTypeAlias 递归确保元素类型的别名
+func (g *Generator) ensureElementTypeAlias(typeInfo *model.TypeInfo, isSource bool) {
+	switch typeInfo.Kind {
+	case model.Slice, model.Array, model.Pointer:
+		if typeInfo.Underlying != nil {
+			g.ensureTypeAlias(typeInfo.Underlying, isSource)
+		}
+	case model.Map:
+		if typeInfo.KeyType != nil {
+			g.ensureTypeAlias(typeInfo.KeyType, isSource)
+		}
+		if typeInfo.Underlying != nil {
+			g.ensureTypeAlias(typeInfo.Underlying, isSource)
+		}
+	case model.Struct:
+		// 为命名的结构体字段类型递归创建别名
+		for _, field := range typeInfo.Fields {
+			g.ensureTypeAlias(field.Type, isSource)
+		}
+	}
 }

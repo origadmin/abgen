@@ -13,6 +13,7 @@ import (
 	"github.com/origadmin/abgen/internal/analyzer"
 	"github.com/origadmin/abgen/internal/config"
 	"github.com/origadmin/abgen/internal/generator"
+	"github.com/origadmin/abgen/internal/model"
 )
 
 var (
@@ -25,6 +26,7 @@ var (
 	output       = flag.String("output", "", "Output file name for the main generated code. Defaults to <package_name>.gen.go.")
 	customOutput = flag.String("custom-output", "custom.gen.go", "Output file name for custom conversion stubs.")
 	logFile      = flag.String("log-file", "", "Path to a file where logs should be written. If empty, logs go to stderr.") // Added log-file flag
+	useNewArch   = flag.Bool("new-arch", false, "Use the new component-based architecture for code generation (experimental)")
 )
 
 func main() {
@@ -105,11 +107,36 @@ func main() {
 
 	// --- 4. Generate Code ---
 	slog.Debug("Generating code...")
-	gen := generator.NewGenerator(cfg)
-	mainGeneratedCode, err := gen.Generate(typeInfos)
-	if err != nil {
-		slog.Error("Code generation failed", "error", err)
-		os.Exit(1)
+	
+	var mainGeneratedCode []byte
+	var response *model.GenerationResponse
+	var gen *generator.Generator // 旧架构生成器
+	
+	if *useNewArch {
+		slog.Info("Using new component-based architecture")
+		// 使用新架构
+		newGen := generator.NewOrchestratorGenerator(cfg, typeInfos)
+		response, err = newGen.Generate(&model.GenerationRequest{
+			Context: &model.GenerationContext{
+				Config:           cfg,
+				TypeInfos:        typeInfos,
+				InvolvedPackages: make(map[string]struct{}),
+			},
+		})
+		if err != nil {
+			slog.Error("Code generation failed with new architecture", "error", err)
+			os.Exit(1)
+		}
+		mainGeneratedCode = response.GeneratedCode
+	} else {
+		slog.Info("Using legacy architecture")
+		// 使用旧架构
+		gen = generator.NewGenerator(cfg)
+		mainGeneratedCode, err = gen.Generate(typeInfos)
+		if err != nil {
+			slog.Error("Code generation failed", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	// --- 4. Write Main Output ---
@@ -121,7 +148,17 @@ func main() {
 	}
 
 	// --- 5. Write Custom Stubs Output (if any) ---
-	customGeneratedCode := gen.CustomStubs()
+	var customGeneratedCode []byte
+	if *useNewArch {
+		if response != nil {
+			customGeneratedCode = response.CustomStubs
+		}
+	} else {
+		if gen != nil {
+			customGeneratedCode = gen.CustomStubs()
+		}
+	}
+	
 	if len(customGeneratedCode) > 0 {
 		slog.Info("Writing custom conversion stubs", "file", cfg.GenerationContext.CustomOutputFile)
 		err = os.WriteFile(cfg.GenerationContext.CustomOutputFile, customGeneratedCode, 0644)

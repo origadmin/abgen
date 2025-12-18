@@ -12,6 +12,7 @@ import (
 
 	"github.com/origadmin/abgen/internal/analyzer"
 	"github.com/origadmin/abgen/internal/config"
+	"github.com/origadmin/abgen/internal/model"
 )
 
 func init() {
@@ -669,4 +670,518 @@ func assertNotContainsPattern(t *testing.T, code string, pattern string) {
 	if match {
 		t.Errorf("Generated code contains unexpected pattern %q.\nGenerated Code:\n%s", pattern, code)
 	}
+}
+
+// TestOrchestratorBasicFunctionality tests the new architecture orchestrator
+func TestOrchestratorBasicFunctionality(t *testing.T) {
+	// Use simple test case
+	testPath := "../../testdata/02_basic_conversions/simple_struct"
+
+	// Parse config
+	parser := config.NewParser()
+	cfg, err := parser.Parse(testPath)
+	if err != nil {
+		t.Fatalf("Failed to parse config: %v", err)
+	}
+
+	// Analyze types
+	typeAnalyzer := analyzer.NewTypeAnalyzer()
+	packagePaths := cfg.RequiredPackages()
+	typeFQNs := cfg.RequiredTypeFQNs()
+	typeInfos, err := typeAnalyzer.Analyze(packagePaths, typeFQNs)
+	if err != nil {
+		t.Fatalf("Failed to analyze types: %v", err)
+	}
+
+	t.Run("Create_Orchestrator", func(t *testing.T) {
+		orchestrator := NewOrchestrator(cfg, typeInfos)
+		if orchestrator == nil {
+			t.Fatal("Failed to create orchestrator")
+		}
+
+		retrievedConfig := orchestrator.GetConfig()
+		if retrievedConfig == nil {
+			t.Fatal("Failed to retrieve config from orchestrator")
+		}
+	})
+
+	t.Run("Generate_Code", func(t *testing.T) {
+		orchestrator := NewOrchestrator(cfg, typeInfos)
+		
+		genContext := &model.GenerationContext{
+			Config:           cfg,
+			TypeInfos:        typeInfos,
+			InvolvedPackages: make(map[string]struct{}),
+		}
+
+		request := &model.GenerationRequest{
+			Context: genContext,
+		}
+
+		response, err := orchestrator.Generate(request)
+		if err != nil {
+			t.Fatalf("Generation failed: %v", err)
+		}
+
+		if len(response.GeneratedCode) == 0 {
+			t.Fatal("GeneratedCode is empty")
+		}
+
+		// Verify that generated code contains expected functions
+		generatedStr := string(response.GeneratedCode)
+		
+		// Check for conversion functions based on actual generated output
+		assertContainsPattern(t, generatedStr, `func Convert.*To.*\(from \*.*\) \*.*`)
+		
+		// Check that the generated code contains field assignments
+		assertContainsPattern(t, generatedStr, `ID:\s+from\.ID,`)
+		assertContainsPattern(t, generatedStr, `Name:\s+from\.Name,`)
+		
+		t.Logf("Successfully generated %d bytes with %d packages", 
+			len(response.GeneratedCode), len(response.RequiredPackages))
+	})
+}
+
+// TestGenerator_CodeGeneration_NewArchitecture tests the new component-based architecture
+func TestGenerator_CodeGeneration_NewArchitecture(t *testing.T) {
+
+	// Base dependencies for most tests
+	baseDependencies := []string{
+		"github.com/origadmin/abgen/testdata/fixtures/ent",
+		"github.com/origadmin/abgen/testdata/fixtures/types",
+	}
+
+	testCases := []struct {
+		name           string
+		directivePath  string
+		goldenFileName string
+		dependencies   []string
+		priority       string
+		category       string
+		assertFunc     func(t *testing.T, generatedCode []byte, stubCode []byte)
+	}{
+		// Basic conversions tests
+		{
+			name:          "simple_struct_conversion",
+			directivePath: "../../testdata/02_basic_conversions/simple_struct",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/source",
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/target",
+			},
+			priority: "P0",
+			category: "basic_conversions",
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+				generatedStr := string(generatedCode)
+				assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
+				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
+				assertContainsPattern(t, generatedStr, `UserName:\s+from.Name,`)
+				assertContainsPattern(t, generatedStr, `func ConvertUserDTOToUser\(from \*UserDTO\) \*User`)
+				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
+				assertContainsPattern(t, generatedStr, `Name:\s+from.UserName,`)
+			},
+		},
+		{
+			name:          "package_level_conversion",
+			directivePath: "../../testdata/02_basic_conversions/package_level_conversion",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/source",
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/target",
+			},
+			priority: "P0",
+			category: "basic_conversions",
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+				generatedStr := string(generatedCode)
+				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget\(from \*UserSource\) \*UserTarget`)
+				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource\(from \*UserTarget\) \*UserSource`)
+				assertContainsPattern(t, generatedStr, `func ConvertItemSourceToItemTarget\(from \*ItemSource\) \*ItemTarget`)
+				assertContainsPattern(t, generatedStr, `func ConvertItemTargetToItemSource\(from \*ItemTarget\) \*ItemSource`)
+			},
+		},
+		{
+			name:          "oneway_conversion",
+			directivePath: "../../testdata/02_basic_conversions/oneway_conversion",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/source",
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/target",
+			},
+			priority: "P0",
+			category: "basic_conversions",
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+				generatedStr := string(generatedCode)
+				assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
+				assertNotContainsPattern(t, generatedStr, `func ConvertUserDTOToUser`)
+			},
+		},
+		{
+			name:          "simple_bilateral",
+			directivePath: "../../testdata/02_basic_conversions/simple_bilateral",
+			dependencies:  baseDependencies,
+			priority:      "P0",
+			category:      "basic_conversions",
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+				generatedStr := string(generatedCode)
+				assertContainsPattern(t, generatedStr, `func ConvertStringToTime\(s string\) time.Time`)
+				assertContainsPattern(t, generatedStr, `func ConvertTimeToString\(t time.Time\) string`)
+				assertContainsPattern(t, generatedStr, `func ConvertUserToUserBilateral\(from \*User\) \*UserBilateral`)
+				assertContainsPattern(t, generatedStr, `func ConvertUserBilateralToUser\(from \*UserBilateral\) \*User`)
+				assertNotContainsPattern(t, generatedStr, `Password:`)
+				assertNotContainsPattern(t, generatedStr, `Salt:`)
+			},
+		},
+		{
+			name:           "custom_function_rules",
+			directivePath:  "../../testdata/03_advanced_features/custom_function_rules",
+			goldenFileName: "expected.golden",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/source",
+				"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/target",
+			},
+			priority: "P0",
+			category: "advanced_features",
+			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+				generatedStr := string(generatedCode)
+				stubStr := string(stubCode)
+				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserStatusToUserCustomStatus\(from.Status\),`)
+				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserCustomStatusToUserStatus\(from.Status\),`)
+				if len(stubStr) > 0 {
+					assertContainsPattern(t, stubStr, `func ConvertUserStatusToUserCustomStatus\(from int\) string`)
+				}
+			},
+		},
+	}
+
+	// Sort test cases for consistent execution order
+	sort.Slice(testCases, func(i, j int) bool {
+		priorityOrder := map[string]int{"P0": 0, "P1": 1, "P2": 2}
+		if priorityOrder[testCases[i].priority] != priorityOrder[testCases[j].priority] {
+			return priorityOrder[testCases[i].priority] < priorityOrder[testCases[j].priority]
+		}
+		return testCases[i].category < testCases[j].category
+	})
+
+	for _, tc := range testCases {
+		// Extract the numeric prefix from the directory path
+		var stagePrefix string
+		pathParts := strings.Split(tc.directivePath, "/")
+		for _, part := range pathParts {
+			if len(part) > 2 && part[2] == '_' && part[0] >= '0' && part[0] <= '9' && part[1] >= '0' && part[1] <= '9' {
+				stagePrefix = part[:2]
+				break
+			}
+		}
+
+		testNameWithStage := fmt.Sprintf("NEW_ARCH_%s_%s/%s", stagePrefix, tc.category, tc.name)
+		t.Run(testNameWithStage, func(t *testing.T) {
+			t.Logf("Running NEW ARCH test: %s (Priority: %s, Category: %s)", tc.name, tc.priority, tc.category)
+
+			// Cleanup any previously generated files
+			cleanTestFiles(t, tc.directivePath)
+			defer cleanTestFiles(t, tc.directivePath)
+
+			// Step 1: Parse config from the directive path
+			parser := config.NewParser()
+			cfg, err := parser.Parse(tc.directivePath)
+			if err != nil {
+				t.Fatalf("config.Parser.Parse() failed: %v", err)
+			}
+
+			// Step 2: Analyze types
+			typeAnalyzer := analyzer.NewTypeAnalyzer()
+			packagePaths := cfg.RequiredPackages()
+			typeFQNs := cfg.RequiredTypeFQNs()
+			typeInfos, err := typeAnalyzer.Analyze(packagePaths, typeFQNs)
+			if err != nil {
+				t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed: %v", err)
+			}
+
+			// Step 3: Create generation context and request using NEW architecture
+			genContext := &model.GenerationContext{
+				Config:           cfg,
+				TypeInfos:        typeInfos,
+				InvolvedPackages: make(map[string]struct{}),
+			}
+
+			// Step 4: Create orchestrator with NEW architecture
+			orchestrator := NewOrchestrator(cfg, typeInfos)
+
+			// Step 5: Generate request
+			request := &model.GenerationRequest{
+				Context: genContext,
+			}
+
+			// Step 6: Generate code using NEW architecture
+			response, err := orchestrator.Generate(request)
+			if err != nil {
+				t.Fatalf("NEW ARCH Generate() failed for test case %s: %v", tc.name, err)
+			}
+
+			generatedCode := response.GeneratedCode
+			stubCode := response.CustomStubs
+
+			// Normalize path separators for consistent comparison
+			generatedCodeStr := string(generatedCode)
+			generatedCodeStr = strings.ReplaceAll(generatedCodeStr, `\`, `/`)
+			generatedCode = []byte(generatedCodeStr)
+
+			// Step 7: Run custom assertions
+			if tc.assertFunc != nil {
+				t.Run(tc.name+"_Assertions", func(st *testing.T) {
+					tc.assertFunc(st, generatedCode, stubCode)
+					if st.Failed() {
+						actualOutputFile := filepath.Join(tc.directivePath, "failed.new_arch.actual.gen.go")
+						_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
+						st.Logf("NEW ARCH assertion failed for '%s'. Generated output saved to %s for inspection.", tc.name, actualOutputFile)
+						if len(stubCode) > 0 {
+							actualStubFile := filepath.Join(tc.directivePath, "failed.new_arch.actual.stub.go")
+							_ = os.WriteFile(actualStubFile, stubCode, 0644)
+							st.Logf("NEW ARCH stub output saved to %s for inspection.", actualStubFile)
+						}
+					} else {
+						actualOutputFile := filepath.Join(tc.directivePath, "success.new_arch.actual.gen.go")
+						_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
+					}
+				})
+			}
+
+			// Step 8: Golden file comparison if specified
+			if tc.goldenFileName != "" {
+				goldenFile := filepath.Join(tc.directivePath, tc.goldenFileName)
+				if os.Getenv("UPDATE_GOLDEN_FILES") != "" {
+					err = os.WriteFile(goldenFile, generatedCode, 0644)
+					if err != nil {
+						t.Fatalf("Failed to update golden file %s: %v", goldenFile, err)
+					}
+					t.Logf("Updated golden file: %s", goldenFile)
+					return
+				}
+
+				expectedCode, err := os.ReadFile(goldenFile)
+				if err != nil {
+					t.Fatalf("Failed to read golden file %s: %v", goldenFile, err)
+				}
+
+				if string(generatedCode) != string(expectedCode) {
+					actualOutputFile := filepath.Join(tc.directivePath, "failed.new_arch.actual.gen.go")
+					_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
+					t.Errorf("NEW ARCH generated code for '%s' does not match the golden file %s. The generated output was saved to %s for inspection.", tc.name, goldenFile, actualOutputFile)
+				}
+			}
+		})
+	}
+}
+
+// TestArchitecturalCompatibility tests that both old and new architectures produce identical output
+func TestArchitecturalCompatibility(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping compatibility test in short mode")
+	}
+
+	testCases := []struct {
+		name          string
+		directivePath string
+		dependencies  []string
+	}{
+		{
+			name:          "simple_struct",
+			directivePath: "../../testdata/02_basic_conversions/simple_struct",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/source",
+				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/target",
+			},
+		},
+		{
+			name:          "simple_bilateral",
+			directivePath: "../../testdata/02_basic_conversions/simple_bilateral",
+			dependencies: []string{
+				"github.com/origadmin/abgen/testdata/fixtures/ent",
+				"github.com/origadmin/abgen/testdata/fixtures/types",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Logf("Testing architectural compatibility for %s", tc.name)
+
+			// Parse config
+			parser := config.NewParser()
+			cfg, err := parser.Parse(tc.directivePath)
+			if err != nil {
+				t.Fatalf("Failed to parse config: %v", err)
+			}
+
+			// Analyze types
+			typeAnalyzer := analyzer.NewTypeAnalyzer()
+			packagePaths := cfg.RequiredPackages()
+			typeFQNs := cfg.RequiredTypeFQNs()
+			typeInfos, err := typeAnalyzer.Analyze(packagePaths, typeFQNs)
+			if err != nil {
+				t.Fatalf("Failed to analyze types: %v", err)
+			}
+
+			// Generate using OLD architecture
+			oldGen := NewGenerator(cfg)
+			oldCode, err := oldGen.Generate(typeInfos)
+			if err != nil {
+				t.Fatalf("OLD architecture failed: %v", err)
+			}
+
+			// Generate using NEW architecture
+			genContext := &model.GenerationContext{
+				Config:           cfg,
+				TypeInfos:        typeInfos,
+				InvolvedPackages: make(map[string]struct{}),
+			}
+			orchestrator := NewOrchestrator(cfg, typeInfos)
+			request := &model.GenerationRequest{
+				Context: genContext,
+			}
+			response, err := orchestrator.Generate(request)
+			if err != nil {
+				t.Fatalf("NEW architecture failed: %v", err)
+			}
+			newCode := response.GeneratedCode
+
+			// Normalize both outputs
+			oldStr := strings.ReplaceAll(string(oldCode), `\`, `/`)
+			newStr := strings.ReplaceAll(string(newCode), `\`, `/`)
+
+			// Compare outputs
+			if oldStr != newStr {
+				t.Errorf("Architecture mismatch for %s", tc.name)
+				t.Logf("OLD architecture output length: %d", len(oldStr))
+				t.Logf("NEW architecture output length: %d", len(newStr))
+
+				// Write both outputs for comparison
+				outputDir := filepath.Join(tc.directivePath, "compatibility_test")
+				_ = os.MkdirAll(outputDir, 0755)
+				_ = os.WriteFile(filepath.Join(outputDir, "old_architecture.gen.go"), []byte(oldStr), 0644)
+				_ = os.WriteFile(filepath.Join(outputDir, "new_architecture.gen.go"), []byte(newStr), 0644)
+				t.Logf("Output files written to %s for manual comparison", outputDir)
+			} else {
+				t.Logf("Architectures produce identical output for %s", tc.name)
+			}
+		})
+	}
+}
+
+// TestNewArchitectureComponents tests individual components of the new architecture
+func TestNewArchitectureComponents(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping component tests in short mode")
+	}
+
+	// Use simple test case
+	testPath := "../../testdata/02_basic_conversions/simple_struct"
+
+	// Parse config
+	parser := config.NewParser()
+	cfg, err := parser.Parse(testPath)
+	if err != nil {
+		t.Fatalf("Failed to parse config: %v", err)
+	}
+
+	// Analyze types
+	typeAnalyzer := analyzer.NewTypeAnalyzer()
+	packagePaths := cfg.RequiredPackages()
+	typeFQNs := cfg.RequiredTypeFQNs()
+	typeInfos, err := typeAnalyzer.Analyze(packagePaths, typeFQNs)
+	if err != nil {
+		t.Fatalf("Failed to analyze types: %v", err)
+	}
+
+	t.Run("Orchestrator_Creation", func(t *testing.T) {
+		// Test that we can create an orchestrator
+		orchestrator := NewOrchestrator(cfg, typeInfos)
+		if orchestrator == nil {
+			t.Fatal("Failed to create orchestrator")
+		}
+
+		// Test that we can get the config back
+		config := orchestrator.GetConfig()
+		if config == nil {
+			t.Fatal("Failed to get config from orchestrator")
+		}
+	})
+
+	t.Run("Generation_Context", func(t *testing.T) {
+		// Test generation context creation
+		genContext := &model.GenerationContext{
+			Config:           cfg,
+			TypeInfos:        typeInfos,
+			InvolvedPackages: make(map[string]struct{}),
+		}
+
+		if genContext.Config == nil {
+			t.Fatal("Config is nil in generation context")
+		}
+		if len(genContext.TypeInfos) == 0 {
+			t.Fatal("TypeInfos is empty in generation context")
+		}
+		if genContext.InvolvedPackages == nil {
+			t.Fatal("InvolvedPackages is nil in generation context")
+		}
+	})
+
+	t.Run("Generation_Request_Response", func(t *testing.T) {
+		// Test generation request
+		genContext := &model.GenerationContext{
+			Config:           cfg,
+			TypeInfos:        typeInfos,
+			InvolvedPackages: make(map[string]struct{}),
+		}
+
+		request := &model.GenerationRequest{
+			Context: genContext,
+		}
+
+		if request.Context == nil {
+			t.Fatal("Context is nil in generation request")
+		}
+
+		// Test generation response
+		response := &model.GenerationResponse{
+			GeneratedCode:    []byte("test code"),
+			CustomStubs:      []byte("test stubs"),
+			RequiredPackages: []string{"test/package"},
+		}
+
+		if len(response.GeneratedCode) == 0 {
+			t.Fatal("GeneratedCode is empty in response")
+		}
+		if len(response.RequiredPackages) == 0 {
+			t.Fatal("RequiredPackages is empty in response")
+		}
+	})
+
+	t.Run("End_to_End_Generation", func(t *testing.T) {
+		// Test full generation cycle
+		genContext := &model.GenerationContext{
+			Config:           cfg,
+			TypeInfos:        typeInfos,
+			InvolvedPackages: make(map[string]struct{}),
+		}
+
+		orchestrator := NewOrchestrator(cfg, typeInfos)
+		request := &model.GenerationRequest{
+			Context: genContext,
+		}
+
+		response, err := orchestrator.Generate(request)
+		if err != nil {
+			t.Fatalf("Generation failed: %v", err)
+		}
+
+		if len(response.GeneratedCode) == 0 {
+			t.Fatal("GeneratedCode is empty in response")
+		}
+
+		// Check that generated code contains expected function
+		generatedStr := string(response.GeneratedCode)
+		assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
+		assertContainsPattern(t, generatedStr, `func ConvertUserDTOToUser\(from \*UserDTO\) \*User`)
+
+		t.Logf("Successfully generated %d bytes of code with %d required packages", 
+			len(response.GeneratedCode), len(response.RequiredPackages))
+	})
 }
