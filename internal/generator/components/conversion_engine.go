@@ -47,8 +47,9 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 
 	var buf strings.Builder
 	funcName := ce.nameGenerator.GetFunctionName(sourceInfo, targetInfo)
-	sourceTypeStr := ce.nameGenerator.GetTypeString(sourceInfo)
-	targetTypeStr := ce.nameGenerator.GetTypeString(targetInfo)
+	// 修复：使用GetTypeAliasString而不是GetTypeString来生成带别名的类型
+	sourceTypeStr := ce.nameGenerator.GetTypeAliasString(sourceInfo)
+	targetTypeStr := ce.nameGenerator.GetTypeAliasString(targetInfo)
 
 	buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceTypeStr, targetTypeStr))
 	buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, sourceTypeStr, targetTypeStr))
@@ -81,8 +82,9 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	ce.aliasManager.EnsureTypeAlias(sourceElem, true)
 	ce.aliasManager.EnsureTypeAlias(targetElem, false)
 
-	sourceSliceStr := ce.nameGenerator.GetTypeString(sourceInfo)
-	targetSliceStr := ce.nameGenerator.GetTypeString(targetInfo)
+	// 修复：同样在slice转换中使用GetTypeAliasString
+	sourceSliceStr := ce.nameGenerator.GetTypeAliasString(sourceInfo)
+	targetSliceStr := ce.nameGenerator.GetTypeAliasString(targetInfo)
 	funcName := ce.nameGenerator.GetFunctionName(sourceInfo, targetInfo)
 
 	slog.Debug("Generating slice conversion", "funcName", funcName, "source", sourceSliceStr, "target", targetSliceStr)
@@ -219,7 +221,8 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 		buf.WriteString("\n")
 	}
 
-	buf.WriteString("\tto := &" + ce.nameGenerator.GetTypeString(targetInfo) + "{\n")
+	// 修复：在结构体初始化时也使用别名
+	buf.WriteString("\tto := &" + ce.nameGenerator.GetTypeAliasString(targetInfo) + "{\n")
 	for _, assignment := range fieldAssignments {
 		buf.WriteString(assignment + "\n")
 	}

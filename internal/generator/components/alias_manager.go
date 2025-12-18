@@ -14,6 +14,7 @@ var _ model.AliasManager = (*AliasManager)(nil)
 type AliasManager struct {
 	config           *config.Config
 	nameGenerator    model.NameGenerator
+	importManager    model.ImportManager  // 新增：导入管理器
 	aliasMap         map[string]string
 	requiredAliases  map[string]struct{}
 	typeInfos        map[string]*model.TypeInfo
@@ -23,11 +24,13 @@ type AliasManager struct {
 func NewAliasManager(
 	config *config.Config,
 	nameGenerator model.NameGenerator,
+	importManager model.ImportManager,  // 新增：导入管理器参数
 	typeInfos map[string]*model.TypeInfo,
 ) model.AliasManager {
 	return &AliasManager{
 		config:          config,
 		nameGenerator:   nameGenerator,
+		importManager:   importManager,  // 新增：初始化导入管理器
 		aliasMap:        make(map[string]string),
 		requiredAliases: make(map[string]struct{}),
 		typeInfos:       typeInfos,
@@ -108,7 +111,20 @@ func (am *AliasManager) PopulateAliases() {
 		// Ensure base types have aliases.
 		am.EnsureTypeAlias(sourceInfo, true)
 		am.EnsureTypeAlias(targetInfo, false)
+		
+		// 新增：添加源包和目标包的导入
+		if sourceInfo.ImportPath != "" && !am.isCurrentPackage(sourceInfo.ImportPath) {
+			am.importManager.Add(sourceInfo.ImportPath)
+		}
+		if targetInfo.ImportPath != "" && !am.isCurrentPackage(targetInfo.ImportPath) {
+			am.importManager.Add(targetInfo.ImportPath)
+		}
 	}
+}
+
+// isCurrentPackage checks if the import path belongs to the current package
+func (am *AliasManager) isCurrentPackage(importPath string) bool {
+	return importPath == am.config.GenerationContext.PackagePath
 }
 
 // GetAliasesToRender prepares and returns a sorted list of aliases that need to be rendered in the generated code.

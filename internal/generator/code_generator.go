@@ -31,7 +31,8 @@ func NewCodeGenerator(config *config.Config, typeInfos map[string]*model.TypeInf
 	typeConverter := components.NewTypeConverter()
 	aliasMap := make(map[string]string)
 	nameGenerator := components.NewNameGenerator(config, aliasMap)
-	aliasManager := components.NewAliasManager(config, nameGenerator, typeInfos)
+	// 修复：传递importManager给AliasManager
+	aliasManager := components.NewAliasManager(config, nameGenerator, importManager, typeInfos)
 	conversionEngine := components.NewConversionEngine(
 		typeConverter,
 		nameGenerator,
@@ -272,7 +273,83 @@ func (g *CodeGenerator) writeCustomStubsToBuffer(buf *bytes.Buffer, customStubs 
 }
 
 func (g *CodeGenerator) discoverImplicitConversionRules(typeInfos map[string]*model.TypeInfo) {
-	// This logic also remains the same.
+	typesByPackage := make(map[string][]*model.TypeInfo)
+	for _, info := range typeInfos {
+		if info.IsNamedType() {
+			typesByPackage[info.ImportPath] = append(typesByPackage[info.ImportPath], info)
+		}
+	}
+
+	var initialRules []*config.ConversionRule
+
+	for _, pair := range g.config.PackagePairs {
+		sourceTypes := typesByPackage[pair.SourcePath]
+		targetTypes := typesByPackage[pair.TargetPath]
+
+		targetMap := make(map[string]*model.TypeInfo)
+		for _, tt := range targetTypes {
+			targetMap[tt.Name] = tt
+		}
+
+		for _, sourceType := range sourceTypes {
+			if targetType, ok := targetMap[sourceType.Name]; ok {
+				rule := &config.ConversionRule{
+					SourceType: sourceType.UniqueKey(),
+					TargetType: targetType.UniqueKey(),
+					Direction:  config.DirectionBoth,
+					FieldRules: config.FieldRuleSet{Ignore: make(map[string]struct{}), Remap: make(map[string]string)},
+				}
+				initialRules = append(initialRules, rule)
+			}
+		}
+	}
+
+	g.config.ConversionRules = append(g.config.ConversionRules, initialRules...)
+
+	// Now, generate rules for slice types based on the initial named type rules
+	for _, rule := range initialRules {
+		sourceInfo := typeInfos[rule.SourceType]
+		targetInfo := typeInfos[rule.TargetType]
+
+		sourceSliceType := &model.TypeInfo{
+			Kind:       model.Slice,
+			Underlying: sourceInfo,
+		}
+		targetSliceType := &model.TypeInfo{
+			Kind:       model.Slice,
+			Underlying: targetInfo,
+		}
+		typeInfos[sourceSliceType.UniqueKey()] = sourceSliceType
+		typeInfos[targetSliceType.UniqueKey()] = targetSliceType
+
+		sliceRule := &config.ConversionRule{
+			SourceType: sourceSliceType.UniqueKey(),
+			TargetType: targetSliceType.UniqueKey(),
+			Direction:  config.DirectionBoth,
+		}
+
+		// Check if there are already rules related to sourceSliceType or targetSliceType
+		// Avoid generating duplicate or conflicting implicit slice rules
+		foundExistingSliceRule := false
+		for _, existingRule := range g.config.ConversionRules {
+			if (existingRule.SourceType == sliceRule.SourceType && existingRule.TargetType == sliceRule.TargetType) ||
+				(existingRule.SourceType == sliceRule.TargetType && existingRule.TargetType == sliceRule.SourceType && existingRule.Direction == config.DirectionBoth) {
+				foundExistingSliceRule = true
+				break
+			}
+		}
+
+		if !foundExistingSliceRule {
+			g.config.ConversionRules = append(g.config.ConversionRules, sliceRule)
+		}
+	}
+
+	sort.Slice(g.config.ConversionRules, func(i, j int) bool {
+		if g.config.ConversionRules[i].SourceType != g.config.ConversionRules[j].SourceType {
+			return g.config.ConversionRules[i].SourceType < g.config.ConversionRules[j].SourceType
+		}
+		return g.config.ConversionRules[i].TargetType < g.config.ConversionRules[j].TargetType
+	})
 }
 
 func (g *CodeGenerator) needsDisambiguation() bool {

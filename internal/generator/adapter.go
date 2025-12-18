@@ -69,7 +69,7 @@ func (f *ComponentFactory) CreateAliasManager(
 	nameGenerator model.NameGenerator,
 	typeInfos map[string]*model.TypeInfo,
 ) model.AliasManager {
-	return components.NewAliasManager(config, nameGenerator, typeInfos)
+	return components.NewAliasManager(config, nameGenerator, components.NewImportManager(), typeInfos)
 }
 
 // CreateConversionEngine 创建转换引擎组件
