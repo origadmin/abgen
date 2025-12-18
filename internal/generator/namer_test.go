@@ -145,9 +145,9 @@ func TestNamer_GetTypeString(t *testing.T) {
 			expected: "*types.User",
 		},
 		{
-			name:     "Slice of Struct ([]*types.User)",
+			name:     "Slice of Struct Value Type ([]types.User)",
 			info:     sliceOfUser,
-			expected: "[]*types.User",
+			expected: "[]types.User",
 		},
 		{
 			name:     "Slice of Primitive ([]int)",
@@ -155,14 +155,14 @@ func TestNamer_GetTypeString(t *testing.T) {
 			expected: "[]int",
 		},
 		{
-			name:     "Array of Struct ([5]*types.User)",
+			name:     "Array of Struct Value Type ([5]types.User)",
 			info:     array5OfUser,
-			expected: "[5]*types.User",
+			expected: "[5]types.User",
 		},
 		{
-			name:     "Map of String to Struct (map[string]*types.User)",
+			name:     "Map of String to Struct Value Type (map[string]types.User)",
 			info:     mapOfStringToUser,
-			expected: "map[string]*types.User",
+			expected: "map[string]types.User",
 		},
 		{
 			name:     "Named Struct Type (ent.Resource)",
@@ -175,14 +175,14 @@ func TestNamer_GetTypeString(t *testing.T) {
 			expected: "mypkg.MyResource",
 		},
 		{
-			name:     "Slice of Named Struct Type ([]*ent.Resource)",
+			name:     "Slice of Named Struct Type ([]ent.Resource)",
 			info:     sliceOfEntResource,
-			expected: "[]*ent.Resource",
+			expected: "[]ent.Resource",
 		},
 		{
-			name:     "Slice of Named Type wrapping Struct ([]*mypkg.MyResource)",
+			name:     "Slice of Named Type wrapping Struct ([]mypkg.MyResource)",
 			info:     sliceOfMyResourceNamedType,
-			expected: "[]*mypkg.MyResource",
+			expected: "[]mypkg.MyResource",
 		},
 	}
 
@@ -191,6 +191,133 @@ func TestNamer_GetTypeString(t *testing.T) {
 			namer := NewNamer(&config.Config{}, make(map[string]string)) // Config not relevant for GetTypeString
 			result := namer.GetTypeString(tc.info)
 			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+// TestNamer_GetTypeString_SliceTypeAliasComprehensive 专门测试切片类型别名的全面覆盖
+func TestNamer_GetTypeString_SliceTypeAliasComprehensive(t *testing.T) {
+	// Mock TypeInfo objects
+	userStructType := &model.TypeInfo{Name: "User", ImportPath: "types", Kind: model.Struct}
+	orderStructType := &model.TypeInfo{Name: "Order", ImportPath: "types", Kind: model.Struct}
+	intPrimitiveType := &model.TypeInfo{Name: "int", Kind: model.Primitive}
+
+	// 指针类型
+	pointerToUser := &model.TypeInfo{Kind: model.Pointer, Underlying: userStructType}
+	pointerToOrder := &model.TypeInfo{Kind: model.Pointer, Underlying: orderStructType}
+
+	// 测试各种切片类型组合
+	testCases := []struct {
+		name     string
+		info     *model.TypeInfo
+		expected string
+	}{
+		// 基本值类型切片
+		{
+			name:     "Slice of Struct Value Type ([]types.User)",
+			info:     &model.TypeInfo{Kind: model.Slice, Underlying: userStructType},
+			expected: "[]types.User",
+		},
+		{
+			name:     "Slice of Struct Pointer Type ([]*types.User)",
+			info:     &model.TypeInfo{Kind: model.Slice, Underlying: pointerToUser},
+			expected: "[]*types.User",
+		},
+		// 混合类型切片
+		{
+			name:     "Slice of Mixed Struct Types ([]types.Order)",
+			info:     &model.TypeInfo{Kind: model.Slice, Underlying: orderStructType},
+			expected: "[]types.Order",
+		},
+		{
+			name:     "Slice of Mixed Struct Pointer Types ([]*types.Order)",
+			info:     &model.TypeInfo{Kind: model.Slice, Underlying: pointerToOrder},
+			expected: "[]*types.Order",
+		},
+		// 基本类型切片
+		{
+			name:     "Slice of Primitive ([]int)",
+			info:     &model.TypeInfo{Kind: model.Slice, Underlying: intPrimitiveType},
+			expected: "[]int",
+		},
+		// 数组类型
+		{
+			name:     "Array of Struct Value Type ([10]types.User)",
+			info:     &model.TypeInfo{Kind: model.Array, ArrayLen: 10, Underlying: userStructType},
+			expected: "[10]types.User",
+		},
+		{
+			name:     "Array of Struct Pointer Type ([10]*types.User)",
+			info:     &model.TypeInfo{Kind: model.Array, ArrayLen: 10, Underlying: pointerToUser},
+			expected: "[10]*types.User",
+		},
+		// 映射类型
+		{
+			name:     "Map of String to Struct Value Type (map[string]types.User)",
+			info:     &model.TypeInfo{Kind: model.Map, KeyType: &model.TypeInfo{Name: "string", Kind: model.Primitive}, Underlying: userStructType},
+			expected: "map[string]types.User",
+		},
+		{
+			name:     "Map of String to Struct Pointer Type (map[string]*types.User)",
+			info:     &model.TypeInfo{Kind: model.Map, KeyType: &model.TypeInfo{Name: "string", Kind: model.Primitive}, Underlying: pointerToUser},
+			expected: "map[string]*types.User",
+		},
+		// 边界情况：空切片
+		{
+			name:     "Slice of Empty Interface ([]interface{})",
+			info:     &model.TypeInfo{Kind: model.Slice, Underlying: &model.TypeInfo{Name: "interface{}", Kind: model.Interface}},
+			expected: "[]interface{}",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			namer := NewNamer(&config.Config{}, make(map[string]string))
+			result := namer.GetTypeString(tc.info)
+			assert.Equal(t, tc.expected, result, "Test case '%s' failed: expected '%s', got '%s'", tc.name, tc.expected, result)
+		})
+	}
+}
+
+// TestNamer_GetTypeString_EdgeCases 测试边界情况
+func TestNamer_GetTypeString_EdgeCases(t *testing.T) {
+	testCases := []struct {
+		name     string
+		info     *model.TypeInfo
+		expected string
+	}{
+		{
+			name:     "Nil TypeInfo",
+			info:     nil,
+			expected: "",
+		},
+		{
+			name:     "Nil Underlying in Pointer",
+			info:     &model.TypeInfo{Kind: model.Pointer, Underlying: nil},
+			expected: "*",
+		},
+		{
+			name:     "Nil Underlying in Slice",
+			info:     &model.TypeInfo{Kind: model.Slice, Underlying: nil},
+			expected: "[]",
+		},
+		{
+			name:     "Nil Underlying in Array",
+			info:     &model.TypeInfo{Kind: model.Array, ArrayLen: 5, Underlying: nil},
+			expected: "[5]",
+		},
+		{
+			name:     "Nil KeyType in Map",
+			info:     &model.TypeInfo{Kind: model.Map, KeyType: nil, Underlying: &model.TypeInfo{Name: "int", Kind: model.Primitive}},
+			expected: "map[interface{}]int",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			namer := NewNamer(&config.Config{}, make(map[string]string))
+			result := namer.GetTypeString(tc.info)
+			assert.Equal(t, tc.expected, result, "Test case '%s' failed", tc.name)
 		})
 	}
 }

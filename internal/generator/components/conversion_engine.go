@@ -74,11 +74,17 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	sourceInfo, targetInfo *model.TypeInfo,
 ) (*model.GeneratedCode, error) {
 	var buf strings.Builder
+	
+	// 关键修复：确保源类型和目标类型的基本信息被正确保存
 	sourceElem := ce.typeConverter.GetElementType(sourceInfo)
 	targetElem := ce.typeConverter.GetElementType(targetInfo)
 
+	// 确保源类型和目标类型的别名被正确创建
+	// 传入正确的isSource参数，确保命名规则正确应用
 	ce.aliasManager.EnsureTypeAlias(sourceInfo, true)
 	ce.aliasManager.EnsureTypeAlias(targetInfo, false)
+	
+	// 确保元素类型的别名也被正确创建
 	ce.aliasManager.EnsureTypeAlias(sourceElem, true)
 	ce.aliasManager.EnsureTypeAlias(targetElem, false)
 

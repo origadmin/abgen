@@ -139,6 +139,9 @@ func (g *CodeGenerator) generateMainCode(typeInfos map[string]*model.TypeInfo) (
 func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeInfo) ([]string, map[string]struct{}, error) {
 	var conversionFuncs []string
 	requiredHelpers := make(map[string]struct{})
+	
+	// 使用map来跟踪已生成的函数，避免重复
+	generatedFunctions := make(map[string]bool)
 
 	// Generate conversion functions from config rules.
 	rules := g.config.ConversionRules
@@ -151,7 +154,7 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 			continue
 		}
 		// Generate forward conversion
-		g.generateAndCollect(sourceInfo, targetInfo, rule, &conversionFuncs, requiredHelpers)
+		g.generateAndCollect(sourceInfo, targetInfo, rule, &conversionFuncs, requiredHelpers, generatedFunctions)
 
 		// Generate reverse conversion if needed
 		if rule.Direction == config.DirectionBoth {
@@ -164,14 +167,14 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 			for from, to := range rule.FieldRules.Remap {
 				reverseRule.FieldRules.Remap[to] = from
 			}
-			g.generateAndCollect(targetInfo, sourceInfo, reverseRule, &conversionFuncs, requiredHelpers)
+			g.generateAndCollect(targetInfo, sourceInfo, reverseRule, &conversionFuncs, requiredHelpers, generatedFunctions)
 		}
 	}
 
 	// Generate dynamically discovered slice conversion functions.
 	sliceConversions := g.discoverSliceConversions(typeInfos)
 	for _, conv := range sliceConversions {
-		g.generateAndCollect(conv.sourceInfo, conv.targetInfo, nil, &conversionFuncs, requiredHelpers)
+		g.generateAndCollect(conv.sourceInfo, conv.targetInfo, nil, &conversionFuncs, requiredHelpers, generatedFunctions)
 	}
 
 	return conversionFuncs, requiredHelpers, nil
@@ -182,6 +185,7 @@ func (g *CodeGenerator) generateAndCollect(
 	rule *config.ConversionRule,
 	funcs *[]string,
 	helpers map[string]struct{},
+	generatedFunctions map[string]bool,
 ) {
 	var generated *model.GeneratedCode
 	var err error
@@ -198,11 +202,31 @@ func (g *CodeGenerator) generateAndCollect(
 	}
 
 	if generated != nil {
-		*funcs = append(*funcs, generated.FunctionBody)
-		for _, helper := range generated.RequiredHelpers {
-			helpers[helper] = struct{}{}
+		// 提取函数名，检查是否已生成
+		funcName := extractFunctionName(generated.FunctionBody)
+		if funcName != "" && !generatedFunctions[funcName] {
+			*funcs = append(*funcs, generated.FunctionBody)
+			generatedFunctions[funcName] = true
+			for _, helper := range generated.RequiredHelpers {
+				helpers[helper] = struct{}{}
+			}
 		}
 	}
+}
+
+// extractFunctionName 从函数体中提取函数名
+func extractFunctionName(functionBody string) string {
+	lines := strings.Split(functionBody, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "func ") {
+			// 提取函数名，例如：func ConvertUserPPsSourceToUserPPsTarget
+			parts := strings.Fields(line)
+			if len(parts) >= 2 && strings.HasPrefix(parts[1], "Convert") {
+				return parts[1]
+			}
+		}
+	}
+	return ""
 }
 
 func (g *CodeGenerator) discoverSliceConversions(typeInfos map[string]*model.TypeInfo) []struct {

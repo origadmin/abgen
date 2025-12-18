@@ -177,18 +177,13 @@ func (n *Namer) GetTypeString(info *model.TypeInfo) string {
 	case model.Slice:
 		sb.WriteString("[]")
 		if info.Underlying != nil {
-			// If the underlying type of a slice is ultimately a struct, it should be a pointer in the slice.
-			if info.Underlying.IsUltimatelyStruct() {
-				sb.WriteString("*")
-			}
+			// 修复：直接递归调用，不额外添加*符号
 			sb.WriteString(n.GetTypeString(info.Underlying))
 		}
 	case model.Array:
 		sb.WriteString(fmt.Sprintf("[%d]", info.ArrayLen)) // Use ArrayLen
 		if info.Underlying != nil {
-			if info.Underlying.IsUltimatelyStruct() {
-				sb.WriteString("*")
-			}
+			// 修复：直接递归调用，不额外添加*符号
 			sb.WriteString(n.GetTypeString(info.Underlying))
 		}
 	case model.Map:
@@ -200,9 +195,7 @@ func (n *Namer) GetTypeString(info *model.TypeInfo) string {
 		}
 		sb.WriteString("]")
 		if info.Underlying != nil { // Underlying is the value type
-			if info.Underlying.IsUltimatelyStruct() {
-				sb.WriteString("*")
-			}
+			// 修复：直接递归调用，不额外添加*符号
 			sb.WriteString(n.GetTypeString(info.Underlying))
 		}
 	default: // model.Struct, model.Primitive, etc.
