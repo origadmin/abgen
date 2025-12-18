@@ -610,7 +610,7 @@ func (g *LegacyGenerator) generateStructToStructConversion(sourceInfo, targetInf
 	// Write temporary variable declarations
 	if len(tempVarDecls) > 0 {
 		for _, decl := range tempVarDecls {
-			g.buf.WriteString(decl)
+g.buf.WriteString(decl)
 		}
 		g.buf.WriteString("\n") // Add a newline for separation
 	}
@@ -859,6 +859,28 @@ func (g *LegacyGenerator) populateAliases() {
 		// 确保基础类型有别名
 		g.ensureTypeAlias(sourceInfo, true)
 		g.ensureTypeAlias(targetInfo, false)
+		
+		// 新增：自动分析结构体字段并预测需要生成的转换方法
+		g.ensureFieldTypeAliases(sourceInfo, true)
+		g.ensureFieldTypeAliases(targetInfo, false)
+	}
+}
+
+// 新增：ensureFieldTypeAliases 递归确保结构体字段中所有类型的别名
+func (g *LegacyGenerator) ensureFieldTypeAliases(typeInfo *model.TypeInfo, isSource bool) {
+	if typeInfo == nil {
+		return
+	}
+
+	// 对于结构体类型，递归处理所有字段
+	if typeInfo.Kind == model.Struct {
+		for _, field := range typeInfo.Fields {
+			if field.Type != nil {
+				g.ensureTypeAlias(field.Type, isSource)
+				// 递归处理字段的类型
+				g.ensureFieldTypeAliases(field.Type, isSource)
+			}
+		}
 	}
 }
 

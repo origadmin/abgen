@@ -77,6 +77,7 @@ type AliasRenderInfo struct {
 type AliasManager interface {
 	EnsureTypeAlias(typeInfo *TypeInfo, isSource bool)
 	GetAliasMap() map[string]string
+	SetFieldTypesToAlias(fieldTypes map[string]*TypeInfo)
 	GetRequiredAliases() map[string]struct{}
 	PopulateAliases()
 	GetAliasesToRender() []*AliasRenderInfo

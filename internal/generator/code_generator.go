@@ -139,7 +139,7 @@ func (g *CodeGenerator) generateMainCode(typeInfos map[string]*model.TypeInfo) (
 func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeInfo) ([]string, map[string]struct{}, error) {
 	var conversionFuncs []string
 	requiredHelpers := make(map[string]struct{})
-	
+
 	// 使用map来跟踪已生成的函数，避免重复
 	generatedFunctions := make(map[string]bool)
 
@@ -170,6 +170,9 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 			g.generateAndCollect(targetInfo, sourceInfo, reverseRule, &conversionFuncs, requiredHelpers, generatedFunctions)
 		}
 	}
+
+	// 新增：在生成所有转换函数后，确保字段类型别名已生成
+	g.aliasManager.PopulateAliases()
 
 	// Generate dynamically discovered slice conversion functions.
 	sliceConversions := g.discoverSliceConversions(typeInfos)

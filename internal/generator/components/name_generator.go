@@ -134,6 +134,11 @@ func (n *NameGenerator) GetAlias(info *model.TypeInfo, isSource bool) string {
 		return n.toCamelCase(info.Name)
 	}
 
+	// 如果最外层是指针，则忽略它，使用内部类型生成别名
+	if info.Kind == model.Pointer && info.Underlying != nil {
+		return n.GetAlias(info.Underlying, isSource)
+	}
+
 	prefix, suffix := n.getPrefixAndSuffix(isSource)
 	rawBaseName := n.getRawTypeName(info) // e.g., extracts "User" from "[]*User", or "UserList" from "type UserList []User"
 
@@ -167,7 +172,6 @@ func (n *NameGenerator) GetTypeString(info *model.TypeInfo) string {
 	}
 
 	var sb strings.Builder
-
 	switch info.Kind {
 	case model.Pointer:
 		sb.WriteString("*")
@@ -177,9 +181,6 @@ func (n *NameGenerator) GetTypeString(info *model.TypeInfo) string {
 	case model.Slice:
 		sb.WriteString("[]")
 		if info.Underlying != nil {
-			if info.Underlying.Kind == model.Pointer {
-				sb.WriteString("*")
-			}
 			sb.WriteString(n.GetTypeString(info.Underlying))
 		}
 	case model.Array:
@@ -199,9 +200,6 @@ func (n *NameGenerator) GetTypeString(info *model.TypeInfo) string {
 		}
 		sb.WriteString("]")
 		if info.Underlying != nil { // Underlying is the value type.
-			if info.Underlying.Kind == model.Pointer {
-				sb.WriteString("*")
-			}
 			sb.WriteString(n.GetTypeString(info.Underlying))
 		}
 	default: // model.Struct, model.Primitive, etc.

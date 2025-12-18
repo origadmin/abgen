@@ -74,7 +74,7 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	sourceInfo, targetInfo *model.TypeInfo,
 ) (*model.GeneratedCode, error) {
 	var buf strings.Builder
-	
+
 	// 关键修复：确保源类型和目标类型的基本信息被正确保存
 	sourceElem := ce.typeConverter.GetElementType(sourceInfo)
 	targetElem := ce.typeConverter.GetElementType(targetInfo)
@@ -83,7 +83,7 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	// 传入正确的isSource参数，确保命名规则正确应用
 	ce.aliasManager.EnsureTypeAlias(sourceInfo, true)
 	ce.aliasManager.EnsureTypeAlias(targetInfo, false)
-	
+
 	// 确保元素类型的别名也被正确创建
 	ce.aliasManager.EnsureTypeAlias(sourceElem, true)
 	ce.aliasManager.EnsureTypeAlias(targetElem, false)
@@ -180,6 +180,9 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 	var fieldAssignments []string
 	var allRequiredHelpers []string
 
+	// 新增：收集字段类型信息，用于后续别名生成
+	fieldTypesToAlias := make(map[string]*model.TypeInfo)
+
 	for _, sourceField := range sourceInfo.Fields {
 		if _, shouldIgnore := rule.FieldRules.Ignore[sourceField.Name]; shouldIgnore {
 			continue
@@ -198,6 +201,9 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 		}
 
 		if targetField != nil {
+			// 新增：收集字段类型信息
+			ce.collectFieldTypesForAliasing(sourceField.Type, targetField.Type, fieldTypesToAlias)
+
 			conversionExpr, returnsPointer, isFunctionCall, requiredHelpers := ce.GetConversionExpression(
 				sourceInfo, sourceField, targetInfo, targetField, "from")
 			allRequiredHelpers = append(allRequiredHelpers, requiredHelpers...)
@@ -219,6 +225,9 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 			fieldAssignments = append(fieldAssignments, fmt.Sprintf("\t\t%s: %s,", targetField.Name, finalExpr))
 		}
 	}
+
+	// 新增：将收集的类型信息传递给别名管理器
+	ce.aliasManager.SetFieldTypesToAlias(fieldTypesToAlias)
 
 	if len(tempVarDecls) > 0 {
 		for _, decl := range tempVarDecls {
@@ -259,4 +268,37 @@ func (ce *ConversionEngine) generateFallbackConversion(sourceType *model.TypeInf
 	funcName := ce.nameGenerator.GetFunctionName(sourceFieldType, targetFieldType)
 	shouldReturnPointer := targetFieldType.IsUltimatelyStruct()
 	return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), shouldReturnPointer, true, nil
+}
+
+// 新增方法：收集需要生成别名的字段类型
+func (ce *ConversionEngine) collectFieldTypesForAliasing(sourceType, targetType *model.TypeInfo, fieldTypesToAlias map[string]*model.TypeInfo) {
+	// 为源类型和目标类型生成别名
+	fieldTypesToAlias[sourceType.UniqueKey()] = sourceType
+	fieldTypesToAlias[targetType.UniqueKey()] = targetType
+
+	// 递归处理复合类型
+	ce.collectElementTypesForAliasing(sourceType, fieldTypesToAlias)
+	ce.collectElementTypesForAliasing(targetType, fieldTypesToAlias)
+}
+
+// 新增方法：递归收集复合类型的元素类型
+func (ce *ConversionEngine) collectElementTypesForAliasing(typ *model.TypeInfo, fieldTypesToAlias map[string]*model.TypeInfo) {
+	if ce.typeConverter.IsSlice(typ) || ce.typeConverter.IsArray(typ) {
+		elemType := ce.typeConverter.GetElementType(typ)
+		if elemType != nil {
+			fieldTypesToAlias[elemType.UniqueKey()] = elemType
+			ce.collectElementTypesForAliasing(elemType, fieldTypesToAlias)
+		}
+	} else if typ.Kind == model.Pointer {
+		elemType := ce.typeConverter.GetElementType(typ)
+		if elemType != nil {
+			fieldTypesToAlias[elemType.UniqueKey()] = elemType
+			ce.collectElementTypesForAliasing(elemType, fieldTypesToAlias)
+		}
+	} else if typ.Kind == model.Struct {
+		// 递归处理结构体字段
+		for _, field := range typ.Fields {
+			ce.collectFieldTypesForAliasing(field.Type, field.Type, fieldTypesToAlias)
+		}
+	}
 }
