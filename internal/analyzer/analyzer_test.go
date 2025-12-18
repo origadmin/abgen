@@ -20,6 +20,7 @@ func TestMain(m *testing.M) {
 		Level: slog.LevelDebug,
 	})
 	slog.SetDefault(slog.New(logHandler))
+	slog.Info("TestMain", "testPackagePath", testPackagePath, "externalPackagePath", externalPackagePath)
 	os.Exit(m.Run())
 }
 
@@ -373,7 +374,7 @@ func validateFields(t *testing.T, fields []*model.FieldInfo, expectedFields []st
 		}
 
 		if field.Type != nil {
-			typeName := field.Type.GoTypeString()
+			typeName := field.Type.TypeString()
 			if typeName != expected.typeName {
 				t.Errorf("Expected field %d '%s' type to be '%s', got '%s'", i, field.Name, expected.typeName, typeName)
 			}

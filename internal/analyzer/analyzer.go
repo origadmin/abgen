@@ -208,7 +208,8 @@ func (a *TypeAnalyzer) resolveType(typ types.Type) *model.TypeInfo {
 		}
 		info.Original = obj
 
-		slog.Debug("resolveType: Named", "name", info.Name, "importPath", info.ImportPath, "isAlias", info.IsAlias, "underlying", t.Underlying().String())
+		slog.Debug("resolveType", "kind", "Named", "name", info.Name, "importPath", info.ImportPath, "isAlias",
+			info.IsAlias, "underlying", t.Underlying().String())
 
 		underlyingInfo := a.resolveType(t.Underlying())
 		if underlyingInfo != nil {
