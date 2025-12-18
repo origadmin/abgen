@@ -5,7 +5,6 @@ import (
 	"go/types"
 	"log/slog"
 	"strings"
-	"sync"
 )
 
 // TypeKind defines the kind of a Go type.
@@ -23,90 +22,40 @@ const (
 	Slice
 	Array
 	Pointer
-	Named     // For any type introduced with the 'type' keyword
+	Named // For any type introduced with the 'type' keyword
 )
 
 // TypeInfo represents the detailed information of a resolved Go type.
 // It serves as the single, authoritative data model for types throughout the application.
 type TypeInfo struct {
-	Name         string
-	ImportPath   string 
-	Kind         TypeKind
-	ArrayLen     int
-	Underlying   *TypeInfo 
-	KeyType      *TypeInfo
-	IsAlias      bool
-	Fields       []*FieldInfo
-	Methods      []*MethodInfo
-	Original     types.Object
-	
-	// Cache for package name extraction
-	packageNameMu sync.RWMutex
-	packageName   string
+	Name       string
+	ImportPath string
+	Kind       TypeKind
+	ArrayLen   int
+	Underlying *TypeInfo
+	KeyType    *TypeInfo
+	IsAlias    bool
+	Fields     []*FieldInfo
+	Methods    []*MethodInfo
+	Original   types.Object
 }
 
-// UniqueKey returns a string that uniquely identifies the type.
-// It prioritizes the Fully Qualified Name (FQN) if available, falling back to the type Name otherwise.
-// This ensures consistency for both named types and built-in primitives (e.g., "builtin.int").
-func (ti *TypeInfo) UniqueKey() string {
-	if ti == nil {
+// PackageName returns the package name of the type.
+func (ti *TypeInfo) PackageName() string {
+	// Extract the package name from the import path.
+	// This handles both standard library and custom packages.
+	parts := strings.Split(ti.ImportPath, "/")
+	if len(parts) == 0 {
 		return ""
 	}
+	return parts[len(parts)-1]
+}
 
-	// For named types, FQN is the most stable unique key.
-	if ti.ImportPath != "" && ti.Name != "" {
-		return ti.FQN()
+func (ti *TypeInfo) Type() string {
+	if ti == nil {
+		return "nil"
 	}
-
-	// For composite types, build a recursive unique key.
-	var sb strings.Builder
-	switch ti.Kind {
-	case Slice:
-		sb.WriteString("[]")
-		if ti.Underlying != nil {
-			sb.WriteString(ti.Underlying.UniqueKey())
-		} else {
-			sb.WriteString("interface{}") // Should not happen for valid types
-		}
-	case Array:
-		sb.WriteString(fmt.Sprintf("[%d]", ti.ArrayLen))
-		if ti.Underlying != nil {
-			sb.WriteString(ti.Underlying.UniqueKey())
-		} else {
-			sb.WriteString("interface{}") // Should not happen for valid types
-		}
-	case Pointer:
-		sb.WriteString("*")
-		if ti.Underlying != nil {
-			sb.WriteString(ti.Underlying.UniqueKey())
-		} else {
-			sb.WriteString("interface{}") // Should not happen for valid types
-		}
-	case Map:
-		sb.WriteString("map[")
-		if ti.KeyType != nil {
-			sb.WriteString(ti.KeyType.UniqueKey())
-		} else {
-			sb.WriteString("interface{}") // Should not happen for valid types
-		}
-		sb.WriteString("]")
-		if ti.Underlying != nil {
-			sb.WriteString(ti.Underlying.UniqueKey())
-		} else {
-			sb.WriteString("interface{}") // Should not happen for valid types
-		}
-	case Primitive:
-		return ti.Name
-	default:
-		// Fallback for other kinds, though they should ideally be handled explicitly
-		// or covered by the FQN case if they are named types.
-		if ti.Name != "" {
-			return ti.Name
-		}
-		slog.Warn("UniqueKey for unhandled TypeInfo kind", "kind", ti.Kind.String(), "info", fmt.Sprintf("%+v", ti))
-		return fmt.Sprintf("unhandled_%s_%p", ti.Kind.String(), ti)
-	}
-	return sb.String()
+	return ti.Name
 }
 
 // String returns a string representation of the type.
@@ -117,7 +66,7 @@ func (ti *TypeInfo) String() string {
 	if ti.IsNamedType() {
 		return ti.FQN()
 	}
-	return ti.GoTypeString()
+	return ti.TypeString()
 }
 
 // IsNamedType returns true if the type has a name and an import path, and is not a primitive.
@@ -141,12 +90,12 @@ func (ti *TypeInfo) IsValid() bool {
 	if ti == nil {
 		return false
 	}
-	
+
 	// Basic validation
 	if ti.Kind == Unknown {
 		return false
 	}
-	
+
 	// Type-specific validation
 	switch ti.Kind {
 	case Array:
@@ -172,28 +121,28 @@ func (ti *TypeInfo) Equals(other *TypeInfo) bool {
 	if ti == nil || other == nil {
 		return false
 	}
-	
+
 	// Quick check for basic properties
-	if ti.Name != other.Name || 
-	   ti.ImportPath != other.ImportPath || 
-	   ti.Kind != other.Kind ||
-	   ti.IsAlias != other.IsAlias {
+	if ti.Name != other.Name ||
+		ti.ImportPath != other.ImportPath ||
+		ti.Kind != other.Kind ||
+		ti.IsAlias != other.IsAlias {
 		return false
 	}
-	
+
 	// For named types (Kind == Named), FQN comparison is sufficient
 	if ti.Kind == Named && other.Kind == Named {
 		return ti.FQN() == other.FQN()
 	}
-	
+
 	// For complex types, compare structure
 	switch ti.Kind {
 	case Array:
-		return ti.ArrayLen == other.ArrayLen && 
-		       ti.Underlying.Equals(other.Underlying)
+		return ti.ArrayLen == other.ArrayLen &&
+			ti.Underlying.Equals(other.Underlying)
 	case Map:
-		return ti.KeyType.Equals(other.KeyType) && 
-		       ti.Underlying.Equals(other.Underlying)
+		return ti.KeyType.Equals(other.KeyType) &&
+			ti.Underlying.Equals(other.Underlying)
 	case Pointer, Slice:
 		return ti.Underlying.Equals(other.Underlying)
 	case Struct:
@@ -211,10 +160,10 @@ func (ti *TypeInfo) Equals(other *TypeInfo) bool {
 	}
 }
 
-// GoTypeString reconstructs the Go type string from the TypeInfo, suitable for code generation.
-func (ti *TypeInfo) GoTypeString() string {
+// TypeString reconstructs the Go type string from the TypeInfo, suitable for code generation.
+func (ti *TypeInfo) TypeString() string {
 	if ti == nil {
-		slog.Debug("GoTypeString", "ti", "nil", "result", "nil")
+		slog.Debug("TypeString", "ti", "nil", "result", "nil")
 		return "nil"
 	}
 	return ti.buildTypeStringFromUnderlying()
@@ -227,10 +176,9 @@ func (ti *TypeInfo) BuildQualifiedTypeName(sb *strings.Builder) {
 		sb.WriteString("interface{}")
 		return
 	}
-	
+
 	if ti.ImportPath != "" {
-		packageName := ti.getPackageName()
-		sb.WriteString(packageName)
+		sb.WriteString(ti.PackageName())
 		sb.WriteString(".")
 	}
 	sb.WriteString(ti.Name)
@@ -251,103 +199,6 @@ func (ti *TypeInfo) IsUltimatelyStruct() bool {
 	return false
 }
 
-func (ti *TypeInfo) buildTypeStringFromUnderlying() string {
-	var sb strings.Builder
-
-	switch ti.Kind {
-	case Pointer:
-		sb.WriteString("*")
-		if ti.Underlying != nil { 
-			sb.WriteString(ti.Underlying.GoTypeString())
-		} else {
-			sb.WriteString("interface{}")
-		}
-	case Slice:
-		sb.WriteString("[]")
-		if ti.Underlying != nil { 
-			sb.WriteString(ti.Underlying.GoTypeString())
-		} else {
-			sb.WriteString("interface{}")
-		}
-	case Array:
-		sb.WriteString(fmt.Sprintf("[%d]", ti.ArrayLen))
-		if ti.Underlying != nil { 
-			sb.WriteString(ti.Underlying.GoTypeString())
-		} else {
-			sb.WriteString("interface{}")
-		}
-	case Map:
-		sb.WriteString("map[")
-		if ti.KeyType != nil {
-			sb.WriteString(ti.KeyType.GoTypeString())
-		} else {
-			sb.WriteString("interface{}")
-		}
-		sb.WriteString("]")
-		if ti.Underlying != nil { 
-			sb.WriteString(ti.Underlying.GoTypeString())
-		} else {
-			sb.WriteString("interface{}")
-		}
-	case Chan:
-		if ti.Name != "" {
-			ti.BuildQualifiedTypeName(&sb)
-		} else {
-			sb.WriteString("chan interface{}")
-		}
-	case Func:
-		if ti.Name != "" {
-			ti.BuildQualifiedTypeName(&sb)
-		} else {
-			sb.WriteString("func()")
-		}
-	case Named:
-		// For named types, we should show the type name, not the underlying type
-		// This preserves the semantic meaning of the defined type
-		ti.BuildQualifiedTypeName(&sb)
-	case Primitive, Struct, Interface:
-		ti.BuildQualifiedTypeName(&sb)
-	default:
-		sb.WriteString("unknown")
-	}
-
-	return sb.String()
-}
-
-// getPackageName extracts and caches the package name from import path.
-func (ti *TypeInfo) getPackageName() string {
-	if ti.ImportPath == "" {
-		return ""
-	}
-	
-	// Use read lock first
-	ti.packageNameMu.RLock()
-	if ti.packageName != "" {
-		defer ti.packageNameMu.RUnlock()
-		return ti.packageName
-	}
-	ti.packageNameMu.RUnlock()
-	
-	// Acquire write lock for initialization
-	ti.packageNameMu.Lock()
-	defer ti.packageNameMu.Unlock()
-	
-	// Double-check after acquiring write lock
-	if ti.packageName != "" {
-		return ti.packageName
-	}
-	
-	// Extract package name
-	lastSlash := strings.LastIndex(ti.ImportPath, "/")
-	if lastSlash == -1 {
-		ti.packageName = ti.ImportPath
-	} else {
-		ti.packageName = ti.ImportPath[lastSlash+1:]
-	}
-	
-	return ti.packageName
-}
-
 // FieldInfo represents a single field within a struct.
 type FieldInfo struct {
 	Name       string
@@ -365,12 +216,129 @@ func (fi *FieldInfo) Equals(other *FieldInfo) bool {
 	if fi == nil || other == nil {
 		return false
 	}
-	
+
 	return fi.Name == other.Name &&
-	       fi.Tag == other.Tag &&
-	       fi.IsEmbedded == other.IsEmbedded &&
-	       ((fi.Type == nil && other.Type == nil) || 
-	        (fi.Type != nil && other.Type != nil && fi.Type.Equals(other.Type)))
+		fi.Tag == other.Tag &&
+		fi.IsEmbedded == other.IsEmbedded &&
+		((fi.Type == nil && other.Type == nil) ||
+			(fi.Type != nil && other.Type != nil && fi.Type.Equals(other.Type)))
+}
+
+// UniqueKey returns a string that uniquely identifies the type.
+// It prioritizes the Fully Qualified Name (FQN) if available, falling back to the type Name otherwise.
+// This ensures consistency for both named types and built-in primitives (e.g., "builtin.int").
+func (ti *TypeInfo) UniqueKey() string {
+	if ti == nil {
+		return ""
+	}
+
+	// For named types, FQN is the most stable unique key.
+	if ti.ImportPath != "" && ti.Name != "" {
+		return ti.FQN()
+	}
+
+	// For composite types, build a recursive unique key using the shared builder
+	return ti.buildTypeString(true) // true表示使用UniqueKey模式
+}
+
+// ... existing code ...
+
+func (ti *TypeInfo) buildTypeStringFromUnderlying() string {
+	return ti.buildTypeString(false)
+}
+
+// buildTypeString is a shared helper method that builds type strings for both UniqueKey and TypeString
+// isUniqueKeyMode: true for UniqueKey (uses FQN), false for TypeString (uses package name)
+func (ti *TypeInfo) buildTypeString(isUniqueKeyMode bool) string {
+	if ti == nil {
+		return "nil"
+	}
+
+	// For named types in UniqueKey mode, use FQN
+	if isUniqueKeyMode && ti.ImportPath != "" && ti.Name != "" {
+		return ti.FQN()
+	}
+
+	var sb strings.Builder
+
+	switch ti.Kind {
+	case Pointer:
+		sb.WriteString("*")
+		sb.WriteString(ti.getTypeRepresentation(ti.Underlying, isUniqueKeyMode))
+	case Slice:
+		sb.WriteString("[]")
+		sb.WriteString(ti.getTypeRepresentation(ti.Underlying, isUniqueKeyMode))
+	case Array:
+		sb.WriteString(fmt.Sprintf("[%d]", ti.ArrayLen))
+		sb.WriteString(ti.getTypeRepresentation(ti.Underlying, isUniqueKeyMode))
+	case Map:
+		sb.WriteString("map[")
+		sb.WriteString(ti.getTypeRepresentation(ti.KeyType, isUniqueKeyMode))
+		sb.WriteString("]")
+		sb.WriteString(ti.getTypeRepresentation(ti.Underlying, isUniqueKeyMode))
+	case Chan:
+		if ti.Name != "" {
+			ti.buildTypeName(&sb, isUniqueKeyMode)
+		} else {
+			sb.WriteString("chan interface{}")
+		}
+	case Func:
+		if ti.Name != "" {
+			ti.buildTypeName(&sb, isUniqueKeyMode)
+		} else {
+			sb.WriteString("func()")
+		}
+	case Named:
+		// For named types, we should show the type name, not the underlying type
+		ti.buildTypeName(&sb, isUniqueKeyMode)
+	case Primitive:
+		return ti.Name
+	case Struct, Interface:
+		ti.buildTypeName(&sb, isUniqueKeyMode)
+	default:
+		if isUniqueKeyMode {
+			if ti.Name != "" {
+				return ti.Name
+			}
+			slog.Warn("UniqueKey for unhandled TypeInfo kind", "kind", ti.Kind.String(), "info", fmt.Sprintf("%+v", ti))
+			return fmt.Sprintf("unhandled_%s_%p", ti.Kind.String(), ti)
+		}
+		sb.WriteString("unknown")
+	}
+
+	return sb.String()
+}
+
+// getTypeRepresentation returns the appropriate type representation based on the mode
+func (ti *TypeInfo) getTypeRepresentation(target *TypeInfo, isUniqueKeyMode bool) string {
+	if target == nil {
+		return "interface{}"
+	}
+	if isUniqueKeyMode {
+		return target.UniqueKey()
+	}
+	return target.TypeString()
+}
+
+// buildTypeName builds the type name with appropriate package prefix based on the mode
+func (ti *TypeInfo) buildTypeName(sb *strings.Builder, isUniqueKeyMode bool) {
+	if ti.Name == "" {
+		sb.WriteString("interface{}")
+		return
+	}
+
+	if isUniqueKeyMode {
+		if ti.ImportPath != "" {
+			sb.WriteString(ti.ImportPath)
+			sb.WriteString(".")
+		}
+	} else {
+		if ti.ImportPath != "" {
+			sb.WriteString(ti.PackageName())
+			sb.WriteString(".")
+		}
+	}
+	sb.WriteString(ti.Name)
 }
 
 // MethodInfo represents a single method of a type.
