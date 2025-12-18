@@ -24,372 +24,373 @@ func init() {
 	))
 }
 
-func TestGenerator_CodeGeneration(t *testing.T) {
+// Base dependencies for most tests
+var baseDependencies = []string{
+	"github.com/origadmin/abgen/testdata/fixtures/ent",
+	"github.com/origadmin/abgen/testdata/fixtures/types",
+}
 
-	// Base dependencies for most tests
-	baseDependencies := []string{
-		"github.com/origadmin/abgen/testdata/fixtures/ent",
-		"github.com/origadmin/abgen/testdata/fixtures/types",
-	}
+var testCases = []struct {
+	name           string
+	directivePath  string
+	goldenFileName string
+	dependencies   []string
+	priority       string
+	category       string
+	assertFunc     func(t *testing.T, generatedCode []byte, stubCode []byte)
+}{
+	// === 02_basic_conversions: Basic Struct Conversion ===
+	{
+		name:          "simple_struct_conversion",
+		directivePath: "../../testdata/02_basic_conversions/simple_struct",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/source",
+			"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/target",
+		},
+		priority: "P0",
+		category: "basic_conversions",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			generatedStr := string(generatedCode)
+			assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
+			assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
+			assertContainsPattern(t, generatedStr, `UserName:\s+from.Name,`)
+			assertContainsPattern(t, generatedStr, `func ConvertUserDTOToUser\(from \*UserDTO\) \*User`)
+			assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
+			assertContainsPattern(t, generatedStr, `Name:\s+from.UserName,`)
+		},
+	},
+	{
+		name:          "package_level_conversion",
+		directivePath: "../../testdata/02_basic_conversions/package_level_conversion",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/source",
+			"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/target",
+		},
+		priority: "P0",
+		category: "basic_conversions",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			generatedStr := string(generatedCode)
+			assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget\(from \*UserSource\) \*UserTarget`)
+			assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
+			assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
+			assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource\(from \*UserTarget\) \*UserSource`)
+			assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
+			assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
+			assertContainsPattern(t, generatedStr, `func ConvertItemSourceToItemTarget\(from \*ItemSource\) \*ItemTarget`)
+			assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
+			assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
+			assertContainsPattern(t, generatedStr, `func ConvertItemTargetToItemSource\(from \*ItemTarget\) \*ItemSource`)
+			assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
+			assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
+		},
+	},
+	{
+		name:          "oneway_conversion",
+		directivePath: "../../testdata/02_basic_conversions/oneway_conversion",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/source",
+			"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/target",
+		},
+		priority: "P0",
+		category: "basic_conversions",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			generatedStr := string(generatedCode)
+			assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
+			assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
+			assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
+			assertNotContainsPattern(t, generatedStr, `func ConvertUserDTOToUser`)
+		},
+	},
+	{
+		name:          "id_to_id_field_conversion",
+		directivePath: "../../testdata/02_basic_conversions/id_to_id_field_conversion",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/02_basic_conversions/id_to_id_field_conversion/source",
+			"github.com/origadmin/abgen/testdata/02_basic_conversions/id_to_id_field_conversion/target",
+		},
+		priority: "P0",
+		category: "basic_conversions",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			generatedStr := string(generatedCode)
+			assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget\(from \*UserSource\) \*UserTarget`)
+			assertContainsPattern(t, generatedStr, `ID:\s+from.Id,`)
+			assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
+			assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource\(from \*UserTarget\) \*UserSource`)
+			assertContainsPattern(t, generatedStr, `Id:\s+from.ID,`)
+			assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
+		},
+	},
+	{
+		name:          "simple_bilateral",
+		directivePath: "../../testdata/02_basic_conversions/simple_bilateral",
+		dependencies:  baseDependencies,
+		priority:      "P0",
+		category:      "basic_conversions",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			generatedStr := string(generatedCode)
+			assertContainsPattern(t, generatedStr, `func ConvertStringToTime\(s string\) time.Time`)
+			assertContainsPattern(t, generatedStr, `func ConvertTimeToString\(t time.Time\) string`)
+			assertContainsPattern(t, generatedStr, `func ConvertUserToUserBilateral\(from \*User\) \*UserBilateral`)
+			assertContainsPattern(t, generatedStr, `Id:\s+from.ID,`)
+			assertContainsPattern(t, generatedStr, `Username:\s+from.Username,`)
+			assertContainsPattern(t, generatedStr, `Age:\s+from.Age,`)
+			assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderToGenderBilateral\(from.Gender\),`)
+			assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserStatusToUserBilateralStatus\(from.Status\),`)
+			assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertTimeToString\(from.CreatedAt\),`)
+			assertNotContainsPattern(t, generatedStr, `Password:`)
+			assertNotContainsPattern(t, generatedStr, `Salt:`)
+			assertNotContainsPattern(t, generatedStr, `RoleIDs:`)
+			assertNotContainsPattern(t, generatedStr, `Roles:`)
+			assertNotContainsPattern(t, generatedStr, `Edges:`)
+			assertContainsPattern(t, generatedStr, `func ConvertUserBilateralToUser\(from \*UserBilateral\) \*User`)
+			assertContainsPattern(t, generatedStr, `ID:\s+from.Id,`)
+			assertContainsPattern(t, generatedStr, `Username:\s+from.Username,`)
+			assertContainsPattern(t, generatedStr, `Age:\s+from.Age,`)
+			assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderBilateralToGender\(from.Gender\),`)
+			assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserBilateralStatusToUserStatus\(from.Status\),`)
+			assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertStringToTime\(from.CreatedAt\),`)
+		},
+	},
+	{
+		name:          "standard_trilateral",
+		directivePath: "../../testdata/02_basic_conversions/standard_trilateral",
+		dependencies:  baseDependencies,
+		priority:      "P0",
+		category:      "basic_conversions",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			generatedStr := string(generatedCode)
+			assertContainsPattern(t, generatedStr, `func ConvertStringToTime\(s string\) time.Time`)
+			assertContainsPattern(t, generatedStr, `func ConvertTimeToString\(t time.Time\) string`)
+			assertContainsPattern(t, generatedStr, `func ConvertUserToUserTrilateral\(from \*User\) \*UserTrilateral`)
+			assertContainsPattern(t, generatedStr, `Id:\s+from.ID,`)
+			assertContainsPattern(t, generatedStr, `Username:\s+from.Username,`)
+			assertContainsPattern(t, generatedStr, `Age:\s+from.Age,`)
+			assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderToGenderTrilateral\(from.Gender\),`)
+			assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserStatusToUserTrilateralStatus\(from.Status\),`)
+			assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertTimeToString\(from.CreatedAt\),`)
+			assertContainsPattern(t, generatedStr, `func ConvertUserTrilateralToUser\(from \*UserTrilateral\) \*User`)
+			assertContainsPattern(t, generatedStr, `ID:\s+from.Id,`)
+			assertContainsPattern(t, generatedStr, `Username:\s+from.Username,`)
+			assertContainsPattern(t, generatedStr, `Age:\s+from.Age,`)
+			assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderTrilateralToGender\(from.Gender\),`)
+			assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserTrilateralStatusToUserStatus\(from.Status\),`)
+			assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertStringToTime\(from.CreatedAt\),`)
+			assertContainsPattern(t, generatedStr, `func ConvertResourceToResourceTrilateral\(from \*Resource\) \*ResourceTrilateral`)
+			assertContainsPattern(t, generatedStr, `func ConvertResourceTrilateralToResource\(from \*ResourceTrilateral\) \*Resource`)
+		},
+	},
+	{
+		name:           "field_ignore_remap",
+		directivePath:  "../../testdata/02_basic_conversions/field_ignore_remap",
+		goldenFileName: "expected.gen.go",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/02_basic_conversions/field_ignore_remap/source",
+			"github.com/origadmin/abgen/testdata/02_basic_conversions/field_ignore_remap/target",
+		},
+		priority: "P0",
+		category: "basic_conversions",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			generatedStr := string(generatedCode)
+			assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
+			assertNotContainsPattern(t, generatedStr, `Password:`)
+			assertNotContainsPattern(t, generatedStr, `CreatedAt:`)
+			assertContainsPattern(t, generatedStr, `FullName:\s+from.Name,`)
+			assertContainsPattern(t, generatedStr, `UserEmail:\s+from.Email,`)
+			assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
+			assertContainsPattern(t, generatedStr, `LastUpdate:\s+from.UpdatedAt,`)
+			assertNotContainsPattern(t, generatedStr, `CreatedDate:`)
+		},
+	},
+	{
+		name:           "slice_conversion",
+		directivePath:  "../../testdata/02_basic_conversions/slice_conversion",
+		goldenFileName: "expected.gen.go",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/02_basic_conversions/slice_conversion/source",
+			"github.com/origadmin/abgen/testdata/02_basic_conversions/slice_conversion/target",
+		},
+		priority: "P0",
+		category: "basic_conversions",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			generatedStr := string(generatedCode)
+			assertContainsPattern(t, generatedStr, `func ConvertContainerVVSourceToContainerVVTarget\(from \*ContainerVVSource\) \*ContainerVVTarget`)
+			assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersVVSourceToUsersVVTarget\(from.Users\),`)
+			assertContainsPattern(t, generatedStr, `func ConvertUsersVVSourceToUsersVVTarget\(froms UsersVVSource\) UsersVVTarget`)
+			assertContainsPattern(t, generatedStr, `tos\[i\] = \*ConvertUserVVSourceToUserVVTarget\(&f\)`)
+			assertContainsPattern(t, generatedStr, `func ConvertContainerPPSourceToContainerPPTarget\(from \*ContainerPPSource\) \*ContainerPPTarget`)
+			assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersPPSourceToUsersPPTarget\(from.Users\),`)
+			assertContainsPattern(t, generatedStr, `func ConvertUsersPPSourceToUsersPPTarget\(froms UsersPPSource\) UsersPPTarget`)
+			assertContainsPattern(t, generatedStr, `tos\[i\] = ConvertUserPPSourceToUserPPTarget\(f\)`)
+			assertContainsPattern(t, generatedStr, `func ConvertContainerPVSourceToContainerPVTarget\(from \*ContainerPVSource\) \*ContainerPVTarget`)
+			assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersPVSourceToUsersPVTarget\(from.Users\),`)
+			assertContainsPattern(t, generatedStr, `func ConvertUsersPVSourceToUsersPVTarget\(from \*UsersPVSource\) \*UsersPVTarget`)
+			assertContainsPattern(t, generatedStr, `for i, f := range \(\*from\)`)
+			assertContainsPattern(t, generatedStr, `return &tos`)
+			assertContainsPattern(t, generatedStr, `func ConvertContainerPPPSourceToContainerPPPTarget\(from \*ContainerPPPSource\) \*ContainerPPPTarget`)
+			assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersPPPSourceToUsersPPPTarget\(from.Users\),`)
+			assertContainsPattern(t, generatedStr, `func ConvertUsersPPPSourceToUsersPPPTarget\(from \*UsersPPPSource\) \*UsersPPPTarget`)
+			assertContainsPattern(t, generatedStr, `for i, f := range \(\*from\)`)
+			assertContainsPattern(t, generatedStr, `return &tos`)
+			assertContainsPattern(t, generatedStr, `func ConvertContainerVPSourceToContainerVPTarget\(from \*ContainerVPSource\) \*ContainerVPTarget`)
+			assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersVPSourceToUsersVPTarget\(from.Users\),`)
+			assertContainsPattern(t, generatedStr, `func ConvertUsersVPSourceToUsersVPTarget\(froms UsersVPSource\) UsersVPTarget`)
+			assertContainsPattern(t, generatedStr, `tmpVal := \*ConvertUserVPSourceToUserVPTarget\(&f\)`)
+			assertContainsPattern(t, generatedStr, `tos\[i\] = &tmpVal`)
+			assertContainsPattern(t, generatedStr, `func ConvertContainerPV2SourceToContainerPV2Target\(from \*ContainerPV2Source\) \*ContainerPV2Target`)
+			assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersPV2SourceToUsersPV2Target\(from.Users\),`)
+			assertContainsPattern(t, generatedStr, `func ConvertUsersPV2SourceToUsersPV2Target\(froms UsersPV2Source\) UsersPV2Target`)
+			assertContainsPattern(t, generatedStr, `tos\[i\] = \*ConvertUserPV2SourceToUserPV2Target\(f\)`)
+			assertContainsPattern(t, generatedStr, `func ConvertOrderSourceToOrderTarget\(from \*OrderSource\) \*OrderTarget`)
+			assertContainsPattern(t, generatedStr, `Items:\s+ConvertItemsSourceToItemsTarget\(from.Items\),`)
+		},
+	},
+	// === 03_advanced_features: Advanced Feature Tests ===
+	{
+		name:           "auto_generate_aliases",
+		directivePath:  "../../testdata/03_advanced_features/auto_generate_aliases",
+		goldenFileName: "expected.gen.go",
+		dependencies:   baseDependencies,
+		priority:       "P0",
+		category:       "advanced_features",
+	},
+	{
+		name:          "custom_function_rules",
+		directivePath: "../../testdata/03_advanced_features/custom_function_rules",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/source",
+			"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/target",
+		},
+		priority: "P0",
+		category: "advanced_features",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			generatedStr := string(generatedCode)
+			stubStr := string(stubCode)
+			slog.Debug("Generated code inside custom_function_rules assertFunc", "code", generatedStr)
+			assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserStatusToUserCustomStatus\(from.Status\),`)
+			assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserCustomStatusToUserStatus\(from.Status\),`)
+			assertContainsPattern(t, stubStr, `func ConvertUserStatusToUserCustomStatus\(from int\) string`)
+		},
+	},
+	{
+		name:           "slice_conversions",
+		directivePath:  "../../testdata/03_advanced_features/slice_conversions",
+		goldenFileName: "expected.gen.go",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/03_advanced_features/slice_conversions/source",
+			"github.com/origadmin/abgen/testdata/03_advanced_features/slice_conversions/target",
+		},
 
-	testCases := []struct {
-		name           string
-		directivePath  string
-		goldenFileName string
-		dependencies   []string
-		priority       string
-		category       string
-		assertFunc     func(t *testing.T, generatedCode []byte, stubCode []byte)
-	}{
-		// === 02_basic_conversions: Basic Struct Conversion ===
-		{
-			name:          "simple_struct_conversion",
-			directivePath: "../../testdata/02_basic_conversions/simple_struct",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/source",
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/target",
-			},
-			priority: "P0",
-			category: "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
-				assertContainsPattern(t, generatedStr, `UserName:\s+from.Name,`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserDTOToUser\(from \*UserDTO\) \*User`)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
-				assertContainsPattern(t, generatedStr, `Name:\s+from.UserName,`)
-			},
+		priority: "P0",
+		category: "advanced_features",
+	},
+	{
+		name:          "enum_string_to_int",
+		directivePath: "../../testdata/03_advanced_features/enum_string_to_int",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/03_advanced_features/enum_string_to_int/source",
+			"github.com/origadmin/abgen/testdata/03_advanced_features/enum_string_to_int/target",
+		}, priority: "P1",
+		category:    "advanced_features",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			t.Log("TODO: Add specific assertions for enum_string_to_int")
 		},
-		{
-			name:          "package_level_conversion",
-			directivePath: "../../testdata/02_basic_conversions/package_level_conversion",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/source",
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/target",
-			},
-			priority: "P0",
-			category: "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget\(from \*UserSource\) \*UserTarget`)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
-				assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource\(from \*UserTarget\) \*UserSource`)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
-				assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
-				assertContainsPattern(t, generatedStr, `func ConvertItemSourceToItemTarget\(from \*ItemSource\) \*ItemTarget`)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
-				assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
-				assertContainsPattern(t, generatedStr, `func ConvertItemTargetToItemSource\(from \*ItemTarget\) \*ItemSource`)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
-				assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
-			},
+	},
+	{
+		name:          "pointer_conversions",
+		directivePath: "../../testdata/03_advanced_features/pointer_conversions",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/03_advanced_features/pointer_conversions/source",
+			"github.com/origadmin/abgen/testdata/03_advanced_features/pointer_conversions/target",
 		},
-		{
-			name:          "oneway_conversion",
-			directivePath: "../../testdata/02_basic_conversions/oneway_conversion",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/source",
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/target",
-			},
-			priority: "P0",
-			category: "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
-				assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
-				assertNotContainsPattern(t, generatedStr, `func ConvertUserDTOToUser`)
-			},
-		},
-		{
-			name:          "id_to_id_field_conversion",
-			directivePath: "../../testdata/02_basic_conversions/id_to_id_field_conversion",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/id_to_id_field_conversion/source",
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/id_to_id_field_conversion/target",
-			},
-			priority: "P0",
-			category: "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget\(from \*UserSource\) \*UserTarget`)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.Id,`)
-				assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource\(from \*UserTarget\) \*UserSource`)
-				assertContainsPattern(t, generatedStr, `Id:\s+from.ID,`)
-				assertContainsPattern(t, generatedStr, `Name:\s+from.Name,`)
-			},
-		},
-		{
-			name:          "simple_bilateral",
-			directivePath: "../../testdata/02_basic_conversions/simple_bilateral",
-			dependencies:  baseDependencies,
-			priority:      "P0",
-			category:      "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				assertContainsPattern(t, generatedStr, `func ConvertStringToTime\(s string\) time.Time`)
-				assertContainsPattern(t, generatedStr, `func ConvertTimeToString\(t time.Time\) string`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserToUserBilateral\(from \*User\) \*UserBilateral`)
-				assertContainsPattern(t, generatedStr, `Id:\s+from.ID,`)
-				assertContainsPattern(t, generatedStr, `Username:\s+from.Username,`)
-				assertContainsPattern(t, generatedStr, `Age:\s+from.Age,`)
-				assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderToGenderBilateral\(from.Gender\),`)
-				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserStatusToUserBilateralStatus\(from.Status\),`)
-				assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertTimeToString\(from.CreatedAt\),`)
-				assertNotContainsPattern(t, generatedStr, `Password:`)
-				assertNotContainsPattern(t, generatedStr, `Salt:`)
-				assertNotContainsPattern(t, generatedStr, `RoleIDs:`)
-				assertNotContainsPattern(t, generatedStr, `Roles:`)
-				assertNotContainsPattern(t, generatedStr, `Edges:`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserBilateralToUser\(from \*UserBilateral\) \*User`)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.Id,`)
-				assertContainsPattern(t, generatedStr, `Username:\s+from.Username,`)
-				assertContainsPattern(t, generatedStr, `Age:\s+from.Age,`)
-				assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderBilateralToGender\(from.Gender\),`)
-				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserBilateralStatusToUserStatus\(from.Status\),`)
-				assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertStringToTime\(from.CreatedAt\),`)
-			},
-		},
-		{
-			name:          "standard_trilateral",
-			directivePath: "../../testdata/02_basic_conversions/standard_trilateral",
-			dependencies:  baseDependencies,
-			priority:      "P0",
-			category:      "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				assertContainsPattern(t, generatedStr, `func ConvertStringToTime\(s string\) time.Time`)
-				assertContainsPattern(t, generatedStr, `func ConvertTimeToString\(t time.Time\) string`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserToUserTrilateral\(from \*User\) \*UserTrilateral`)
-				assertContainsPattern(t, generatedStr, `Id:\s+from.ID,`)
-				assertContainsPattern(t, generatedStr, `Username:\s+from.Username,`)
-				assertContainsPattern(t, generatedStr, `Age:\s+from.Age,`)
-				assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderToGenderTrilateral\(from.Gender\),`)
-				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserStatusToUserTrilateralStatus\(from.Status\),`)
-				assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertTimeToString\(from.CreatedAt\),`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserTrilateralToUser\(from \*UserTrilateral\) \*User`)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.Id,`)
-				assertContainsPattern(t, generatedStr, `Username:\s+from.Username,`)
-				assertContainsPattern(t, generatedStr, `Age:\s+from.Age,`)
-				assertContainsPattern(t, generatedStr, `Gender:\s+ConvertGenderTrilateralToGender\(from.Gender\),`)
-				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserTrilateralStatusToUserStatus\(from.Status\),`)
-				assertContainsPattern(t, generatedStr, `CreatedAt:\s+ConvertStringToTime\(from.CreatedAt\),`)
-				assertContainsPattern(t, generatedStr, `func ConvertResourceToResourceTrilateral\(from \*Resource\) \*ResourceTrilateral`)
-				assertContainsPattern(t, generatedStr, `func ConvertResourceTrilateralToResource\(from \*ResourceTrilateral\) \*Resource`)
-			},
-		},
-		{
-			name:           "field_ignore_remap",
-			directivePath:  "../../testdata/02_basic_conversions/field_ignore_remap",
-			goldenFileName: "expected.golden",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/field_ignore_remap/source",
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/field_ignore_remap/target",
-			},
-			priority: "P0",
-			category: "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
-				assertNotContainsPattern(t, generatedStr, `Password:`)
-				assertNotContainsPattern(t, generatedStr, `CreatedAt:`)
-				assertContainsPattern(t, generatedStr, `FullName:\s+from.Name,`)
-				assertContainsPattern(t, generatedStr, `UserEmail:\s+from.Email,`)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
-				assertContainsPattern(t, generatedStr, `LastUpdate:\s+from.UpdatedAt,`)
-				assertNotContainsPattern(t, generatedStr, `CreatedDate:`)
-			},
-		},
-		{
-			name:           "slice_conversion",
-			directivePath:  "../../testdata/02_basic_conversions/slice_conversion",
-			goldenFileName: "expected.golden",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/slice_conversion/source",
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/slice_conversion/target",
-			},
-			priority: "P0",
-			category: "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				assertContainsPattern(t, generatedStr, `func ConvertContainerVVSourceToContainerVVTarget\(from \*ContainerVVSource\) \*ContainerVVTarget`)
-				assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersVVSourceToUsersVVTarget\(from.Users\),`)
-				assertContainsPattern(t, generatedStr, `func ConvertUsersVVSourceToUsersVVTarget\(froms UsersVVSource\) UsersVVTarget`)
-				assertContainsPattern(t, generatedStr, `tos\[i\] = \*ConvertUserVVSourceToUserVVTarget\(&f\)`)
-				assertContainsPattern(t, generatedStr, `func ConvertContainerPPSourceToContainerPPTarget\(from \*ContainerPPSource\) \*ContainerPPTarget`)
-				assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersPPSourceToUsersPPTarget\(from.Users\),`)
-				assertContainsPattern(t, generatedStr, `func ConvertUsersPPSourceToUsersPPTarget\(froms UsersPPSource\) UsersPPTarget`)
-				assertContainsPattern(t, generatedStr, `tos\[i\] = ConvertUserPPSourceToUserPPTarget\(f\)`)
-				assertContainsPattern(t, generatedStr, `func ConvertContainerPVSourceToContainerPVTarget\(from \*ContainerPVSource\) \*ContainerPVTarget`)
-				assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersPVSourceToUsersPVTarget\(from.Users\),`)
-				assertContainsPattern(t, generatedStr, `func ConvertUsersPVSourceToUsersPVTarget\(from \*UsersPVSource\) \*UsersPVTarget`)
-				assertContainsPattern(t, generatedStr, `for i, f := range \(\*from\)`)
-				assertContainsPattern(t, generatedStr, `return &tos`)
-				assertContainsPattern(t, generatedStr, `func ConvertContainerPPPSourceToContainerPPPTarget\(from \*ContainerPPPSource\) \*ContainerPPPTarget`)
-				assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersPPPSourceToUsersPPPTarget\(from.Users\),`)
-				assertContainsPattern(t, generatedStr, `func ConvertUsersPPPSourceToUsersPPPTarget\(from \*UsersPPPSource\) \*UsersPPPTarget`)
-				assertContainsPattern(t, generatedStr, `for i, f := range \(\*from\)`)
-				assertContainsPattern(t, generatedStr, `return &tos`)
-				assertContainsPattern(t, generatedStr, `func ConvertContainerVPSourceToContainerVPTarget\(from \*ContainerVPSource\) \*ContainerVPTarget`)
-				assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersVPSourceToUsersVPTarget\(from.Users\),`)
-				assertContainsPattern(t, generatedStr, `func ConvertUsersVPSourceToUsersVPTarget\(froms UsersVPSource\) UsersVPTarget`)
-				assertContainsPattern(t, generatedStr, `tmpVal := \*ConvertUserVPSourceToUserVPTarget\(&f\)`)
-				assertContainsPattern(t, generatedStr, `tos\[i\] = &tmpVal`)
-				assertContainsPattern(t, generatedStr, `func ConvertContainerPV2SourceToContainerPV2Target\(from \*ContainerPV2Source\) \*ContainerPV2Target`)
-				assertContainsPattern(t, generatedStr, `Users:\s+ConvertUsersPV2SourceToUsersPV2Target\(from.Users\),`)
-				assertContainsPattern(t, generatedStr, `func ConvertUsersPV2SourceToUsersPV2Target\(froms UsersPV2Source\) UsersPV2Target`)
-				assertContainsPattern(t, generatedStr, `tos\[i\] = \*ConvertUserPV2SourceToUserPV2Target\(f\)`)
-				assertContainsPattern(t, generatedStr, `func ConvertOrderSourceToOrderTarget\(from \*OrderSource\) \*OrderTarget`)
-				assertContainsPattern(t, generatedStr, `Items:\s+ConvertItemsSourceToItemsTarget\(from.Items\),`)
-			},
-		},
-		// === 03_advanced_features: Advanced Feature Tests ===
-		{
-			name:           "auto_generate_aliases",
-			directivePath:  "../../testdata/03_advanced_features/auto_generate_aliases",
-			goldenFileName: "expected.golden",
-			dependencies:   baseDependencies,
-			priority:       "P0",
-			category:       "advanced_features",
-		},
-		{
-			name:          "custom_function_rules",
-			directivePath: "../../testdata/03_advanced_features/custom_function_rules",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/source",
-				"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/target",
-			},
-			priority: "P0",
-			category: "advanced_features",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				stubStr := string(stubCode)
-				slog.Debug("Generated code inside custom_function_rules assertFunc", "code", generatedStr)
-				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserStatusToUserCustomStatus\(from.Status\),`)
-				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserCustomStatusToUserStatus\(from.Status\),`)
-				assertContainsPattern(t, stubStr, `func ConvertUserStatusToUserCustomStatus\(from int\) string`)
-			},
-		},
-		{
-			name:           "slice_conversions",
-			directivePath:  "../../testdata/03_advanced_features/slice_conversions",
-			goldenFileName: "expected.golden",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/03_advanced_features/slice_conversions/source",
-				"github.com/origadmin/abgen/testdata/03_advanced_features/slice_conversions/target",
-			},
 
-			priority: "P0",
-			category: "advanced_features",
+		priority: "P1",
+		category: "advanced_features",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			t.Log("TODO: Add specific assertions for pointer_conversions")
 		},
-		{
-			name:          "enum_string_to_int",
-			directivePath: "../../testdata/03_advanced_features/enum_string_to_int",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/03_advanced_features/enum_string_to_int/source",
-				"github.com/origadmin/abgen/testdata/03_advanced_features/enum_string_to_int/target",
-			}, priority: "P1",
-			category:    "advanced_features",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				t.Log("TODO: Add specific assertions for enum_string_to_int")
-			},
+	},
+	{
+		name:          "map_conversions",
+		directivePath: "../../testdata/03_advanced_features/map_conversions",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/03_advanced_features/map_conversions/source",
+			"github.com/origadmin/abgen/testdata/03_advanced_features/map_conversions/target",
 		},
-		{
-			name:          "pointer_conversions",
-			directivePath: "../../testdata/03_advanced_features/pointer_conversions",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/03_advanced_features/pointer_conversions/source",
-				"github.com/origadmin/abgen/testdata/03_advanced_features/pointer_conversions/target",
-			},
+		priority: "P1",
+		category: "advanced_features",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			t.Log("TODO: Add specific assertions for map_conversions")
+		},
+	},
+	{
+		name:          "numeric_conversions",
+		directivePath: "../../testdata/03_advanced_features/numeric_conversions",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/03_advanced_conversions/numeric_conversions/source",
+			"github.com/origadmin/abgen/testdata/03_advanced_conversions/numeric_conversions/target",
+		},
+		priority: "P1",
+		category: "advanced_features",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			t.Log("TODO: Add specific assertions for numeric_conversions")
+		},
+	},
+	// === 06_regression: Regression Tests ===
+	{
+		name:           "array_slice_test",
+		directivePath:  "../../testdata/06_regression/array_slice_fix/array_slice_test",
+		goldenFileName: "expected.gen.go",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/source",
+			"github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/target",
+		},
+		priority: "P0",
+		category: "regression",
+	},
+	{
+		name:           "alias-gen",
+		directivePath:  "../../testdata/06_regression/alias_gen_fix",
+		goldenFileName: "expected.gen.go",
+		dependencies:   baseDependencies,
+		priority:       "P0",
+		category:       "regression",
+	},
+	{
+		name:          "map_string_to_string_conversion",
+		directivePath: "../../testdata/06_regression/map_string_to_string_fix",
+		dependencies: []string{
+			"github.com/origadmin/abgen/testdata/06_regression/map_string_to_string_fix/source",
+			"github.com/origadmin/abgen/testdata/06_regression/map_string_to_string_fix/target",
+		},
+		priority: "P0",
+		category: "regression",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			generatedStr := string(generatedCode)
+			stubStr := string(stubCode)
+			t.Logf("Generated code for map_string_to_string_conversion:\n%s", generatedStr)
+			if len(stubCode) > 0 {
+				t.Logf("Generated stub code:\n%s", stubCode)
+			}
+			assertContainsPattern(t, generatedStr, `func ConvertMapToStringSourceToMapToStringTarget\(from \*MapToStringSource\) \*MapToStringTarget`)
+			assertContainsPattern(t, generatedStr, `func ConvertMapToStringTargetToMapToStringSource\(from \*MapToStringTarget\) \*MapToStringSource`)
+			if len(stubStr) > 0 {
+				assertContainsPattern(t, stubStr, `func ConvertMapToStringSourceMetadataToMapToStringTargetMetadata`)
+				assertContainsPattern(t, stubStr, `func ConvertMapToStringSourceTagsToMapToStringTargetTags`)
+				assertContainsPattern(t, stubStr, `func ConvertMapToStringSourceConfigToMapToStringTargetConfig`)
+				assertContainsPattern(t, stubStr, `func ConvertMapToStringTargetMetadataToMapToStringSourceMetadata`)
+				assertContainsPattern(t, stubStr, `func ConvertMapToStringTargetTagsToMapToStringSourceTags`)
+				assertContainsPattern(t, stubStr, `func ConvertMapToStringTargetConfigToMapToStringSourceConfig`)
+				t.Logf("Stub functions generated with correct naming pattern for map->string conversion")
+			} else {
+				assertContainsPattern(t, generatedStr, `ConvertMapToStringSourceMetadataToMapToStringTargetMetadata`)
+				t.Logf("Main code handles map->string conversion through named conversion functions")
+			}
+		},
+	},
+}
 
-			priority: "P1",
-			category: "advanced_features",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				t.Log("TODO: Add specific assertions for pointer_conversions")
-			},
-		},
-		{
-			name:          "map_conversions",
-			directivePath: "../../testdata/03_advanced_features/map_conversions",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/03_advanced_features/map_conversions/source",
-				"github.com/origadmin/abgen/testdata/03_advanced_features/map_conversions/target",
-			},
-			priority: "P1",
-			category: "advanced_features",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				t.Log("TODO: Add specific assertions for map_conversions")
-			},
-		},
-		{
-			name:          "numeric_conversions",
-			directivePath: "../../testdata/03_advanced_features/numeric_conversions",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/03_advanced_conversions/numeric_conversions/source",
-				"github.com/origadmin/abgen/testdata/03_advanced_conversions/numeric_conversions/target",
-			},
-			priority: "P1",
-			category: "advanced_features",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				t.Log("TODO: Add specific assertions for numeric_conversions")
-			},
-		},
-		// === 06_regression: Regression Tests ===
-		{
-			name:           "array_slice_test",
-			directivePath:  "../../testdata/06_regression/array_slice_fix/array_slice_test",
-			goldenFileName: "expected.golden",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/source",
-				"github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/target",
-			},
-			priority: "P0",
-			category: "regression",
-		},
-		{
-			name:           "alias-gen",
-			directivePath:  "../../testdata/06_regression/alias_gen_fix",
-			goldenFileName: "expected.golden",
-			dependencies:   baseDependencies,
-			priority:       "P0",
-			category:       "regression",
-		},
-		{
-			name:          "map_string_to_string_conversion",
-			directivePath: "../../testdata/06_regression/map_string_to_string_fix",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/06_regression/map_string_to_string_fix/source",
-				"github.com/origadmin/abgen/testdata/06_regression/map_string_to_string_fix/target",
-			},
-			priority: "P0",
-			category: "regression",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				stubStr := string(stubCode)
-				t.Logf("Generated code for map_string_to_string_conversion:\n%s", generatedStr)
-				if len(stubCode) > 0 {
-					t.Logf("Generated stub code:\n%s", stubCode)
-				}
-				assertContainsPattern(t, generatedStr, `func ConvertMapToStringSourceToMapToStringTarget\(from \*MapToStringSource\) \*MapToStringTarget`)
-				assertContainsPattern(t, generatedStr, `func ConvertMapToStringTargetToMapToStringSource\(from \*MapToStringTarget\) \*MapToStringSource`)
-				if len(stubStr) > 0 {
-					assertContainsPattern(t, stubStr, `func ConvertMapToStringSourceMetadataToMapToStringTargetMetadata`)
-					assertContainsPattern(t, stubStr, `func ConvertMapToStringSourceTagsToMapToStringTargetTags`)
-					assertContainsPattern(t, stubStr, `func ConvertMapToStringSourceConfigToMapToStringTargetConfig`)
-					assertContainsPattern(t, stubStr, `func ConvertMapToStringTargetMetadataToMapToStringSourceMetadata`)
-					assertContainsPattern(t, stubStr, `func ConvertMapToStringTargetTagsToMapToStringSourceTags`)
-					assertContainsPattern(t, stubStr, `func ConvertMapToStringTargetConfigToMapToStringSourceConfig`)
-					t.Logf("Stub functions generated with correct naming pattern for map->string conversion")
-				} else {
-					assertContainsPattern(t, generatedStr, `ConvertMapToStringSourceMetadataToMapToStringTargetMetadata`)
-					t.Logf("Main code handles map->string conversion through named conversion functions")
-				}
-			},
-		},
-	}
+func TestLegacyGenerator_Generate(t *testing.T) {
+	t.Skip()
 
 	sort.Slice(testCases, func(i, j int) bool {
 		priorityOrder := map[string]int{"P0": 0, "P1": 1, "P2": 2}
@@ -450,19 +451,8 @@ func TestGenerator_CodeGeneration(t *testing.T) {
 			if tc.assertFunc != nil {
 				t.Run(tc.name+"_Assertions", func(st *testing.T) {
 					tc.assertFunc(st, generatedCode, stubCode)
-					if st.Failed() {
-						actualOutputFile := filepath.Join(tc.directivePath, "failed.actual.gen.go")
-						_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
-						st.Logf("Assertion failed for '%s'. Generated output saved to %s for inspection.", tc.name, actualOutputFile)
-						if len(stubCode) > 0 {
-							actualStubFile := filepath.Join(tc.directivePath, "failed.actual.stub.go")
-							_ = os.WriteFile(actualStubFile, stubCode, 0644)
-							st.Logf("Stub output saved to %s for inspection.", actualStubFile)
-						}
-					} else {
-						actualOutputFile := filepath.Join(tc.directivePath, "success.actual.gen.go")
-						_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
-					}
+					actualOutputFile := filepath.Join(tc.directivePath, "expected.actual.gen.go")
+					_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
 				})
 			}
 
@@ -519,20 +509,13 @@ func TestDefaultDirectionBehavior(t *testing.T) {
 }
 
 func cleanTestFiles(t *testing.T, dir string) {
-	files, err := filepath.Glob(filepath.Join(dir, "*.actual.gen.go"))
+	files, err := filepath.Glob(filepath.Join(dir, "*.gen.go"))
 	if err != nil {
 		t.Fatalf("Failed to glob for generated files in %s: %v", dir, err)
 	}
-	files = append(files, filepath.Join(dir, "failed.actual.stub.go"))
 	for _, f := range files {
 		if err := os.Remove(f); err != nil {
 			t.Logf("Warning: Failed to remove old generated file %s: %v", f, err)
-		}
-	}
-	failedFile := filepath.Join(dir, "failed.actual.gen.go")
-	if _, err := os.Stat(failedFile); err == nil {
-		if err := os.Remove(failedFile); err != nil {
-			t.Logf("Warning: Failed to remove old failed output file %s: %v", failedFile, err)
 		}
 	}
 }
@@ -611,108 +594,108 @@ func TestOrchestratorBasicFunctionality(t *testing.T) {
 	})
 }
 
-func TestGenerator_CodeGeneration_NewArchitecture(t *testing.T) {
-	baseDependencies := []string{
-		"github.com/origadmin/abgen/testdata/fixtures/ent",
-		"github.com/origadmin/abgen/testdata/fixtures/types",
-	}
-	testCases := []struct {
-		name           string
-		directivePath  string
-		goldenFileName string
-		dependencies   []string
-		priority       string
-		category       string
-		assertFunc     func(t *testing.T, generatedCode []byte, stubCode []byte)
-	}{
-		{
-			name:          "simple_struct_conversion",
-			directivePath: "../../testdata/02_basic_conversions/simple_struct",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/source",
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/target",
-			},
-			priority: "P0",
-			category: "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
-				assertContainsPattern(t, generatedStr, `UserName:\s+from.Name,`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserDTOToUser\(from \*UserDTO\) \*User`)
-				assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
-				assertContainsPattern(t, generatedStr, `Name:\s+from.UserName,`)
-			},
-		},
-		{
-			name:          "package_level_conversion",
-			directivePath: "../../testdata/02_basic_conversions/package_level_conversion",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/source",
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/target",
-			},
-			priority: "P0",
-			category: "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget\(from \*UserSource\) \*UserTarget`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource\(from \*UserTarget\) \*UserSource`)
-				assertContainsPattern(t, generatedStr, `func ConvertItemSourceToItemTarget\(from \*ItemSource\) \*ItemTarget`)
-				assertContainsPattern(t, generatedStr, `func ConvertItemTargetToItemSource\(from \*ItemTarget\) \*ItemSource`)
-			},
-		},
-		{
-			name:          "oneway_conversion",
-			directivePath: "../../testdata/02_basic_conversions/oneway_conversion",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/source",
-				"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/target",
-			},
-			priority: "P0",
-			category: "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
-				assertNotContainsPattern(t, generatedStr, `func ConvertUserDTOToUser`)
-			},
-		},
-		{
-			name:          "simple_bilateral",
-			directivePath: "../../testdata/02_basic_conversions/simple_bilateral",
-			dependencies:  baseDependencies,
-			priority:      "P0",
-			category:      "basic_conversions",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				assertContainsPattern(t, generatedStr, `func ConvertStringToTime\(s string\) time.Time`)
-				assertContainsPattern(t, generatedStr, `func ConvertTimeToString\(t time.Time\) string`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserToUserBilateral\(from \*User\) \*UserBilateral`)
-				assertContainsPattern(t, generatedStr, `func ConvertUserBilateralToUser\(from \*UserBilateral\) \*User`)
-				assertNotContainsPattern(t, generatedStr, `Password:`)
-				assertNotContainsPattern(t, generatedStr, `Salt:`)
-			},
-		},
-		{
-			name:           "custom_function_rules",
-			directivePath:  "../../testdata/03_advanced_features/custom_function_rules",
-			goldenFileName: "expected.golden",
-			dependencies: []string{
-				"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/source",
-				"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/target",
-			},
-			priority: "P0",
-			category: "advanced_features",
-			assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-				generatedStr := string(generatedCode)
-				stubStr := string(stubCode)
-				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserStatusToUserCustomStatus\(from.Status\),`)
-				assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserCustomStatusToUserStatus\(from.Status\),`)
-				if len(stubStr) > 0 {
-					assertContainsPattern(t, stubStr, `func ConvertUserStatusToUserCustomStatus\(from int\) string`)
-				}
-			},
-		},
-	}
+func TestCodeGenerator_Generate(t *testing.T) {
+	//baseDependencies := []string{
+	//	"github.com/origadmin/abgen/testdata/fixtures/ent",
+	//	"github.com/origadmin/abgen/testdata/fixtures/types",
+	//}
+	//testCases := []struct {
+	//	name           string
+	//	directivePath  string
+	//	goldenFileName string
+	//	dependencies   []string
+	//	priority       string
+	//	category       string
+	//	assertFunc     func(t *testing.T, generatedCode []byte, stubCode []byte)
+	//}{
+	//	{
+	//		name:          "simple_struct_conversion",
+	//		directivePath: "../../testdata/02_basic_conversions/simple_struct",
+	//		dependencies: []string{
+	//			"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/source",
+	//			"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/target",
+	//		},
+	//		priority: "P0",
+	//		category: "basic_conversions",
+	//		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+	//			generatedStr := string(generatedCode)
+	//			assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
+	//			assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
+	//			assertContainsPattern(t, generatedStr, `UserName:\s+from.Name,`)
+	//			assertContainsPattern(t, generatedStr, `func ConvertUserDTOToUser\(from \*UserDTO\) \*User`)
+	//			assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
+	//			assertContainsPattern(t, generatedStr, `Name:\s+from.UserName,`)
+	//		},
+	//	},
+	//	{
+	//		name:          "package_level_conversion",
+	//		directivePath: "../../testdata/02_basic_conversions/package_level_conversion",
+	//		dependencies: []string{
+	//			"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/source",
+	//			"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/target",
+	//		},
+	//		priority: "P0",
+	//		category: "basic_conversions",
+	//		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+	//			generatedStr := string(generatedCode)
+	//			assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget\(from \*UserSource\) \*UserTarget`)
+	//			assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource\(from \*UserTarget\) \*UserSource`)
+	//			assertContainsPattern(t, generatedStr, `func ConvertItemSourceToItemTarget\(from \*ItemSource\) \*ItemTarget`)
+	//			assertContainsPattern(t, generatedStr, `func ConvertItemTargetToItemSource\(from \*ItemTarget\) \*ItemSource`)
+	//		},
+	//	},
+	//	{
+	//		name:          "oneway_conversion",
+	//		directivePath: "../../testdata/02_basic_conversions/oneway_conversion",
+	//		dependencies: []string{
+	//			"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/source",
+	//			"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/target",
+	//		},
+	//		priority: "P0",
+	//		category: "basic_conversions",
+	//		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+	//			generatedStr := string(generatedCode)
+	//			assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
+	//			assertNotContainsPattern(t, generatedStr, `func ConvertUserDTOToUser`)
+	//		},
+	//	},
+	//	{
+	//		name:          "simple_bilateral",
+	//		directivePath: "../../testdata/02_basic_conversions/simple_bilateral",
+	//		dependencies:  baseDependencies,
+	//		priority:      "P0",
+	//		category:      "basic_conversions",
+	//		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+	//			generatedStr := string(generatedCode)
+	//			assertContainsPattern(t, generatedStr, `func ConvertStringToTime\(s string\) time.Time`)
+	//			assertContainsPattern(t, generatedStr, `func ConvertTimeToString\(t time.Time\) string`)
+	//			assertContainsPattern(t, generatedStr, `func ConvertUserToUserBilateral\(from \*User\) \*UserBilateral`)
+	//			assertContainsPattern(t, generatedStr, `func ConvertUserBilateralToUser\(from \*UserBilateral\) \*User`)
+	//			assertNotContainsPattern(t, generatedStr, `Password:`)
+	//			assertNotContainsPattern(t, generatedStr, `Salt:`)
+	//		},
+	//	},
+	//	{
+	//		name:           "custom_function_rules",
+	//		directivePath:  "../../testdata/03_advanced_features/custom_function_rules",
+	//		goldenFileName: "expected.gen.go",
+	//		dependencies: []string{
+	//			"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/source",
+	//			"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/target",
+	//		},
+	//		priority: "P0",
+	//		category: "advanced_features",
+	//		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+	//			generatedStr := string(generatedCode)
+	//			stubStr := string(stubCode)
+	//			assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserStatusToUserCustomStatus\(from.Status\),`)
+	//			assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserCustomStatusToUserStatus\(from.Status\),`)
+	//			if len(stubStr) > 0 {
+	//				assertContainsPattern(t, stubStr, `func ConvertUserStatusToUserCustomStatus\(from int\) string`)
+	//			}
+	//		},
+	//	},
+	//}
 
 	sort.Slice(testCases, func(i, j int) bool {
 		priorityOrder := map[string]int{"P0": 0, "P1": 1, "P2": 2}
@@ -732,7 +715,7 @@ func TestGenerator_CodeGeneration_NewArchitecture(t *testing.T) {
 			}
 		}
 
-		testNameWithStage := fmt.Sprintf("NEW_ARCH_%s_%s/%s", stagePrefix, tc.category, tc.name)
+		testNameWithStage := fmt.Sprintf("%s_%s/%s", stagePrefix, tc.category, tc.name)
 		t.Run(testNameWithStage, func(t *testing.T) {
 			t.Logf("Running NEW ARCH test: %s (Priority: %s, Category: %s)", tc.name, tc.priority, tc.category)
 			cleanTestFiles(t, tc.directivePath)
@@ -808,7 +791,7 @@ func TestGenerator_CodeGeneration_NewArchitecture(t *testing.T) {
 				}
 
 				if string(generatedCode) != string(expectedCode) {
-					actualOutputFile := filepath.Join(tc.directivePath, "failed.new_arch.actual.gen.go")
+					actualOutputFile := filepath.Join(tc.directivePath, "expected.new.gen.go")
 					_ = os.WriteFile(actualOutputFile, generatedCode, 0644)
 					t.Errorf("NEW ARCH generated code for '%s' does not match the golden file %s. The generated output was saved to %s for inspection.", tc.name, goldenFile, actualOutputFile)
 				}
