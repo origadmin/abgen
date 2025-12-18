@@ -13,8 +13,8 @@ type Config struct {
 	PackagePairs        []*PackagePair
 	ConversionRules     []*ConversionRule
 	CustomFunctionRules map[string]string
-	NamingRules         NamingRules // Corrected: Renamed from NamingRule
-	GlobalBehaviorRules BehaviorRule
+	NamingRules         NamingRules
+	GlobalBehaviorRules BehaviorRules
 }
 
 // GenerationContext holds information about the package where code is being generated.
@@ -42,7 +42,6 @@ type ConversionRule struct {
 }
 
 // NamingRules defines naming conventions for generated types and functions.
-// Corrected: Renamed from NamingRule to NamingRules
 type NamingRules struct {
 	SourcePrefix string
 	SourceSuffix string
@@ -50,8 +49,8 @@ type NamingRules struct {
 	TargetSuffix string
 }
 
-// BehaviorRule defines conversion behaviors.
-type BehaviorRule struct {
+// BehaviorRules defines conversion behaviors.
+type BehaviorRules struct {
 	GenerateAlias bool
 }
 
@@ -79,8 +78,8 @@ func NewConfig() *Config {
 		PackagePairs:        []*PackagePair{},
 		ConversionRules:     []*ConversionRule{},
 		CustomFunctionRules: make(map[string]string),
-		NamingRules:         NamingRules{}, // Corrected: Use the new type name
-		GlobalBehaviorRules: BehaviorRule{},
+		NamingRules:         NamingRules{},
+		GlobalBehaviorRules: BehaviorRules{},
 	}
 }
 
@@ -125,8 +124,8 @@ func (c *Config) RequiredPackages() []string {
 	return paths
 }
 
-// RequiredTypeFQNs gathers all unique fully-qualified type names (FQNs).
-func (c *Config) RequiredTypeFQNs() []string {
+// AllFqns gathers all unique fully-qualified type names (FQNs).
+func (c *Config) AllFqns() []string {
 	fqnMap := make(map[string]struct{})
 
 	for _, rule := range c.ConversionRules {

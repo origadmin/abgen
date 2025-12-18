@@ -2,13 +2,16 @@ package components
 
 import (
 	"log/slog"
+	"sort"
 
 	"github.com/origadmin/abgen/internal/config"
 	"github.com/origadmin/abgen/internal/model"
 )
 
-// ConcreteAliasManager 实现 AliasManager 接口
-type ConcreteAliasManager struct {
+var _ model.AliasManager = (*AliasManager)(nil)
+
+// AliasManager implements the AliasManager interface.
+type AliasManager struct {
 	config           *config.Config
 	nameGenerator    model.NameGenerator
 	aliasMap         map[string]string
@@ -16,13 +19,13 @@ type ConcreteAliasManager struct {
 	typeInfos        map[string]*model.TypeInfo
 }
 
-// NewAliasManager 创建新的别名管理器
+// NewAliasManager creates a new alias manager.
 func NewAliasManager(
 	config *config.Config,
 	nameGenerator model.NameGenerator,
 	typeInfos map[string]*model.TypeInfo,
 ) model.AliasManager {
-	return &ConcreteAliasManager{
+	return &AliasManager{
 		config:          config,
 		nameGenerator:   nameGenerator,
 		aliasMap:        make(map[string]string),
@@ -31,23 +34,23 @@ func NewAliasManager(
 	}
 }
 
-// EnsureTypeAlias 确保指定类型有别名，如果没有则创建
-func (am *ConcreteAliasManager) EnsureTypeAlias(typeInfo *model.TypeInfo, isSource bool) {
+// EnsureTypeAlias ensures that the specified type has an alias, creating one if it doesn't exist.
+func (am *AliasManager) EnsureTypeAlias(typeInfo *model.TypeInfo, isSource bool) {
 	if typeInfo == nil {
 		return
 	}
 
 	uniqueKey := typeInfo.UniqueKey()
 
-	// 如果别名已存在，直接返回
+	// If the alias already exists, return immediately.
 	if _, exists := am.aliasMap[uniqueKey]; exists {
 		return
 	}
 
-	// 创建新别名
+	// Create a new alias.
 	alias := am.nameGenerator.GetAlias(typeInfo, isSource)
 
-	// 立即存储到映射中
+	// Store it in the map immediately.
 	am.aliasMap[uniqueKey] = alias
 	am.requiredAliases[uniqueKey] = struct{}{}
 
@@ -57,12 +60,12 @@ func (am *ConcreteAliasManager) EnsureTypeAlias(typeInfo *model.TypeInfo, isSour
 		"alias", alias,
 		"isSource", isSource)
 
-	// 递归处理复合类型的元素类型
+	// Recursively handle element types of composite types.
 	am.ensureElementTypeAlias(typeInfo, isSource)
 }
 
-// ensureElementTypeAlias 递归确保元素类型的别名
-func (am *ConcreteAliasManager) ensureElementTypeAlias(typeInfo *model.TypeInfo, isSource bool) {
+// ensureElementTypeAlias recursively ensures aliases for element types.
+func (am *AliasManager) ensureElementTypeAlias(typeInfo *model.TypeInfo, isSource bool) {
 	switch typeInfo.Kind {
 	case model.Slice, model.Array, model.Pointer:
 		if typeInfo.Underlying != nil {
@@ -76,25 +79,25 @@ func (am *ConcreteAliasManager) ensureElementTypeAlias(typeInfo *model.TypeInfo,
 			am.EnsureTypeAlias(typeInfo.Underlying, isSource)
 		}
 	case model.Struct:
-		// 为命名的结构体字段类型递归创建别名
+		// Recursively create aliases for named struct field types.
 		for _, field := range typeInfo.Fields {
 			am.EnsureTypeAlias(field.Type, isSource)
 		}
 	}
 }
 
-// GetAliasMap 返回别名映射
-func (am *ConcreteAliasManager) GetAliasMap() map[string]string {
+// GetAliasMap returns the alias map.
+func (am *AliasManager) GetAliasMap() map[string]string {
 	return am.aliasMap
 }
 
-// GetRequiredAliases 返回需要的别名集合
-func (am *ConcreteAliasManager) GetRequiredAliases() map[string]struct{} {
+// GetRequiredAliases returns the set of required aliases.
+func (am *AliasManager) GetRequiredAliases() map[string]struct{} {
 	return am.requiredAliases
 }
 
-// PopulateAliases 填充所有转换规则的别名
-func (am *ConcreteAliasManager) PopulateAliases() {
+// PopulateAliases populates aliases for all conversion rules.
+func (am *AliasManager) PopulateAliases() {
 	for _, rule := range am.config.ConversionRules {
 		sourceInfo := am.typeInfos[rule.SourceType]
 		targetInfo := am.typeInfos[rule.TargetType]
@@ -102,8 +105,50 @@ func (am *ConcreteAliasManager) PopulateAliases() {
 			continue
 		}
 
-		// 确保基础类型有别名
+		// Ensure base types have aliases.
 		am.EnsureTypeAlias(sourceInfo, true)
 		am.EnsureTypeAlias(targetInfo, false)
 	}
+}
+
+// GetAliasesToRender prepares and returns a sorted list of aliases that need to be rendered in the generated code.
+func (am *AliasManager) GetAliasesToRender() []*model.AliasRenderInfo {
+	type aliasPair struct {
+		aliasName, fqn string
+	}
+	aliasesToWrite := make([]aliasPair, 0)
+
+	for fqn, alias := range am.aliasMap {
+		// Only consider aliases that are actually required.
+		if _, ok := am.requiredAliases[fqn]; !ok {
+			continue
+		}
+		// Skip aliases that are already defined in the config.
+		if _, exists := am.config.ExistingAliases[alias]; exists {
+			continue
+		}
+		// Skip aliases for types that were not resolved.
+		if am.typeInfos[fqn] == nil {
+			continue
+		}
+		aliasesToWrite = append(aliasesToWrite, aliasPair{alias, fqn})
+	}
+
+	// Sort for consistent output.
+	sort.Slice(aliasesToWrite, func(i, j int) bool {
+		return aliasesToWrite[i].aliasName < aliasesToWrite[j].aliasName
+	})
+
+	// Convert to the render info struct.
+	renderInfos := make([]*model.AliasRenderInfo, 0, len(aliasesToWrite))
+	for _, item := range aliasesToWrite {
+		typeInfo := am.typeInfos[item.fqn]
+		originalTypeName := am.nameGenerator.GetTypeString(typeInfo)
+		renderInfos = append(renderInfos, &model.AliasRenderInfo{
+			AliasName:        item.aliasName,
+			OriginalTypeName: originalTypeName,
+		})
+	}
+
+	return renderInfos
 }

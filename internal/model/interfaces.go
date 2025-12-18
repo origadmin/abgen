@@ -12,12 +12,6 @@ type Analyzer interface {
 	Analyze(cfg *config.Config) (map[string]*TypeInfo, error)
 }
 
-// Generator defines the contract for the code generation phase.
-// It takes the analysis results and generates the output source code.
-type Generator interface {
-	Generate(analysisResult map[string]*TypeInfo) ([]byte, error)
-}
-
 // Parser defines the contract for the configuration parsing phase.
 // It discovers and parses directives from a given package.
 type Parser interface {

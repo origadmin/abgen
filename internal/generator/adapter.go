@@ -17,7 +17,7 @@ type LegacyGeneratorAdapter struct {
 // NewLegacyGeneratorAdapter 创建旧的生成器适配器
 func NewLegacyGeneratorAdapter(config *config.Config, typeInfos map[string]*model.TypeInfo) *LegacyGeneratorAdapter {
 	return &LegacyGeneratorAdapter{
-		orchestrator: NewOrchestrator(config, typeInfos),
+		orchestrator: NewCodeGenerator(config, typeInfos),
 		config:       config,
 	}
 }
@@ -87,16 +87,13 @@ func (f *ComponentFactory) CreateCodeEmitter(
 	config *config.Config,
 	importManager model.ImportManager,
 	aliasManager model.AliasManager,
-	nameGenerator model.NameGenerator,
-	conversionEngine model.ConversionEngine,
-	typeInfos map[string]*model.TypeInfo,
 ) model.CodeEmitter {
-	return components.NewCodeEmitter(config, importManager, aliasManager, nameGenerator, conversionEngine, typeInfos)
+	return components.NewCodeEmitter(config, importManager, aliasManager)
 }
 
-// CreateOrchestrator 创建协调器组件
-func (f *ComponentFactory) CreateOrchestrator(config *config.Config, typeInfos map[string]*model.TypeInfo) model.CodeGenerator {
-	return NewOrchestrator(config, typeInfos)
+// CreateCodeGenerator 创建协调器组件
+func (f *ComponentFactory) CreateCodeGenerator(config *config.Config, typeInfos map[string]*model.TypeInfo) model.CodeGenerator {
+	return NewCodeGenerator(config, typeInfos)
 }
 
 // MigrationHelper 迁移助手，帮助从旧架构迁移到新架构
@@ -108,14 +105,14 @@ func NewMigrationHelper() *MigrationHelper {
 }
 
 // MigrateOldGenerator 迁移旧的生成器到新架构
-func (m *MigrationHelper) MigrateOldGenerator(oldGen *Generator) model.CodeGenerator {
+func (m *MigrationHelper) MigrateOldGenerator(oldGen *LegacyGenerator) model.CodeGenerator {
 	if oldGen == nil {
 		return nil
 	}
 
 	// 创建新的组件
 	factory := NewComponentFactory()
-	
+
 	// 创建别名映射
 	aliasMap := make(map[string]string)
 	for k, v := range oldGen.aliasMap {
@@ -123,7 +120,7 @@ func (m *MigrationHelper) MigrateOldGenerator(oldGen *Generator) model.CodeGener
 	}
 
 	// 创建协调器
-	orchestrator := factory.CreateOrchestrator(oldGen.config, oldGen.typeInfos)
+	orchestrator := factory.CreateCodeGenerator(oldGen.config, oldGen.typeInfos)
 
 	// 记录迁移信息
 	fmt.Printf("Migrated old Generator to new orchestrator-based architecture\n")
@@ -132,15 +129,15 @@ func (m *MigrationHelper) MigrateOldGenerator(oldGen *Generator) model.CodeGener
 }
 
 // ValidateMigration 验证迁移是否成功
-func (m *MigrationHelper) ValidateMigration(oldGen *Generator, newGen model.CodeGenerator) error {
+func (m *MigrationHelper) ValidateMigration(oldGen *LegacyGenerator, newGen model.CodeGenerator) error {
 	if oldGen == nil && newGen == nil {
 		return fmt.Errorf("both generators are nil")
 	}
-	
+
 	if oldGen == nil && newGen != nil {
 		return nil // 这是有效的，创建了新的生成器
 	}
-	
+
 	if newGen == nil {
 		return fmt.Errorf("new generator is nil")
 	}

@@ -37,7 +37,9 @@ func (a *TypeAnalyzer) Find(fqn string) (*model.TypeInfo, error) {
 }
 
 // Analyze is the main entry point for the analysis phase.
-func (a *TypeAnalyzer) Analyze(packagePaths []string, fqns []string) (map[string]*model.TypeInfo, error) {
+func (a *TypeAnalyzer) Analyze(cfg *config.Config) (map[string]*model.TypeInfo, error) {
+	packagePaths := a.collectSeedPaths(cfg)
+	fqns := cfg.AllFqns()
 	slog.Debug("Starting analysis", "package_paths_count", len(packagePaths), "fqns_count", len(fqns), "packagePaths", packagePaths, "fqns", fqns)
 
 	loadCfg := &packages.Config{

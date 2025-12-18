@@ -6,44 +6,44 @@ import (
 	"github.com/origadmin/abgen/internal/config"
 )
 
-// GenerationContext 包含代码生成所需的所有上下文信息
+// GenerationContext contains all the context information needed for code generation.
 type GenerationContext struct {
 	Config           *config.Config
 	TypeInfos        map[string]*TypeInfo
 	InvolvedPackages map[string]struct{}
 }
 
-// GenerationRequest 表示代码生成请求
+// GenerationRequest represents a code generation request.
 type GenerationRequest struct {
 	Context *GenerationContext
 }
 
-// GenerationResponse 表示代码生成响应
+// GenerationResponse represents a code generation response.
 type GenerationResponse struct {
 	GeneratedCode    []byte
 	CustomStubs      []byte
 	RequiredPackages []string
 }
 
-// TypeResolver 定义类型解析接口
+// CodeGenerator defines the interface for the main code generator.
+type CodeGenerator interface {
+	Generate(request *GenerationRequest) (*GenerationResponse, error)
+}
+
+// TypeResolver defines the interface for type resolution.
 type TypeResolver interface {
 	ResolveType(fqn string) (*TypeInfo, error)
 	ResolveAll(packagePaths []string, fqns []string) (map[string]*TypeInfo, error)
 }
 
-// CodeGenerator 定义代码生成接口
-type CodeGenerator interface {
-	Generate(request *GenerationRequest) (*GenerationResponse, error)
-}
-
-// ImportManager 定义导入管理接口
+// ImportManager defines the interface for import management.
 type ImportManager interface {
 	Add(importPath string) string
 	GetAlias(importPath string) string
 	GetAllImports() []string
 }
 
-// TypeConverter 定义类型转换接口
+// TypeConverter defines the interface for type conversion.
 type TypeConverter interface {
 	IsPointer(info *TypeInfo) bool
 	GetElementType(info *TypeInfo) *TypeInfo
@@ -56,7 +56,7 @@ type TypeConverter interface {
 	IsUltimatelyPrimitive(info *TypeInfo) bool
 }
 
-// NameGenerator 定义命名生成接口
+// NameGenerator defines the interface for name generation.
 type NameGenerator interface {
 	GetFunctionName(source, target *TypeInfo) string
 	GetPrimitiveConversionStubName(parentSource *TypeInfo, sourceField *FieldInfo,
@@ -67,26 +67,40 @@ type NameGenerator interface {
 	PopulateSourcePkgs(config *config.Config)
 }
 
-// AliasManager 定义别名管理接口
+// AliasRenderInfo holds the necessary information for rendering a type alias.
+type AliasRenderInfo struct {
+	AliasName        string
+	OriginalTypeName string
+}
+
+// AliasManager defines the interface for alias management.
 type AliasManager interface {
 	EnsureTypeAlias(typeInfo *TypeInfo, isSource bool)
 	GetAliasMap() map[string]string
 	GetRequiredAliases() map[string]struct{}
+	PopulateAliases()
+	GetAliasesToRender() []*AliasRenderInfo
 }
 
-// ConversionEngine 定义转换引擎接口
+// GeneratedCode holds the generated code from the conversion engine.
+type GeneratedCode struct {
+	FunctionBody    string
+	RequiredHelpers []string
+}
+
+// ConversionEngine defines the interface for the conversion engine.
 type ConversionEngine interface {
-	GenerateConversionFunction(sourceInfo, targetInfo *TypeInfo, rule *config.ConversionRule) error
-	GenerateSliceConversion(sourceInfo, targetInfo *TypeInfo) error
+	GenerateConversionFunction(sourceInfo, targetInfo *TypeInfo, rule *config.ConversionRule) (*GeneratedCode, error)
+	GenerateSliceConversion(sourceInfo, targetInfo *TypeInfo) (*GeneratedCode, error)
 	GetConversionExpression(parentSource *TypeInfo, sourceField *FieldInfo,
-		parentTarget *TypeInfo, targetField *FieldInfo, fromVar string) (string, bool, bool)
+		parentTarget *TypeInfo, targetField *FieldInfo, fromVar string) (string, bool, bool, []string)
 }
 
-// CodeEmitter 定义代码输出接口
+// CodeEmitter defines the interface for the code emitter.
 type CodeEmitter interface {
 	EmitHeader(buf *bytes.Buffer) error
 	EmitImports(buf *bytes.Buffer, imports []string) error
 	EmitAliases(buf *bytes.Buffer) error
-	EmitConversions(buf *bytes.Buffer) error
-	EmitHelpers(buf *bytes.Buffer) error
+	EmitConversions(buf *bytes.Buffer, conversions []string) error
+	EmitHelpers(buf *bytes.Buffer, requiredHelpers map[string]struct{}) error
 }

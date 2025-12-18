@@ -12,8 +12,8 @@ import (
 	"github.com/origadmin/abgen/internal/model"
 )
 
-// Orchestrator 协调所有生成器组件的主生成器
-type Orchestrator struct {
+// LegacyCodeGenerator 协调所有生成器组件的主生成器
+type LegacyCodeGenerator struct {
 	config           *config.Config
 	importManager    model.ImportManager
 	nameGenerator    model.NameGenerator
@@ -23,8 +23,8 @@ type Orchestrator struct {
 	typeConverter    model.TypeConverter
 }
 
-// NewOrchestrator 创建新的协调器
-func NewOrchestrator(config *config.Config, typeInfos map[string]*model.TypeInfo) *Orchestrator {
+// NewLegacyCodeGenerator 创建新的协调器
+func NewLegacyCodeGenerator(config *config.Config, typeInfos map[string]*model.TypeInfo) model.CodeGenerator {
 	// 创建导入管理器
 	importManager := components.NewImportManager()
 
@@ -53,12 +53,9 @@ func NewOrchestrator(config *config.Config, typeInfos map[string]*model.TypeInfo
 		config,
 		importManager,
 		aliasManager,
-		nameGenerator,
-		conversionEngine,
-		typeInfos,
 	)
 
-	return &Orchestrator{
+	return &LegacyCodeGenerator{
 		config:           config,
 		importManager:    importManager,
 		nameGenerator:    nameGenerator,
@@ -70,36 +67,36 @@ func NewOrchestrator(config *config.Config, typeInfos map[string]*model.TypeInfo
 }
 
 // Generate 实现 model.CodeGenerator 接口
-func (o *Orchestrator) Generate(request *model.GenerationRequest) (*model.GenerationResponse, error) {
+func (g *LegacyCodeGenerator) Generate(request *model.GenerationRequest) (*model.GenerationResponse, error) {
 	typeInfos := request.Context.TypeInfos
-	o.config = request.Context.Config
+	g.config = request.Context.Config
 
-	slog.Debug("Generating code with orchestrator", 
-		"type_count", len(typeInfos), 
-		"initial_rules", len(o.config.ConversionRules))
+	slog.Debug("Generating code with orchestrator",
+		"type_count", len(typeInfos),
+		"initial_rules", len(g.config.ConversionRules))
 
 	// 填充涉及的包集合
-	for _, pkgPath := range o.config.RequiredPackages() {
+	for _, pkgPath := range g.config.RequiredPackages() {
 		request.Context.InvolvedPackages[pkgPath] = struct{}{}
 	}
 
 	// 如果没有显式定义转换规则，则从包对中发现它们
 	// 这对于启用 `pair:packages` 工作至关重要
-	if len(o.config.ConversionRules) == 0 {
-		o.discoverImplicitConversionRules(typeInfos)
-		slog.Debug("Implicit rule discovery finished", "discovered_rules", len(o.config.ConversionRules))
+	if len(g.config.ConversionRules) == 0 {
+		g.discoverImplicitConversionRules(typeInfos)
+		slog.Debug("Implicit rule discovery finished", "discovered_rules", len(g.config.ConversionRules))
 	}
 
 	// 现在所有规则都已发现，填充命名器的源包映射
-	o.nameGenerator.PopulateSourcePkgs(o.config)
+	g.nameGenerator.PopulateSourcePkgs(g.config)
 
 	// 智能默认后缀：仅在没有显式命名规则设置时应用
 	// 并且如果至少有一个转换规则具有模糊（相同）的基本名称
-	if o.config.NamingRules.SourcePrefix == "" && o.config.NamingRules.SourceSuffix == "" &&
-		o.config.NamingRules.TargetPrefix == "" && o.config.NamingRules.TargetSuffix == "" {
+	if g.config.NamingRules.SourcePrefix == "" && g.config.NamingRules.SourceSuffix == "" &&
+		g.config.NamingRules.TargetPrefix == "" && g.config.NamingRules.TargetSuffix == "" {
 
 		needsDisambiguation := false
-		for _, rule := range o.config.ConversionRules {
+		for _, rule := range g.config.ConversionRules {
 			sourceBaseName := ""
 			if lastDot := strings.LastIndex(rule.SourceType, "."); lastDot != -1 {
 				sourceBaseName = rule.SourceType[lastDot+1:]
@@ -118,28 +115,32 @@ func (o *Orchestrator) Generate(request *model.GenerationRequest) (*model.Genera
 
 		if needsDisambiguation {
 			slog.Debug("Ambiguous type names found with no explicit naming rules. Applying default 'Source'/'Target' suffixes.")
-			o.config.NamingRules.SourceSuffix = "Source"
-			o.config.NamingRules.TargetSuffix = "Target"
+			g.config.NamingRules.SourceSuffix = "Source"
+			g.config.NamingRules.TargetSuffix = "Target"
 		}
 	}
 
 	// 填充别名
-	o.aliasManager.(*components.ConcreteAliasManager).PopulateAliases()
+	if am, ok := g.aliasManager.(interface{ PopulateAliases() }); ok {
+		am.PopulateAliases()
+	} else {
+		slog.Warn("AliasManager does not implement PopulateAliases method. Skipping alias population.")
+	}
 
 	// 生成代码
-	generatedCode, err := o.generateMainCode(typeInfos)
+	generatedCode, err := g.generateMainCode(typeInfos)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate main code: %w", err)
 	}
 
 	// 生成自定义存根
-	customStubs, err := o.generateCustomStubs()
+	customStubs, err := g.generateCustomStubs()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate custom stubs: %w", err)
 	}
 
 	// 获取所需的包列表
-	requiredPackages := o.importManager.GetAllImports()
+	requiredPackages := g.importManager.GetAllImports()
 
 	return &model.GenerationResponse{
 		GeneratedCode:    generatedCode,
@@ -149,35 +150,35 @@ func (o *Orchestrator) Generate(request *model.GenerationRequest) (*model.Genera
 }
 
 // generateMainCode 生成主要代码
-func (o *Orchestrator) generateMainCode(typeInfos map[string]*model.TypeInfo) ([]byte, error) {
+func (g *LegacyCodeGenerator) generateMainCode(typeInfos map[string]*model.TypeInfo) ([]byte, error) {
 	finalBuf := new(bytes.Buffer)
 
 	// 发射头信息
-	err := o.codeEmitter.EmitHeader(finalBuf)
+	err := g.codeEmitter.EmitHeader(finalBuf)
 	if err != nil {
 		return nil, err
 	}
 
 	// 发射导入语句
-	err = o.codeEmitter.EmitImports(finalBuf, o.importManager.GetAllImports())
+	err = g.codeEmitter.EmitImports(finalBuf, g.importManager.GetAllImports())
 	if err != nil {
 		return nil, err
 	}
 
 	// 发射类型别名
-	err = o.codeEmitter.EmitAliases(finalBuf)
+	err = g.codeEmitter.EmitAliases(finalBuf)
 	if err != nil {
 		return nil, err
 	}
 
 	// 发射转换函数
-	err = o.codeEmitter.EmitConversions(finalBuf)
+	err = g.codeEmitter.EmitConversions(finalBuf, nil) // Placeholder for conversions
 	if err != nil {
 		return nil, err
 	}
 
 	// 发射辅助函数
-	err = o.codeEmitter.EmitHelpers(finalBuf)
+	err = g.codeEmitter.EmitHelpers(finalBuf, nil) // Placeholder for helpers
 	if err != nil {
 		return nil, err
 	}
@@ -187,9 +188,9 @@ func (o *Orchestrator) generateMainCode(typeInfos map[string]*model.TypeInfo) ([
 }
 
 // generateCustomStubs 生成自定义存根
-func (o *Orchestrator) generateCustomStubs() ([]byte, error) {
+func (g *LegacyCodeGenerator) generateCustomStubs() ([]byte, error) {
 	customStubs := make(map[string]string)
-	
+
 	// 如果有自定义存根，生成它们
 	if len(customStubs) == 0 {
 		return nil, nil
@@ -199,15 +200,15 @@ func (o *Orchestrator) generateCustomStubs() ([]byte, error) {
 	buf.WriteString("//go:build !abgen_source\n")
 	buf.WriteString("// Code generated by abgen. DO NOT EDIT.\n")
 	buf.WriteString(fmt.Sprintf("// versions: %s\n", "abgen"))
-	buf.WriteString(fmt.Sprintf("// source: %s\n\n", o.config.GenerationContext.DirectivePath))
-	buf.WriteString(fmt.Sprintf("package %s\n\n", o.getPackageName()))
+	buf.WriteString(fmt.Sprintf("// source: %s\n\n", g.config.GenerationContext.DirectivePath))
+	buf.WriteString(fmt.Sprintf("package %s\n\n", g.getPackageName()))
 
-	err := o.codeEmitter.EmitImports(buf, o.importManager.GetAllImports())
+	err := g.codeEmitter.EmitImports(buf, g.importManager.GetAllImports())
 	if err != nil {
 		return nil, err
 	}
 
-	err = o.writeCustomStubsToBuffer(buf, customStubs)
+	err = g.writeCustomStubsToBuffer(buf, customStubs)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +217,7 @@ func (o *Orchestrator) generateCustomStubs() ([]byte, error) {
 }
 
 // writeCustomStubsToBuffer 将自定义存根写入缓冲区
-func (o *Orchestrator) writeCustomStubsToBuffer(buf *bytes.Buffer, customStubs map[string]string) error {
+func (g *LegacyCodeGenerator) writeCustomStubsToBuffer(buf *bytes.Buffer, customStubs map[string]string) error {
 	if len(customStubs) == 0 {
 		return nil
 	}
@@ -236,7 +237,7 @@ func (o *Orchestrator) writeCustomStubsToBuffer(buf *bytes.Buffer, customStubs m
 }
 
 // discoverImplicitConversionRules 发现隐式转换规则
-func (o *Orchestrator) discoverImplicitConversionRules(typeInfos map[string]*model.TypeInfo) {
+func (g *LegacyCodeGenerator) discoverImplicitConversionRules(typeInfos map[string]*model.TypeInfo) {
 	typesByPackage := make(map[string][]*model.TypeInfo)
 	for _, info := range typeInfos {
 		if info.IsNamedType() {
@@ -246,7 +247,7 @@ func (o *Orchestrator) discoverImplicitConversionRules(typeInfos map[string]*mod
 
 	var initialRules []*config.ConversionRule
 
-	for _, pair := range o.config.PackagePairs {
+	for _, pair := range g.config.PackagePairs {
 		sourceTypes := typesByPackage[pair.SourcePath]
 		targetTypes := typesByPackage[pair.TargetPath]
 
@@ -268,18 +269,18 @@ func (o *Orchestrator) discoverImplicitConversionRules(typeInfos map[string]*mod
 		}
 	}
 
-	o.config.ConversionRules = append(o.config.ConversionRules, initialRules...)
+	g.config.ConversionRules = append(g.config.ConversionRules, initialRules...)
 }
 
 // getPackageName 获取包名
-func (o *Orchestrator) getPackageName() string {
-	if o.config.GenerationContext.PackageName != "" {
-		return o.config.GenerationContext.PackageName
+func (g *LegacyCodeGenerator) getPackageName() string {
+	if g.config.GenerationContext.PackageName != "" {
+		return g.config.GenerationContext.PackageName
 	}
 	return "generated"
 }
 
 // GetConfig 获取配置（用于向后兼容）
-func (o *Orchestrator) GetConfig() *config.Config {
-	return o.config
+func (g *LegacyCodeGenerator) GetConfig() *config.Config {
+	return g.config
 }
