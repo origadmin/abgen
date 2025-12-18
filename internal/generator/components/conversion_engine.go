@@ -133,16 +133,16 @@ func (ce *ConversionEngine) GetConversionExpression(
 		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), isPointerReturn, true, []string{funcName}
 	}
 
-	return ce.generateFallbackConversion(sourceField, targetField, sourceFieldExpr)
+	return ce.generateFallbackConversion(sourceType, sourceField, targetType, targetField, sourceFieldExpr)
 }
 
 func (ce *ConversionEngine) findHelper(source, target *model.TypeInfo) (string, string) {
 	// This map should be generated or configured more robustly.
 	conversionMap := map[string]string{
-		"string->time.Time":                                                     "ConvertStringToTime",
-		"string->github.com/google/uuid.UUID":                                   "ConvertStringToUUID",
-		"time.Time->string":                                                     "ConvertTimeToString",
-		"github.com/google/uuid.UUID->string":                                   "ConvertUUIDToString",
+		"string->time.Time":                   "ConvertStringToTime",
+		"string->github.com/google/uuid.UUID": "ConvertStringToUUID",
+		"time.Time->string":                   "ConvertTimeToString",
+		"github.com/google/uuid.UUID->string": "ConvertUUIDToString",
 		"time.Time->*google.golang.org/protobuf/types/known/timestamppb.Timestamp": "ConvertTimeToTimestamp",
 		"*google.golang.org/protobuf/types/known/timestamppb.Timestamp->time.Time": "ConvertTimestampToTime",
 	}
@@ -233,17 +233,24 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 }
 
 // generateFallbackConversion generates a fallback conversion.
-func (ce *ConversionEngine) generateFallbackConversion(
-	sourceField, targetField *model.FieldInfo, sourceFieldExpr string,
-) (string, bool, bool, []string) {
-	sourceType := sourceField.Type
-	targetType := targetField.Type
+func (ce *ConversionEngine) generateFallbackConversion(sourceType *model.TypeInfo, sourceField *model.FieldInfo, targetType *model.TypeInfo, targetField *model.FieldInfo, sourceFieldExpr string) (string, bool, bool, []string) {
+	sourceFieldType := sourceField.Type
+	targetFieldType := targetField.Type
 
-	if sourceType.Kind == model.Primitive && targetType.Kind == model.Primitive {
-		return fmt.Sprintf("%s(%s)", ce.nameGenerator.GetTypeString(targetType), sourceFieldExpr), false, true, nil
+	// 对于基本类型转换，检查是否可以直接转换
+	if sourceFieldType.Kind == model.Primitive && targetFieldType.Kind == model.Primitive {
+		if canDirectlyConvertPrimitives(sourceFieldType.Name, targetFieldType.Name) {
+			return fmt.Sprintf("%s(%s)", ce.nameGenerator.GetTypeString(targetFieldType), sourceFieldExpr), false, true, nil
+		}
+		// 生成存根函数名称
+		stubFuncName := ce.nameGenerator.GetPrimitiveConversionStubName(
+			sourceType, sourceField,
+			targetType, targetField,
+		)
+		return fmt.Sprintf("%s(%s)", stubFuncName, sourceFieldExpr), false, true, []string{stubFuncName}
 	}
 
-	funcName := ce.nameGenerator.GetFunctionName(sourceType, targetType)
-	shouldReturnPointer := targetType.IsUltimatelyStruct()
+	funcName := ce.nameGenerator.GetFunctionName(sourceFieldType, targetFieldType)
+	shouldReturnPointer := targetFieldType.IsUltimatelyStruct()
 	return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), shouldReturnPointer, true, nil
 }
