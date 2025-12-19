@@ -1,9 +1,6 @@
 package components
 
 import (
-	"fmt"
-	"strings"
-
 	"github.com/origadmin/abgen/internal/model"
 )
 
@@ -13,52 +10,6 @@ type TypeConverter struct{}
 // NewTypeConverter creates a new type converter.
 func NewTypeConverter() model.TypeConverter {
 	return &TypeConverter{}
-}
-
-// Convert recursively builds a string representation of a type, using the provided
-// pkgQualifier function to determine the correct package alias.
-func (c *TypeConverter) Convert(typeInfo *model.TypeInfo, pkgQualifier func(string) string) string {
-	if typeInfo == nil {
-		return "nil"
-	}
-
-	var sb strings.Builder
-	c.convertRecursive(&sb, typeInfo, pkgQualifier)
-	return sb.String()
-}
-
-func (c *TypeConverter) convertRecursive(sb *strings.Builder, info *model.TypeInfo, pkgQualifier func(string) string) {
-	switch info.Kind {
-	case model.Pointer:
-		sb.WriteString("*")
-		c.convertRecursive(sb, info.Underlying, pkgQualifier)
-	case model.Slice:
-		sb.WriteString("[]")
-		c.convertRecursive(sb, info.Underlying, pkgQualifier)
-	case model.Array:
-		sb.WriteString(fmt.Sprintf("[%d]", info.ArrayLen))
-		c.convertRecursive(sb, info.Underlying, pkgQualifier)
-	case model.Map:
-		sb.WriteString("map[")
-		c.convertRecursive(sb, info.KeyType, pkgQualifier)
-		sb.WriteString("]")
-		c.convertRecursive(sb, info.Underlying, pkgQualifier)
-	case model.Named:
-		if info.ImportPath != "" {
-			alias := pkgQualifier(info.ImportPath)
-			if alias != "" {
-				sb.WriteString(alias)
-				sb.WriteString(".")
-			}
-		}
-		sb.WriteString(info.Name)
-	case model.Primitive:
-		sb.WriteString(info.Name)
-	case model.Interface:
-		sb.WriteString("interface{}")
-	default:
-		sb.WriteString("interface{}") // Fallback for safety
-	}
 }
 
 // resolveConcreteType traverses the 'Underlying' chain of a TypeInfo

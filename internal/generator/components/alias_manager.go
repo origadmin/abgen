@@ -1,9 +1,9 @@
 package components
 
 import (
+	"go/types"
 	"log/slog"
 	"regexp"
-	"sort"
 	"strings"
 	"unicode"
 
@@ -17,7 +17,6 @@ var _ model.AliasManager = (*AliasManager)(nil)
 type AliasManager struct {
 	config        *config.Config
 	importManager model.ImportManager
-	typeConverter model.TypeConverter // Use TypeConverter to build original type names
 	aliasMap      map[string]string
 	typeInfos     map[string]*model.TypeInfo
 }
@@ -28,16 +27,33 @@ var camelCaseRegexp = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 func NewAliasManager(
 	config *config.Config,
 	importManager model.ImportManager,
-	typeConverter model.TypeConverter, // Changed dependency
 	typeInfos map[string]*model.TypeInfo,
 ) model.AliasManager {
 	return &AliasManager{
 		config:        config,
 		importManager: importManager,
-		typeConverter: typeConverter,
 		aliasMap:      make(map[string]string),
 		typeInfos:     typeInfos,
 	}
+}
+
+// GetAlias looks up an alias for a given *types.Named type.
+// This is used by the TypeFormatter to check if a named type should be replaced with an alias.
+func (am *AliasManager) GetAlias(t *types.Named) (string, bool) {
+	pkg := t.Obj().Pkg()
+	if pkg == nil {
+		// Built-in types (like 'error') or unnamed types don't have aliases in this system.
+		return "", false
+	}
+	// Reconstruct the unique key from the types.Type object.
+	uniqueKey := pkg.Path() + "." + t.Obj().Name()
+	return am.LookupAlias(uniqueKey)
+}
+
+// LookupAlias implements the model.AliasLookup interface.
+func (am *AliasManager) LookupAlias(uniqueKey string) (string, bool) {
+	alias, ok := am.aliasMap[uniqueKey]
+	return alias, ok
 }
 
 // PopulateAliases is the main entry point for the alias manager.
@@ -86,6 +102,12 @@ func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSou
 }
 
 // generateAlias creates a new alias for a type based on naming rules.
+// GenerateAliasForTesting is a helper method for testing that generates an alias for the given type.
+// This is primarily used in tests to verify alias generation logic.
+func (am *AliasManager) GenerateAliasForTesting(info *model.TypeInfo, isSource bool) string {
+	return am.generateAlias(info, isSource)
+}
+
 func (am *AliasManager) generateAlias(info *model.TypeInfo, isSource bool) string {
 	if info.Kind == model.Primitive {
 		return am.toCamelCase(info.Name)
@@ -140,45 +162,6 @@ func (am *AliasManager) toCamelCase(s string) string {
 		}
 	}
 	return strings.Join(parts, "")
-}
-
-// GetAliasesToRender prepares a sorted list of aliases for code generation.
-func (am *AliasManager) GetAliasesToRender() []*model.AliasRenderInfo {
-	var renderInfos []*model.AliasRenderInfo
-	for fqn, alias := range am.aliasMap {
-		typeInfo := am.typeInfos[fqn]
-		if typeInfo == nil {
-			continue
-		}
-		// Use TypeConverter to build the original type name for the alias declaration.
-		originalTypeName := am.typeConverter.Convert(typeInfo, func(pkgPath string) string {
-			return am.importManager.Add(pkgPath)
-		})
-		renderInfos = append(renderInfos, &model.AliasRenderInfo{
-			AliasName:        alias,
-			OriginalTypeName: originalTypeName,
-		})
-	}
-
-	sort.Slice(renderInfos, func(i, j int) bool {
-		return renderInfos[i].AliasName < renderInfos[j].AliasName
-	})
-
-	return renderInfos
-}
-
-func (am *AliasManager) GetSourceAlias(info *model.TypeInfo) string {
-	if alias, ok := am.aliasMap[info.UniqueKey()]; ok {
-		return alias
-	}
-	return am.generateAlias(info, true)
-}
-
-func (am *AliasManager) GetTargetAlias(info *model.TypeInfo) string {
-	if alias, ok := am.aliasMap[info.UniqueKey()]; ok {
-		return alias
-	}
-	return am.generateAlias(info, false)
 }
 
 func (am *AliasManager) GetAllAliases() map[string]string {

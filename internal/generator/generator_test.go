@@ -830,13 +830,6 @@ func TestArchitecturalCompatibility(t *testing.T) {
 				t.Fatalf("Failed to analyze types: %v", err)
 			}
 
-			oldGen := NewLegacyGenerator(cfg)
-			oldGen.Generate(typeInfos)
-			oldCode, err := oldGen.Generate(typeInfos)
-			if err != nil {
-				t.Fatalf("OLD architecture failed: %v", err)
-			}
-
 			orchestrator := NewCodeGenerator()
 			response, err := orchestrator.Generate(cfg, typeInfos)
 			if err != nil {
@@ -844,22 +837,15 @@ func TestArchitecturalCompatibility(t *testing.T) {
 			}
 			newCode := response.GeneratedCode
 
-			oldStr := strings.ReplaceAll(string(oldCode), `\`, `/`)
 			newStr := strings.ReplaceAll(string(newCode), `\`, `/`)
 
-			if oldStr != newStr {
-				t.Errorf("Architecture mismatch for %s", tc.name)
-				t.Logf("OLD architecture output length: %d", len(oldStr))
-				t.Logf("NEW architecture output length: %d", len(newStr))
+			t.Errorf("Architecture mismatch for %s", tc.name)
+			t.Logf("NEW architecture output length: %d", len(newStr))
 
-				outputDir := filepath.Join(tc.directivePath, "compatibility_test")
-				_ = os.MkdirAll(outputDir, 0755)
-				_ = os.WriteFile(filepath.Join(outputDir, "old_architecture.gen.go"), []byte(oldStr), 0644)
-				_ = os.WriteFile(filepath.Join(outputDir, "new_architecture.gen.go"), []byte(newStr), 0644)
-				t.Logf("Output files written to %s for manual comparison", outputDir)
-			} else {
-				t.Logf("Architectures produce identical output for %s", tc.name)
-			}
+			outputDir := filepath.Join(tc.directivePath, "compatibility_test")
+			_ = os.MkdirAll(outputDir, 0755)
+			_ = os.WriteFile(filepath.Join(outputDir, "new_architecture.gen.go"), []byte(newStr), 0644)
+			t.Logf("Output files written to %s for manual comparison", outputDir)
 		})
 	}
 }

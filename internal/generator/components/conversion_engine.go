@@ -15,7 +15,7 @@ var _ model.ConversionEngine = (*ConversionEngine)(nil)
 type ConversionEngine struct {
 	typeConverter model.TypeConverter
 	nameGenerator model.NameGenerator
-	aliasManager  model.AliasManager
+	typeFormatter *TypeFormatter
 	importManager model.ImportManager
 }
 
@@ -23,35 +23,15 @@ type ConversionEngine struct {
 func NewConversionEngine(
 	typeConverter model.TypeConverter,
 	nameGenerator model.NameGenerator,
-	aliasManager model.AliasManager,
+	typeFormatter *TypeFormatter,
 	importManager model.ImportManager,
 ) model.ConversionEngine {
 	return &ConversionEngine{
 		typeConverter: typeConverter,
 		nameGenerator: nameGenerator,
-		aliasManager:  aliasManager,
+		typeFormatter: typeFormatter,
 		importManager: importManager,
 	}
-}
-
-// getTypeName intelligently selects the best name for a type in generated code.
-// It prioritizes a local alias if one exists, otherwise falls back to the
-// fully qualified name with a package qualifier.
-func (ce *ConversionEngine) getTypeName(info *model.TypeInfo, isSource bool) string {
-	var alias string
-	if isSource {
-		alias = ce.aliasManager.GetSourceAlias(info)
-	} else {
-		alias = ce.aliasManager.GetTargetAlias(info)
-	}
-
-	// If an alias exists and is not just the base name (for primitives), use it.
-	if alias != "" && (info.Kind != model.Primitive || alias != info.Name) {
-		return alias
-	}
-
-	// Fallback to the original name generator if no suitable alias is found.
-	return ce.nameGenerator.TypeName(info)
 }
 
 // GenerateConversionFunction generates a conversion function for structs or delegates to slice conversion.
@@ -68,8 +48,8 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 
 	var buf strings.Builder
 	funcName := ce.nameGenerator.ConversionFunctionName(sourceInfo, targetInfo)
-	sourceTypeStr := ce.getTypeName(sourceInfo, true)
-	targetTypeStr := ce.getTypeName(targetInfo, false)
+	sourceTypeStr := ce.typeFormatter.Format(sourceInfo.Original.Type())
+	targetTypeStr := ce.typeFormatter.Format(targetInfo.Original.Type())
 
 	buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceInfo.Name, targetInfo.Name))
 	buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, sourceTypeStr, targetTypeStr))
@@ -98,8 +78,8 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	sourceElem := ce.typeConverter.GetElementType(sourceInfo)
 	targetElem := ce.typeConverter.GetElementType(targetInfo)
 
-	sourceSliceStr := ce.getTypeName(sourceInfo, true)
-	targetSliceStr := ce.getTypeName(targetInfo, false)
+	sourceSliceStr := ce.typeFormatter.Format(sourceInfo.Original.Type())
+	targetSliceStr := ce.typeFormatter.Format(targetInfo.Original.Type())
 	funcName := ce.nameGenerator.ConversionFunctionName(sourceInfo, targetInfo)
 
 	slog.Debug("Generating slice conversion", "funcName", funcName, "source", sourceSliceStr, "target", targetSliceStr)
@@ -140,7 +120,7 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 	var fieldAssignments []string
 	var allRequiredHelpers []string
 
-	targetTypeStr := ce.getTypeName(targetInfo, false)
+	targetTypeStr := ce.typeFormatter.Format(targetInfo.Original.Type())
 
 	for _, sourceField := range sourceInfo.Fields {
 		if _, shouldIgnore := rule.FieldRules.Ignore[sourceField.Name]; shouldIgnore {

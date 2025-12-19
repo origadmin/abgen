@@ -21,10 +21,12 @@ type CodeGenerator struct {
 	conversionEngine model.ConversionEngine
 	codeEmitter      model.CodeEmitter
 	typeConverter    model.TypeConverter
+	typeFormatter    *components.TypeFormatter
 }
 
 // NewCodeGenerator creates a new, stateless code generator.
 func NewCodeGenerator() model.CodeGenerator {
+	// TypeConverter is stateless, so it can be created once.
 	return &CodeGenerator{
 		typeConverter: components.NewTypeConverter(),
 	}
@@ -32,21 +34,30 @@ func NewCodeGenerator() model.CodeGenerator {
 
 // initializeComponents configures the generator's components for a specific generation task.
 func (g *CodeGenerator) initializeComponents(cfg *config.Config, typeInfos map[string]*model.TypeInfo) {
+	// Create components in dependency order.
+	// 1. Components with no internal dependencies.
 	g.importManager = components.NewImportManager()
-	g.nameGenerator = components.NewNameGenerator(cfg, g.importManager)
-	// AliasManager now needs the TypeConverter to generate original type names.
-	g.aliasManager = components.NewAliasManager(cfg, g.importManager, g.typeConverter, typeInfos)
+	g.nameGenerator = components.NewNameGenerator(cfg)
+	// g.typeConverter is already initialized in NewCodeGenerator.
+
+	// 2. AliasManager depends on ImportManager.
+	// We perform a type assertion because we know the concrete type and need it for the next step.
+	aliasManager := components.NewAliasManager(cfg, g.importManager, typeInfos).(*components.AliasManager)
+	g.aliasManager = aliasManager
+
+	// 3. TypeFormatter depends on AliasManager and ImportManager.
+	g.typeFormatter = components.NewTypeFormatter(aliasManager, g.importManager.(*components.ImportManager))
+
+	// 4. ConversionEngine depends on several components.
 	g.conversionEngine = components.NewConversionEngine(
 		g.typeConverter,
 		g.nameGenerator,
-		g.aliasManager,
+		g.typeFormatter,
 		g.importManager,
 	)
-	g.codeEmitter = components.NewCodeEmitter(
-		cfg,
-		g.importManager,
-		g.aliasManager,
-	)
+
+	// 5. CodeEmitter is simplified and only depends on config.
+	g.codeEmitter = components.NewCodeEmitter(cfg)
 }
 
 // Generate executes a complete code generation task.
@@ -268,13 +279,16 @@ func (g *CodeGenerator) generateMainCode(typeInfos map[string]*model.TypeInfo, r
 		return nil, err
 	}
 
+	// Prepare the alias information for rendering.
+	aliasesToRender := g.prepareAliasesForRender(typeInfos)
+
 	if err := g.codeEmitter.EmitHeader(finalBuf); err != nil {
 		return nil, err
 	}
 	if err := g.codeEmitter.EmitImports(finalBuf, g.importManager.GetAllImports()); err != nil {
 		return nil, err
 	}
-	if err := g.codeEmitter.EmitAliases(finalBuf, g.aliasManager.GetAliasesToRender()); err != nil {
+	if err := g.codeEmitter.EmitAliases(finalBuf, aliasesToRender); err != nil {
 		return nil, err
 	}
 	if err := g.codeEmitter.EmitConversions(finalBuf, conversionFuncs); err != nil {
@@ -285,6 +299,44 @@ func (g *CodeGenerator) generateMainCode(typeInfos map[string]*model.TypeInfo, r
 	}
 
 	return format.Source(finalBuf.Bytes())
+}
+
+// prepareAliasesForRender creates the list of aliases to be rendered in the final code.
+// It is the new home for the logic that was previously in AliasManager.GetAliasesToRender.
+func (g *CodeGenerator) prepareAliasesForRender(typeInfos map[string]*model.TypeInfo) []*model.AliasRenderInfo {
+	var renderInfos []*model.AliasRenderInfo
+	allAliases := g.aliasManager.GetAllAliases()
+
+	for uniqueKey, alias := range allAliases {
+		typeInfo := typeInfos[uniqueKey]
+		if typeInfo == nil {
+			continue
+		}
+
+		// Use the TypeFormatter to get the full, correct original type name.
+		var originalTypeName string
+		if typeInfo.Original != nil {
+			originalTypeName = g.typeFormatter.Format(typeInfo.Original.Type())
+		} else {
+			// Fallback to a simple name representation
+			originalTypeName = typeInfo.Name
+			if typeInfo.ImportPath != "" {
+				originalTypeName = typeInfo.ImportPath + "." + typeInfo.Name
+			}
+		}
+
+		renderInfos = append(renderInfos, &model.AliasRenderInfo{
+			AliasName:        alias,
+			OriginalTypeName: originalTypeName,
+		})
+	}
+
+	// Sort for consistent output
+	sort.Slice(renderInfos, func(i, j int) bool {
+		return renderInfos[i].AliasName < renderInfos[j].AliasName
+	})
+
+	return renderInfos
 }
 
 func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeInfo, rules []*config.ConversionRule) ([]string, map[string]struct{}, error) {
@@ -313,7 +365,7 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 			for from, to := range rule.FieldRules.Remap {
 				reverseRule.FieldRules.Remap[to] = from
 			}
-			g.generateAndCollect(targetInfo, sourceInfo, reverseRule, &conversionFuncs, requiredHelpers, generatedFunctions)
+g.generateAndCollect(targetInfo, sourceInfo, reverseRule, &conversionFuncs, requiredHelpers, generatedFunctions)
 		}
 	}
 
@@ -330,11 +382,9 @@ func (g *CodeGenerator) generateAndCollect(
 	var generated *model.GeneratedCode
 	var err error
 
-	if rule != nil {
-		generated, err = g.conversionEngine.GenerateConversionFunction(sourceInfo, targetInfo, rule)
-	} else {
-		generated, err = g.conversionEngine.GenerateSliceConversion(sourceInfo, targetInfo)
-	}
+	// Note: The logic for slice conversion inside conversionEngine was simplified.
+	// We now always pass a rule to GenerateConversionFunction, which handles both struct and slice cases.
+	generated, err = g.conversionEngine.GenerateConversionFunction(sourceInfo, targetInfo, rule)
 
 	if err != nil {
 		slog.Warn("Error generating conversion function", "source", sourceInfo.FQN(), "target", targetInfo.FQN(), "error", err)

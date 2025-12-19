@@ -3,6 +3,7 @@ package components
 import (
 	"bytes"
 	"fmt"
+	"go/types"
 	"path"
 	"sort"
 	"strings"
@@ -73,6 +74,22 @@ func (im *ImportManager) AddAs(importPath, alias string) string {
 func (im *ImportManager) GetAlias(importPath string) (string, bool) {
 	alias, ok := im.aliases[importPath]
 	return alias, ok
+}
+
+// PackageName returns the alias name for a given *types.Package.
+// If the package is not imported yet, it returns the package's name.
+func (im *ImportManager) PackageName(pkg *types.Package) string {
+	if pkg == nil {
+		return ""
+	}
+	
+	// Try to get the alias from imports map
+	if alias, exists := im.imports[pkg.Path()]; exists {
+		return alias
+	}
+	
+	// If not imported, return the package name
+	return pkg.Name()
 }
 
 // GetAllImports returns all imports as a map of path to alias.

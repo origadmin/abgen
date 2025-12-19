@@ -14,21 +14,13 @@ var _ model.CodeEmitter = (*CodeEmitter)(nil)
 
 // CodeEmitter implements the CodeEmitter interface.
 type CodeEmitter struct {
-	config        *config.Config
-	importManager model.ImportManager
-	aliasManager  model.AliasManager
+	config *config.Config
 }
 
 // NewCodeEmitter creates a new code emitter.
-func NewCodeEmitter(
-	config *config.Config,
-	importManager model.ImportManager,
-	aliasManager model.AliasManager,
-) model.CodeEmitter {
+func NewCodeEmitter(config *config.Config) model.CodeEmitter {
 	return &CodeEmitter{
-		config:        config,
-		importManager: importManager,
-		aliasManager:  aliasManager,
+		config: config,
 	}
 }
 

@@ -58,6 +58,10 @@ func (ti *TypeInfo) Type() string {
 	return ti.Name
 }
 
+func (ti *TypeInfo) OriginalType() types.Type {
+	return ti.Original.Type()
+}
+
 // String returns a string representation of the type.
 func (ti *TypeInfo) String() string {
 	if ti == nil {
