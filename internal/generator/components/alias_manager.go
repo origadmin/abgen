@@ -1,7 +1,6 @@
 package components
 
 import (
-	"go/types"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -37,17 +36,15 @@ func NewAliasManager(
 	}
 }
 
-// GetAlias looks up an alias for a given *types.Named type.
-// This is used by the TypeFormatter to check if a named type should be replaced with an alias.
-func (am *AliasManager) GetAlias(t *types.Named) (string, bool) {
-	pkg := t.Obj().Pkg()
-	if pkg == nil {
-		// Built-in types (like 'error') or unnamed types don't have aliases in this system.
+// GetAlias looks up an alias for a given *model.TypeInfo.
+func (am *AliasManager) GetAlias(info *model.TypeInfo) (string, bool) {
+	if info == nil {
 		return "", false
 	}
-	// Reconstruct the unique key from the types.Type object.
-	uniqueKey := pkg.Path() + "." + t.Obj().Name()
-	return am.LookupAlias(uniqueKey)
+	if info.Kind == model.Primitive || info.Kind == model.Pointer {
+		return "", false
+	}
+	return am.LookupAlias(info.UniqueKey())
 }
 
 // LookupAlias implements the model.AliasLookup interface.
@@ -58,19 +55,15 @@ func (am *AliasManager) LookupAlias(uniqueKey string) (string, bool) {
 
 // PopulateAliases is the main entry point for the alias manager.
 func (am *AliasManager) PopulateAliases() {
-	slog.Debug("AliasManager: PopulateAliases started", "ruleCount", len(am.config.ConversionRules))
-
-	for i, rule := range am.config.ConversionRules {
-		slog.Debug("AliasManager: processing conversion rule", "index", i, "sourceType", rule.SourceType, "targetType", rule.TargetType)
-
+	for _, rule := range am.config.ConversionRules {
 		sourceInfo := am.typeInfos[rule.SourceType]
 		targetInfo := am.typeInfos[rule.TargetType]
-		if sourceInfo == nil || targetInfo == nil {
-			continue
+		if sourceInfo != nil {
+			am.ensureAliasesRecursively(sourceInfo, true)
 		}
-
-		am.ensureAliasesRecursively(sourceInfo, true)
-		am.ensureAliasesRecursively(targetInfo, false)
+		if targetInfo != nil {
+			am.ensureAliasesRecursively(targetInfo, false)
+		}
 	}
 }
 
@@ -80,51 +73,87 @@ func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSou
 		return
 	}
 
+	// CRITICAL: Check if alias already exists to break recursion cycles.
 	if _, exists := am.aliasMap[typeInfo.UniqueKey()]; exists {
 		return
 	}
 
-	alias := am.generateAlias(typeInfo, isSource)
-	am.aliasMap[typeInfo.UniqueKey()] = alias
-	slog.Debug("AliasManager: created alias", "type", typeInfo.String(), "uniqueKey", typeInfo.UniqueKey(), "alias", alias, "isSource", isSource)
+	// For types that we won't generate an alias for (primitives, pointers),
+	// we just need to recurse on their children and then return.
+	if typeInfo.Kind == model.Primitive {
+		return // Primitives don't have children and don't get aliases.
+	}
+	if typeInfo.Kind == model.Pointer {
+		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
+		return // Pointers themselves don't get aliases.
+	}
 
+	// For all other types (Struct, Slice, Map, etc.), we generate an alias.
+	// CRITICAL: Add a placeholder to the map *before* recursing to handle cyclic dependencies.
+	am.aliasMap[typeInfo.UniqueKey()] = "placeholder"
+
+	// Recurse on component types.
 	switch typeInfo.Kind {
 	case model.Struct:
 		for _, field := range typeInfo.Fields {
 			am.ensureAliasesRecursively(field.Type, isSource)
 		}
-	case model.Slice, model.Array, model.Pointer:
+	case model.Slice, model.Array:
 		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
 	case model.Map:
 		am.ensureAliasesRecursively(typeInfo.KeyType, isSource)
 		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
 	}
+
+	// Now that all children are processed, generate the real alias.
+	alias := am.generateAlias(typeInfo, isSource)
+
+	// Update the map with the real alias.
+	am.aliasMap[typeInfo.UniqueKey()] = alias
+	slog.Debug("AliasManager: created alias", "type", typeInfo.String(), "uniqueKey", typeInfo.UniqueKey(), "alias", alias)
+}
+
+
+// getCleanBaseNameForAlias recursively builds a clean, suffix-free base name for a type.
+func (am *AliasManager) getCleanBaseNameForAlias(info *model.TypeInfo) string {
+	if info == nil {
+		return ""
+	}
+
+	switch info.Kind {
+	case model.Primitive:
+		return am.toCamelCase(info.Name)
+	case model.Named, model.Struct:
+		return am.toCamelCase(info.Name)
+	case model.Pointer:
+		// Pointers are transparent for naming purposes.
+		return am.getCleanBaseNameForAlias(info.Underlying)
+	case model.Slice:
+		// Pluralize the underlying type's base name.
+		return am.getCleanBaseNameForAlias(info.Underlying) + "s"
+	case model.Array:
+		return am.getCleanBaseNameForAlias(info.Underlying) + "Array"
+	case model.Map:
+		keyBaseName := am.getCleanBaseNameForAlias(info.KeyType)
+		valueBaseName := am.getCleanBaseNameForAlias(info.Underlying)
+		return keyBaseName + "To" + valueBaseName + "Map"
+	default:
+		return "Unknown"
+	}
 }
 
 // generateAlias creates a new alias for a type based on naming rules.
-// GenerateAliasForTesting is a helper method for testing that generates an alias for the given type.
-// This is primarily used in tests to verify alias generation logic.
-func (am *AliasManager) GenerateAliasForTesting(info *model.TypeInfo, isSource bool) string {
-	return am.generateAlias(info, isSource)
-}
-
 func (am *AliasManager) generateAlias(info *model.TypeInfo, isSource bool) string {
-	if info.Kind == model.Primitive {
-		return am.toCamelCase(info.Name)
-	}
+	// 1. Get the clean, unprocessed base name.
+	baseName := am.getCleanBaseNameForAlias(info)
 
+	// 2. Get the appropriate prefix and suffix.
 	prefix, suffix := am.getPrefixAndSuffix(isSource)
-	rawBaseName := am.getRawTypeName(info)
-	processedBaseName := am.toCamelCase(rawBaseName)
 
-	switch info.Kind {
-	case model.Slice, model.Array:
-		processedBaseName += "s"
-	case model.Map:
-		processedBaseName += "Map"
-	}
-
-	return am.toCamelCase(prefix) + processedBaseName + am.toCamelCase(suffix)
+	// 3. Combine them into the final alias.
+	finalAlias := am.toCamelCase(prefix) + baseName + am.toCamelCase(suffix)
+	slog.Debug("AliasManager: final alias generated", "type", info.String(), "baseName", baseName, "finalAlias", finalAlias)
+	return finalAlias
 }
 
 func (am *AliasManager) getPrefixAndSuffix(isSource bool) (string, string) {
@@ -132,20 +161,6 @@ func (am *AliasManager) getPrefixAndSuffix(isSource bool) (string, string) {
 		return am.config.NamingRules.SourcePrefix, am.config.NamingRules.SourceSuffix
 	}
 	return am.config.NamingRules.TargetPrefix, am.config.NamingRules.TargetSuffix
-}
-
-func (am *AliasManager) getRawTypeName(info *model.TypeInfo) string {
-	if info == nil {
-		return ""
-	}
-	if info.Name != "" {
-		return info.Name
-	}
-	switch info.Kind {
-	case model.Slice, model.Array, model.Pointer, model.Map:
-		return am.getRawTypeName(info.Underlying)
-	}
-	return ""
 }
 
 func (am *AliasManager) toCamelCase(s string) string {
@@ -166,4 +181,18 @@ func (am *AliasManager) toCamelCase(s string) string {
 
 func (am *AliasManager) GetAllAliases() map[string]string {
 	return am.aliasMap
+}
+
+func (am *AliasManager) GetSourcePath() string {
+	if len(am.config.PackagePairs) > 0 {
+		return am.config.PackagePairs[0].SourcePath
+	}
+	return ""
+}
+
+func (am *AliasManager) GetTargetPath() string {
+	if len(am.config.PackagePairs) > 0 {
+		return am.config.PackagePairs[0].TargetPath
+	}
+	return ""
 }

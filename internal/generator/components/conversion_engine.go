@@ -37,13 +37,14 @@ func NewConversionEngine(
 // GenerateConversionFunction generates a conversion function for structs or delegates to slice conversion.
 func (ce *ConversionEngine) GenerateConversionFunction(
 	sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule,
-) (*model.GeneratedCode, error) {
+) (*model.GeneratedCode, []*model.ConversionTask, error) {
 	if ce.typeConverter.IsSlice(sourceInfo) && ce.typeConverter.IsSlice(targetInfo) {
-		return ce.GenerateSliceConversion(sourceInfo, targetInfo)
+		code, err := ce.GenerateSliceConversion(sourceInfo, targetInfo)
+		return code, nil, err // Slice conversion does not discover new tasks in this model
 	}
 
 	if !ce.typeConverter.IsStruct(sourceInfo) || !ce.typeConverter.IsStruct(targetInfo) {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	var buf strings.Builder
@@ -55,9 +56,9 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 	buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, sourceTypeStr, targetTypeStr))
 	buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n\n")
 
-	structCode, requiredHelpers, err := ce.generateStructToStructConversion(sourceInfo, targetInfo, rule)
+	structCode, requiredHelpers, newTasks, err := ce.generateStructToStructConversion(sourceInfo, targetInfo, rule)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	buf.WriteString(structCode)
 
@@ -66,7 +67,7 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 	return &model.GeneratedCode{
 		FunctionBody:    buf.String(),
 		RequiredHelpers: requiredHelpers,
-	}, nil
+	}, newTasks, nil
 }
 
 // GenerateSliceConversion generates a function to convert a slice of one type to a slice of another.
@@ -91,20 +92,22 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	buf.WriteString("\tfor i, f := range froms {\n")
 
 	elemFuncName := ce.nameGenerator.ConversionFunctionName(sourceElem, targetElem)
-	elementConversionExpr := elemFuncName + "(&f)"
 
-	sourceElemIsPointer := ce.typeConverter.IsPointer(sourceElem)
-	targetElemIsPointer := ce.typeConverter.IsPointer(targetElem)
+	sourceIsPtr := ce.typeConverter.IsPointer(sourceElem)
+	targetIsPtr := ce.typeConverter.IsPointer(targetElem)
 
-	if sourceElemIsPointer && !targetElemIsPointer {
-		elementConversionExpr = "*" + elemFuncName + "(f)"
-	} else if !sourceElemIsPointer && targetElemIsPointer {
-		elementConversionExpr = elemFuncName + "(&f)"
-	} else {
-		elementConversionExpr = elemFuncName + "(f)"
+	var conversionExpr string
+	if !sourceIsPtr && !targetIsPtr {
+		conversionExpr = fmt.Sprintf("tos[i] = *%s(&f)", elemFuncName)
+	} else if !sourceIsPtr && targetIsPtr {
+		conversionExpr = fmt.Sprintf("tos[i] = %s(&f)", elemFuncName)
+	} else if sourceIsPtr && !targetIsPtr {
+		conversionExpr = fmt.Sprintf("tos[i] = *%s(f)", elemFuncName)
+	} else { // sourceIsPtr && targetIsPtr
+		conversionExpr = fmt.Sprintf("tos[i] = %s(f)", elemFuncName)
 	}
 
-	buf.WriteString(fmt.Sprintf("\t\ttos[i] = %s\n", elementConversionExpr))
+	buf.WriteString(fmt.Sprintf("\t\t%s\n", conversionExpr))
 	buf.WriteString("\t}\n")
 	buf.WriteString("\treturn tos\n")
 	buf.WriteString("}\n\n")
@@ -115,10 +118,11 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 // generateStructToStructConversion handles the field-by-field mapping.
 func (ce *ConversionEngine) generateStructToStructConversion(
 	sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule,
-) (string, []string, error) {
+) (string, []string, []*model.ConversionTask, error) {
 	var buf strings.Builder
 	var fieldAssignments []string
 	var allRequiredHelpers []string
+	var newTasks []*model.ConversionTask
 
 	targetTypeStr := ce.typeFormatter.Format(targetInfo.Original.Type())
 
@@ -140,8 +144,11 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 		}
 
 		if targetField != nil {
-			conversionExpr, requiredHelpers := ce.getConversionExpression(sourceField, targetField, "from")
+			conversionExpr, requiredHelpers, newTask := ce.getConversionExpression(sourceField, targetField, "from")
 			allRequiredHelpers = append(allRequiredHelpers, requiredHelpers...)
+			if newTask != nil {
+				newTasks = append(newTasks, newTask)
+			}
 			fieldAssignments = append(fieldAssignments, fmt.Sprintf("\t\t%s: %s,", targetField.Name, conversionExpr))
 		}
 	}
@@ -153,36 +160,41 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 	buf.WriteString("\t}\n")
 	buf.WriteString("\treturn to\n")
 
-	return buf.String(), allRequiredHelpers, nil
+	return buf.String(), allRequiredHelpers, newTasks, nil
 }
 
 // getConversionExpression determines the Go expression needed to convert a source field to a target field.
 func (ce *ConversionEngine) getConversionExpression(
 	sourceField, targetField *model.FieldInfo, fromVar string,
-) (string, []string) {
+) (string, []string, *model.ConversionTask) {
 	sourceType := sourceField.Type
 	targetType := targetField.Type
 	sourceFieldExpr := fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
 
 	if sourceType.UniqueKey() == targetType.UniqueKey() {
-		return sourceFieldExpr, nil
+		return sourceFieldExpr, nil, nil
 	}
 
 	helperKey, funcName := ce.findHelper(sourceType, targetType)
 	if funcName != "" {
 		slog.Debug("Found helper function", "key", helperKey, "funcName", funcName)
 		ce.addRequiredImportsForHelper(funcName)
-		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), []string{funcName}
+		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), []string{funcName}, nil
 	}
 
 	convFuncName := ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
 	sourceIsPointer := ce.typeConverter.IsPointer(sourceType)
 	targetIsPointer := ce.typeConverter.IsPointer(targetType)
 
-	if !sourceIsPointer && targetIsPointer {
-		return fmt.Sprintf("%s(&%s)", convFuncName, sourceFieldExpr), nil
+	newTask := &model.ConversionTask{
+		Source: sourceType,
+		Target: targetType,
 	}
-	return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil
+
+	if !sourceIsPointer && targetIsPointer {
+		return fmt.Sprintf("%s(&%s)", convFuncName, sourceFieldExpr), nil, newTask
+	}
+	return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, newTask
 }
 
 func (ce *ConversionEngine) findHelper(source, target *model.TypeInfo) (string, string) {

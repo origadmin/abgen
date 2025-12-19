@@ -25,6 +25,15 @@ func NewNameGenerator(cfg *config.Config) model.NameGenerator {
 func (n *NameGenerator) ConversionFunctionName(source, target *model.TypeInfo) string {
 	sourceName := n.getCleanBaseName(source)
 	targetName := n.getCleanBaseName(target)
+
+	// Apply suffixes from config
+	if n.config.NamingRules.SourceSuffix != "" {
+		sourceName += n.capitalize(n.config.NamingRules.SourceSuffix)
+	}
+	if n.config.NamingRules.TargetSuffix != "" {
+		targetName += n.capitalize(n.config.NamingRules.TargetSuffix)
+	}
+
 	return fmt.Sprintf("Convert%sTo%s", sourceName, targetName)
 }
 
@@ -59,11 +68,14 @@ func (n *NameGenerator) getCleanBaseName(info *model.TypeInfo) string {
 		baseName = "Object"
 	}
 
-	// Capitalize the first letter of the generated name.
-	if baseName == "" {
+	return n.capitalize(baseName)
+}
+
+func (n *NameGenerator) capitalize(s string) string {
+	if s == "" {
 		return ""
 	}
-	runes := []rune(baseName)
+	runes := []rune(s)
 	runes[0] = unicode.ToUpper(runes[0])
 	return string(runes)
 }

@@ -41,6 +41,7 @@ type ImportManager interface {
 	AddAs(pkgPath, alias string) string
 	GetAlias(pkgPath string) (string, bool)
 	GetAllImports() map[string]string
+	PackageName(pkg *types.Package) string
 }
 
 // AliasLookup defines the interface for looking up type aliases.
@@ -59,13 +60,15 @@ type AliasManager interface {
 	AliasLookup // Embed AliasLookup interface
 	PopulateAliases()
 	GetAllAliases() map[string]string
-	GetAlias(t *types.Named) (string, bool)
+	GetAlias(info *TypeInfo) (string, bool)
+	GetSourcePath() string
+	GetTargetPath() string
 }
 
 // ConversionEngine defines the interface for the component that generates the body
 // of conversion functions.
 type ConversionEngine interface {
-	GenerateConversionFunction(source, target *TypeInfo, rule *config.ConversionRule) (*GeneratedCode, error)
+	GenerateConversionFunction(source, target *TypeInfo, rule *config.ConversionRule) (*GeneratedCode, []*ConversionTask, error)
 	GenerateSliceConversion(source, target *TypeInfo) (*GeneratedCode, error)
 }
 

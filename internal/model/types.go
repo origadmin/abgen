@@ -5,6 +5,8 @@ import (
 	"go/types"
 	"log/slog"
 	"strings"
+
+	"github.com/origadmin/abgen/internal/config"
 )
 
 // TypeKind defines the kind of a Go type.
@@ -38,6 +40,13 @@ type TypeInfo struct {
 	Fields     []*FieldInfo
 	Methods    []*MethodInfo
 	Original   types.Object
+}
+
+// ConversionTask represents a task for the code generator to create a conversion function.
+type ConversionTask struct {
+	Source *TypeInfo
+	Target *TypeInfo
+	Rule   *config.ConversionRule
 }
 
 // PackageName returns the package name of the type.
@@ -382,5 +391,53 @@ func (k TypeKind) String() string {
 		return "Named"
 	default:
 		return "Unknown"
+	}
+}
+
+// GenerateUniqueKeyFromGoType creates a unique string key for a given Go types.Type.
+// This function mirrors the logic of TypeInfo.UniqueKey() but operates directly on types.Type.
+func GenerateUniqueKeyFromGoType(goType types.Type) string {
+	var sb strings.Builder
+	generateUniqueKeyRecursive(goType, &sb)
+	return sb.String()
+}
+
+func generateUniqueKeyRecursive(goType types.Type, sb *strings.Builder) {
+	switch t := goType.(type) {
+	case *types.Basic:
+		sb.WriteString(t.String())
+	case *types.Named:
+		if t.Obj().Pkg() != nil {
+			sb.WriteString(t.Obj().Pkg().Path())
+			sb.WriteString(".")
+		}
+		sb.WriteString(t.Obj().Name())
+	case *types.Pointer:
+		sb.WriteString("*")
+		generateUniqueKeyRecursive(t.Elem(), sb)
+	case *types.Slice:
+		sb.WriteString("[]")
+		generateUniqueKeyRecursive(t.Elem(), sb)
+	case *types.Array:
+		sb.WriteString(fmt.Sprintf("[%d]", t.Len()))
+		generateUniqueKeyRecursive(t.Elem(), sb)
+	case *types.Map:
+		sb.WriteString("map[")
+		generateUniqueKeyRecursive(t.Key(), sb)
+		sb.WriteString("]")
+		generateUniqueKeyRecursive(t.Elem(), sb)
+	case *types.Struct:
+		// For anonymous structs, use a simplified representation or hash
+		// For now, we'll just indicate it's a struct without full field details
+		sb.WriteString("struct{}")
+	case *types.Interface:
+		// For anonymous interfaces, use a simplified representation
+		sb.WriteString("interface{}")
+	case *types.Signature:
+		// For function signatures, use a simplified representation
+		sb.WriteString("func()")
+	default:
+		// Fallback for other types
+		sb.WriteString(t.String())
 	}
 }

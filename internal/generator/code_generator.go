@@ -37,6 +37,15 @@ func (g *CodeGenerator) initializeComponents(cfg *config.Config, typeInfos map[s
 	// Create components in dependency order.
 	// 1. Components with no internal dependencies.
 	g.importManager = components.NewImportManager()
+	
+	// Add required imports directly from PackageAliases
+	for alias, path := range cfg.PackageAliases {
+		if alias == "source" || alias == "target" {
+			g.importManager.AddAs(path, alias)
+		}
+	}
+	slog.Debug("ImportManager after PackageAliases processing", "imports", g.importManager.GetAllImports())
+	
 	g.nameGenerator = components.NewNameGenerator(cfg)
 	// g.typeConverter is already initialized in NewCodeGenerator.
 
@@ -46,7 +55,7 @@ func (g *CodeGenerator) initializeComponents(cfg *config.Config, typeInfos map[s
 	g.aliasManager = aliasManager
 
 	// 3. TypeFormatter depends on AliasManager and ImportManager.
-	g.typeFormatter = components.NewTypeFormatter(aliasManager, g.importManager.(*components.ImportManager))
+	g.typeFormatter = components.NewTypeFormatter(g.aliasManager, g.importManager, typeInfos)
 
 	// 4. ConversionEngine depends on several components.
 	g.conversionEngine = components.NewConversionEngine(
@@ -238,6 +247,8 @@ func deepCopyConfig(original *config.Config) *config.Config {
 		GenerationContext: original.GenerationContext,
 		PackagePairs:      make([]*config.PackagePair, len(original.PackagePairs)),
 		ConversionRules:   make([]*config.ConversionRule, 0, len(original.ConversionRules)),
+		PackageAliases:    make(map[string]string, len(original.PackageAliases)),    // Deep copy PackageAliases
+		CustomFunctionRules: make(map[string]string, len(original.CustomFunctionRules)), // Deep copy CustomFunctionRules
 	}
 
 	for i, pair := range original.PackagePairs {
@@ -266,6 +277,16 @@ func deepCopyConfig(original *config.Config) *config.Config {
 			}
 			cpy.ConversionRules = append(cpy.ConversionRules, ruleCopy)
 		}
+	}
+
+	// Deep copy PackageAliases
+	for k, v := range original.PackageAliases {
+		cpy.PackageAliases[k] = v
+	}
+
+	// Deep copy CustomFunctionRules
+	for k, v := range original.CustomFunctionRules {
+		cpy.CustomFunctionRules[k] = v
 	}
 
 	return cpy
@@ -302,27 +323,21 @@ func (g *CodeGenerator) generateMainCode(typeInfos map[string]*model.TypeInfo, r
 }
 
 // prepareAliasesForRender creates the list of aliases to be rendered in the final code.
-// It is the new home for the logic that was previously in AliasManager.GetAliasesToRender.
 func (g *CodeGenerator) prepareAliasesForRender(typeInfos map[string]*model.TypeInfo) []*model.AliasRenderInfo {
 	var renderInfos []*model.AliasRenderInfo
 	allAliases := g.aliasManager.GetAllAliases()
 
 	for uniqueKey, alias := range allAliases {
-		typeInfo := typeInfos[uniqueKey]
-		if typeInfo == nil {
-			continue
-		}
-
-		// Use the TypeFormatter to get the full, correct original type name.
 		var originalTypeName string
-		if typeInfo.Original != nil {
-			originalTypeName = g.typeFormatter.Format(typeInfo.Original.Type())
+		if typeInfo, ok := typeInfos[uniqueKey]; ok && typeInfo.Original != nil {
+			originalTypeName = g.typeFormatter.FormatWithoutAlias(typeInfo.Original.Type())
 		} else {
-			// Fallback to a simple name representation
-			originalTypeName = typeInfo.Name
-			if typeInfo.ImportPath != "" {
-				originalTypeName = typeInfo.ImportPath + "." + typeInfo.Name
+			// This is a workaround for composite types not in typeInfos
+			tempName := uniqueKey
+			for pkgPath, pkgAlias := range g.importManager.GetAllImports() {
+				tempName = strings.Replace(tempName, pkgPath, pkgAlias, -1)
 			}
+			originalTypeName = tempName
 		}
 
 		renderInfos = append(renderInfos, &model.AliasRenderInfo{
@@ -331,7 +346,6 @@ func (g *CodeGenerator) prepareAliasesForRender(typeInfos map[string]*model.Type
 		})
 	}
 
-	// Sort for consistent output
 	sort.Slice(renderInfos, func(i, j int) bool {
 		return renderInfos[i].AliasName < renderInfos[j].AliasName
 	})
@@ -343,65 +357,64 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 	var conversionFuncs []string
 	requiredHelpers := make(map[string]struct{})
 	generatedFunctions := make(map[string]bool)
+	worklist := make([]*model.ConversionTask, 0)
 
-	sort.Slice(rules, func(i, j int) bool { return rules[i].SourceType < rules[j].SourceType })
-
+	// Initial population of the worklist from the rules
 	for _, rule := range rules {
 		sourceInfo := typeInfos[rule.SourceType]
 		targetInfo := typeInfos[rule.TargetType]
-		if sourceInfo == nil || targetInfo == nil {
-			slog.Warn("Skipping rule due to missing type info", "source", rule.SourceType, "target", rule.TargetType)
-			continue
-		}
-		g.generateAndCollect(sourceInfo, targetInfo, rule, &conversionFuncs, requiredHelpers, generatedFunctions)
-
-		if rule.Direction == config.DirectionBoth {
-			reverseRule := &config.ConversionRule{
-				SourceType: targetInfo.FQN(),
-				TargetType: sourceInfo.FQN(),
-				Direction:  config.DirectionOneway,
-				FieldRules: config.FieldRuleSet{Ignore: make(map[string]struct{}), Remap: make(map[string]string)},
+		if sourceInfo != nil && targetInfo != nil {
+			worklist = append(worklist, &model.ConversionTask{Source: sourceInfo, Target: targetInfo, Rule: rule})
+			if rule.Direction == config.DirectionBoth {
+				reverseRule := &config.ConversionRule{
+					SourceType: targetInfo.FQN(),
+					TargetType: sourceInfo.FQN(),
+					Direction:  config.DirectionOneway,
+					FieldRules: config.FieldRuleSet{Ignore: make(map[string]struct{}), Remap: make(map[string]string)},
+				}
+				for from, to := range rule.FieldRules.Remap {
+					reverseRule.FieldRules.Remap[to] = from
+				}
+				worklist = append(worklist, &model.ConversionTask{Source: targetInfo, Target: sourceInfo, Rule: reverseRule})
 			}
-			for from, to := range rule.FieldRules.Remap {
-				reverseRule.FieldRules.Remap[to] = from
-			}
-g.generateAndCollect(targetInfo, sourceInfo, reverseRule, &conversionFuncs, requiredHelpers, generatedFunctions)
 		}
 	}
 
+	for len(worklist) > 0 {
+		task := worklist[0]
+		worklist = worklist[1:]
+
+		funcName := g.nameGenerator.ConversionFunctionName(task.Source, task.Target)
+		if generatedFunctions[funcName] {
+			continue
+		}
+
+		generated, newTasks, err := g.conversionEngine.GenerateConversionFunction(task.Source, task.Target, task.Rule)
+		if err != nil {
+			slog.Warn("Error generating conversion function", "source", task.Source.FQN(), "target", task.Target.FQN(), "error", err)
+			continue
+		}
+
+		if generated != nil {
+			conversionFuncs = append(conversionFuncs, generated.FunctionBody)
+			generatedFunctions[funcName] = true
+			for _, helper := range generated.RequiredHelpers {
+				requiredHelpers[helper] = struct{}{}
+			}
+			// Add newly discovered tasks to the worklist
+			for _, newTask := range newTasks {
+				newFuncName := g.nameGenerator.ConversionFunctionName(newTask.Source, newTask.Target)
+				if !generatedFunctions[newFuncName] {
+					worklist = append(worklist, newTask)
+				}
+			}
+		}
+	}
+
+	sort.Strings(conversionFuncs)
 	return conversionFuncs, requiredHelpers, nil
 }
 
-func (g *CodeGenerator) generateAndCollect(
-	sourceInfo, targetInfo *model.TypeInfo,
-	rule *config.ConversionRule,
-	funcs *[]string,
-	helpers map[string]struct{},
-	generatedFunctions map[string]bool,
-) {
-	var generated *model.GeneratedCode
-	var err error
-
-	// Note: The logic for slice conversion inside conversionEngine was simplified.
-	// We now always pass a rule to GenerateConversionFunction, which handles both struct and slice cases.
-	generated, err = g.conversionEngine.GenerateConversionFunction(sourceInfo, targetInfo, rule)
-
-	if err != nil {
-		slog.Warn("Error generating conversion function", "source", sourceInfo.FQN(), "target", targetInfo.FQN(), "error", err)
-		return
-	}
-
-	if generated != nil {
-		funcName := extractFunctionName(generated.FunctionBody)
-		if funcName != "" && !generatedFunctions[funcName] {
-			*funcs = append(*funcs, generated.FunctionBody)
-			generatedFunctions[funcName] = true
-			for _, helper := range generated.RequiredHelpers {
-				helpers[helper] = struct{}{}
-			}
-		}
-	}
-}
 
 func extractFunctionName(functionBody string) string {
 	lines := strings.Split(functionBody, "\n")

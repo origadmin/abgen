@@ -148,7 +148,7 @@ func (p *Parser) parsePackagePath(value string) {
 		alias = path[strings.LastIndex(path, "/")+1:]
 	}
 	p.config.PackageAliases[alias] = path
-	slog.Debug("Registered package alias", "alias", alias, "path", path)
+	slog.Debug("Parser.parsePackagePath after processing", "alias", alias, "path", path, "allPackageAliases", p.config.PackageAliases)
 }
 
 func (p *Parser) resolvePackagePath(identifier string) string {
@@ -203,7 +203,7 @@ func (p *Parser) parseConvertRule(value string) {
 				rule.FieldRules.Ignore[field] = struct{}{}
 			}
 		case "remap":
-			for _, remapPair := range strings.Split(val, ";") {
+			for _, remapPair := range strings.Split(val, ";") { // Corrected line
 				fromTo := strings.SplitN(remapPair, ":", 2)
 				if len(fromTo) == 2 {
 					rule.FieldRules.Remap[fromTo[0]] = fromTo[1]
