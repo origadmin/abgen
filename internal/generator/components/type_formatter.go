@@ -72,8 +72,9 @@ func (f *TypeFormatter) formatTypeInfo(info *model.TypeInfo, checkAlias bool) st
 		}
 		return info.TypeString() // Fallback
 	case model.Struct:
-		// This case is for anonymous structs, which are rare in this context.
-		// Named structs are handled by model.Named.
+		if info.Name != "" {
+			return f.qualifiedNameFromInfo(info)
+		}
 		return "struct{}"
 	default:
 		// Fallback for types not explicitly handled (e.g., Chan, Func, etc.)
