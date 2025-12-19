@@ -97,11 +97,6 @@ func NewLegacyGenerator(config *config.Config) *LegacyGenerator {
 	return g
 }
 
-// NewUnifiedGenerator 创建使用新架构的生成器
-func NewUnifiedGenerator(config *config.Config, typeInfos map[string]*model.TypeInfo) model.CodeGenerator {
-	return NewCodeGenerator(config, typeInfos)
-}
-
 func (g *LegacyGenerator) Generate(typeInfos map[string]*model.TypeInfo) ([]byte, error) {
 	g.typeInfos = typeInfos
 	slog.Debug("Generating code", "type_count", len(g.typeInfos), "initial_rules", len(g.config.ConversionRules))
@@ -610,7 +605,7 @@ func (g *LegacyGenerator) generateStructToStructConversion(sourceInfo, targetInf
 	// Write temporary variable declarations
 	if len(tempVarDecls) > 0 {
 		for _, decl := range tempVarDecls {
-g.buf.WriteString(decl)
+			g.buf.WriteString(decl)
 		}
 		g.buf.WriteString("\n") // Add a newline for separation
 	}
@@ -859,7 +854,7 @@ func (g *LegacyGenerator) populateAliases() {
 		// 确保基础类型有别名
 		g.ensureTypeAlias(sourceInfo, true)
 		g.ensureTypeAlias(targetInfo, false)
-		
+
 		// 新增：自动分析结构体字段并预测需要生成的转换方法
 		g.ensureFieldTypeAliases(sourceInfo, true)
 		g.ensureFieldTypeAliases(targetInfo, false)

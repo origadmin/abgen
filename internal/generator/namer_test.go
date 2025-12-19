@@ -401,7 +401,7 @@ func TestAliasManager_PointerSliceAliasGeneration(t *testing.T) {
 				TargetType: "target.ContainerPP",
 			},
 			{
-				SourceType: "source.ContainerPV2", 
+				SourceType: "source.ContainerPV2",
 				TargetType: "target.ContainerPV2",
 			},
 		},
@@ -437,14 +437,15 @@ func TestAliasManager_PointerSliceAliasGeneration(t *testing.T) {
 			},
 		},
 		// 添加指针类型切片到typeInfos映射中
-		sliceOfPointerToUserPP.UniqueKey(): sliceOfPointerToUserPP,
+		sliceOfPointerToUserPP.UniqueKey():  sliceOfPointerToUserPP,
 		sliceOfPointerToUserPV2.UniqueKey(): sliceOfPointerToUserPV2,
 	}
 
 	// Create alias manager
-	nameGenerator := NewNamer(config, make(map[string]string))
 	importManager := &mockImportManager{}
-	aliasManager := components.NewAliasManager(config, nameGenerator, importManager, typeInfos)
+	nameGenerator := components.NewNameGenerator(config, importManager)
+
+	aliasManager := components.NewAliasManager(config, importManager, nameGenerator, typeInfos)
 
 	// Populate aliases
 	aliasManager.PopulateAliases()
@@ -474,14 +475,18 @@ func TestAliasManager_PointerSliceAliasGeneration(t *testing.T) {
 // Mock import manager for testing
 type mockImportManager struct{}
 
+func (m *mockImportManager) AddAs(pkgPath, alias string) string {
+	return ""
+}
+
+func (m *mockImportManager) GetAllImports() map[string]string {
+	return map[string]string{}
+}
+
 func (m *mockImportManager) Add(importPath string) string {
 	return ""
 }
 
-func (m *mockImportManager) GetAlias(importPath string) string {
-	return ""
-}
-
-func (m *mockImportManager) GetAllImports() []string {
-	return nil
+func (m *mockImportManager) GetAlias(pkgPath string) (string, bool) {
+	return "", false
 }

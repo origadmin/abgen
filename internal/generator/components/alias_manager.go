@@ -1,7 +1,6 @@
 package components
 
 import (
-	"fmt"
 	"log/slog"
 	"regexp"
 	"sort"

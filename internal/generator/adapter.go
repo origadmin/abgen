@@ -8,31 +8,24 @@ import (
 	"github.com/origadmin/abgen/internal/model"
 )
 
-// LegacyGeneratorAdapter 适配器，让旧的 Generator 接口可以访问新组件的功能
+// LegacyGeneratorAdapter adapts the new CodeGenerator to the old generator interface for compatibility.
 type LegacyGeneratorAdapter struct {
 	orchestrator model.CodeGenerator
 	config       *config.Config
 }
 
-// NewLegacyGeneratorAdapter 创建旧的生成器适配器
-func NewLegacyGeneratorAdapter(config *config.Config, typeInfos map[string]*model.TypeInfo) *LegacyGeneratorAdapter {
+// NewLegacyGeneratorAdapter creates an adapter for the legacy generator.
+func NewLegacyGeneratorAdapter(config *config.Config) *LegacyGeneratorAdapter {
 	return &LegacyGeneratorAdapter{
-		orchestrator: NewCodeGenerator(config, typeInfos),
+		orchestrator: NewCodeGenerator(), // Updated: No arguments
 		config:       config,
 	}
 }
 
-// Generate 使用新架构生成代码，但返回旧的格式
+// Generate uses the new architecture to generate code but conforms to an older signature.
 func (l *LegacyGeneratorAdapter) Generate(typeInfos map[string]*model.TypeInfo) ([]byte, error) {
-	request := &model.GenerationRequest{
-		Context: &model.GenerationContext{
-			Config:           l.config,
-			TypeInfos:        typeInfos,
-			InvolvedPackages: make(map[string]struct{}),
-		},
-	}
-
-	response, err := l.orchestrator.Generate(request)
+	// Updated: Call the new Generate method directly.
+	response, err := l.orchestrator.Generate(l.config, typeInfos)
 	if err != nil {
 		return nil, err
 	}
@@ -40,39 +33,42 @@ func (l *LegacyGeneratorAdapter) Generate(typeInfos map[string]*model.TypeInfo) 
 	return response.GeneratedCode, nil
 }
 
-// GetComponentFactory 创建组件工厂，用于测试和特定场景
+// ComponentFactory is a helper for creating individual components for testing.
 type ComponentFactory struct{}
 
-// NewComponentFactory 创建组件工厂
+// NewComponentFactory creates a new component factory.
 func NewComponentFactory() *ComponentFactory {
 	return &ComponentFactory{}
 }
 
-// CreateTypeConverter 创建类型转换器组件
+// CreateTypeConverter creates a type converter component.
 func (f *ComponentFactory) CreateTypeConverter() model.TypeConverter {
 	return components.NewTypeConverter()
 }
 
-// CreateImportManager 创建导入管理器组件
+// CreateImportManager creates an import manager component.
 func (f *ComponentFactory) CreateImportManager() model.ImportManager {
 	return components.NewImportManager()
 }
 
-// CreateNameGenerator 创建命名生成器组件
-func (f *ComponentFactory) CreateNameGenerator(config *config.Config, aliasMap map[string]string) model.NameGenerator {
-	return components.NewNameGenerator(config, aliasMap)
+// CreateNameGenerator creates a name generator component.
+func (f *ComponentFactory) CreateNameGenerator(config *config.Config, importManager model.ImportManager) model.NameGenerator {
+	// Updated: Correct signature.
+	return components.NewNameGenerator(config, importManager)
 }
 
-// CreateAliasManager 创建别名管理器组件
+// CreateAliasManager creates an alias manager component.
 func (f *ComponentFactory) CreateAliasManager(
 	config *config.Config,
+	importManager model.ImportManager,
 	nameGenerator model.NameGenerator,
 	typeInfos map[string]*model.TypeInfo,
 ) model.AliasManager {
-	return components.NewAliasManager(config, nameGenerator, components.NewImportManager(), typeInfos)
+	// Updated: Correct signature.
+	return components.NewAliasManager(config, importManager, nameGenerator, typeInfos)
 }
 
-// CreateConversionEngine 创建转换引擎组件
+// CreateConversionEngine creates a conversion engine component.
 func (f *ComponentFactory) CreateConversionEngine(
 	typeConverter model.TypeConverter,
 	nameGenerator model.NameGenerator,
@@ -82,7 +78,7 @@ func (f *ComponentFactory) CreateConversionEngine(
 	return components.NewConversionEngine(typeConverter, nameGenerator, aliasManager, importManager)
 }
 
-// CreateCodeEmitter 创建代码发射器组件
+// CreateCodeEmitter creates a code emitter component.
 func (f *ComponentFactory) CreateCodeEmitter(
 	config *config.Config,
 	importManager model.ImportManager,
@@ -91,57 +87,41 @@ func (f *ComponentFactory) CreateCodeEmitter(
 	return components.NewCodeEmitter(config, importManager, aliasManager)
 }
 
-// CreateCodeGenerator 创建协调器组件
-func (f *ComponentFactory) CreateCodeGenerator(config *config.Config, typeInfos map[string]*model.TypeInfo) model.CodeGenerator {
-	return NewCodeGenerator(config, typeInfos)
+// CreateCodeGenerator creates a code generator component.
+func (f *ComponentFactory) CreateCodeGenerator() model.CodeGenerator {
+	// Updated: No arguments.
+	return NewCodeGenerator()
 }
 
-// MigrationHelper 迁移助手，帮助从旧架构迁移到新架构
+// MigrationHelper helps migrate from the old architecture to the new one.
 type MigrationHelper struct{}
 
-// NewMigrationHelper 创建迁移助手
+// NewMigrationHelper creates a new migration helper.
 func NewMigrationHelper() *MigrationHelper {
 	return &MigrationHelper{}
 }
 
-// MigrateOldGenerator 迁移旧的生成器到新架构
+// MigrateOldGenerator migrates an old generator to the new architecture.
 func (m *MigrationHelper) MigrateOldGenerator(oldGen *LegacyGenerator) model.CodeGenerator {
 	if oldGen == nil {
 		return nil
 	}
 
-	// 创建新的组件
 	factory := NewComponentFactory()
+	orchestrator := factory.CreateCodeGenerator()
 
-	// 创建别名映射
-	aliasMap := make(map[string]string)
-	for k, v := range oldGen.aliasMap {
-		aliasMap[k] = v
-	}
-
-	// 创建协调器
-	orchestrator := factory.CreateCodeGenerator(oldGen.config, oldGen.typeInfos)
-
-	// 记录迁移信息
 	fmt.Printf("Migrated old Generator to new orchestrator-based architecture\n")
 
 	return orchestrator
 }
 
-// ValidateMigration 验证迁移是否成功
+// ValidateMigration validates if the migration was successful.
 func (m *MigrationHelper) ValidateMigration(oldGen *LegacyGenerator, newGen model.CodeGenerator) error {
 	if oldGen == nil && newGen == nil {
 		return fmt.Errorf("both generators are nil")
 	}
-
-	if oldGen == nil && newGen != nil {
-		return nil // 这是有效的，创建了新的生成器
-	}
-
 	if newGen == nil {
 		return fmt.Errorf("new generator is nil")
 	}
-
-	// 这里可以添加更多的验证逻辑
 	return nil
 }

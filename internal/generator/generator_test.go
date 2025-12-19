@@ -12,7 +12,6 @@ import (
 
 	"github.com/origadmin/abgen/internal/analyzer"
 	"github.com/origadmin/abgen/internal/config"
-	"github.com/origadmin/abgen/internal/model"
 )
 
 func init() {
@@ -430,14 +429,8 @@ func TestLegacyGenerator_Generate(t *testing.T) {
 				t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed: %v", err)
 			}
 
-			genContext := &model.GenerationContext{
-				Config:           cfg,
-				TypeInfos:        typeInfos,
-				InvolvedPackages: make(map[string]struct{}),
-			}
-			g := NewCodeGenerator(cfg, typeInfos)
-			request := &model.GenerationRequest{Context: genContext}
-			response, err := g.Generate(request)
+			g := NewCodeGenerator()
+			response, err := g.Generate(cfg, typeInfos)
 			if err != nil {
 				t.Fatalf("Generate() failed for test case %s: %v", tc.name, err)
 			}
@@ -557,29 +550,15 @@ func TestOrchestratorBasicFunctionality(t *testing.T) {
 	}
 
 	t.Run("Create_CodeGenerator", func(t *testing.T) {
-		orchestrator := NewCodeGenerator(cfg, typeInfos)
+		orchestrator := NewCodeGenerator()
 		if orchestrator == nil {
 			t.Fatal("Failed to create orchestrator")
-		}
-		if o, ok := orchestrator.(*CodeGenerator); ok {
-			retrievedConfig := o.GetConfig()
-			if retrievedConfig == nil {
-				t.Fatal("Failed to retrieve config from orchestrator")
-			}
 		}
 	})
 
 	t.Run("Generate_Code", func(t *testing.T) {
-		orchestrator := NewCodeGenerator(cfg, typeInfos)
-		genContext := &model.GenerationContext{
-			Config:           cfg,
-			TypeInfos:        typeInfos,
-			InvolvedPackages: make(map[string]struct{}),
-		}
-		request := &model.GenerationRequest{
-			Context: genContext,
-		}
-		response, err := orchestrator.Generate(request)
+		orchestrator := NewCodeGenerator()
+		response, err := orchestrator.Generate(cfg, typeInfos)
 		if err != nil {
 			t.Fatalf("Generation failed: %v", err)
 		}
@@ -733,17 +712,8 @@ func TestCodeGenerator_Generate(t *testing.T) {
 				t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed: %v", err)
 			}
 
-			genContext := &model.GenerationContext{
-				Config:           cfg,
-				TypeInfos:        typeInfos,
-				InvolvedPackages: make(map[string]struct{}),
-			}
-
-			orchestrator := NewCodeGenerator(cfg, typeInfos)
-			request := &model.GenerationRequest{
-				Context: genContext,
-			}
-			response, err := orchestrator.Generate(request)
+			orchestrator := NewCodeGenerator()
+			response, err := orchestrator.Generate(cfg, typeInfos)
 			if err != nil {
 				t.Fatalf("Generate() failed for test case %s: %v", tc.name, err)
 			}
@@ -867,16 +837,8 @@ func TestArchitecturalCompatibility(t *testing.T) {
 				t.Fatalf("OLD architecture failed: %v", err)
 			}
 
-			genContext := &model.GenerationContext{
-				Config:           cfg,
-				TypeInfos:        typeInfos,
-				InvolvedPackages: make(map[string]struct{}),
-			}
-			orchestrator := NewCodeGenerator(cfg, typeInfos)
-			request := &model.GenerationRequest{
-				Context: genContext,
-			}
-			response, err := orchestrator.Generate(request)
+			orchestrator := NewCodeGenerator()
+			response, err := orchestrator.Generate(cfg, typeInfos)
 			if err != nil {
 				t.Fatalf("NEW architecture failed: %v", err)
 			}
@@ -923,71 +885,19 @@ func TestNewArchitectureComponents(t *testing.T) {
 	}
 
 	t.Run("CodeGenerator_Creation", func(t *testing.T) {
-		orchestrator := NewCodeGenerator(cfg, typeInfos)
+		orchestrator := NewCodeGenerator()
 		if orchestrator == nil {
 			t.Fatal("Failed to create orchestrator")
-		}
-		if o, ok := orchestrator.(*CodeGenerator); ok {
-			config := o.GetConfig()
-			if config == nil {
-				t.Fatal("Failed to get config from orchestrator")
-			}
-		}
-	})
-
-	t.Run("Generation_Context", func(t *testing.T) {
-		genContext := &model.GenerationContext{
-			Config:           cfg,
-			TypeInfos:        typeInfos,
-			InvolvedPackages: make(map[string]struct{}),
-		}
-		if genContext.Config == nil {
-			t.Fatal("Config is nil in generation context")
-		}
-		if len(genContext.TypeInfos) == 0 {
-			t.Fatal("TypeInfos is empty in generation context")
-		}
-		if genContext.InvolvedPackages == nil {
-			t.Fatal("InvolvedPackages is nil in generation context")
-		}
-	})
-
-	t.Run("Generation_Request_Response", func(t *testing.T) {
-		genContext := &model.GenerationContext{
-			Config:           cfg,
-			TypeInfos:        typeInfos,
-			InvolvedPackages: make(map[string]struct{}),
-		}
-		request := &model.GenerationRequest{
-			Context: genContext,
-		}
-		if request.Context == nil {
-			t.Fatal("Context is nil in generation request")
-		}
-		response := &model.GenerationResponse{
-			GeneratedCode:    []byte("test code"),
-			CustomStubs:      []byte("test stubs"),
-			RequiredPackages: []string{"test/package"},
-		}
-		if len(response.GeneratedCode) == 0 {
-			t.Fatal("GeneratedCode is empty in response")
-		}
-		if len(response.RequiredPackages) == 0 {
-			t.Fatal("RequiredPackages is empty in response")
 		}
 	})
 
 	t.Run("End_to_End_Generation", func(t *testing.T) {
-		genContext := &model.GenerationContext{
-			Config:           cfg,
-			TypeInfos:        typeInfos,
-			InvolvedPackages: make(map[string]struct{}),
+		orchestrator := NewCodeGenerator()
+		gen, ok := orchestrator.(*CodeGenerator)
+		if !ok {
+			t.Fatalf("Orchestrator is not a CodeGenerator")
 		}
-		orchestrator := NewCodeGenerator(cfg, typeInfos)
-		request := &model.GenerationRequest{
-			Context: genContext,
-		}
-		response, err := orchestrator.Generate(request)
+		response, err := gen.Generate(cfg, typeInfos)
 		if err != nil {
 			t.Fatalf("Generation failed: %v", err)
 		}

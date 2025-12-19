@@ -13,7 +13,7 @@ import (
 	"github.com/origadmin/abgen/internal/model"
 )
 
-// CodeGenerator is the main generator that orchestrates all generator components.
+// CodeGenerator orchestrates the entire code generation process.
 type CodeGenerator struct {
 	importManager    model.ImportManager
 	nameGenerator    model.NameGenerator
@@ -50,30 +50,10 @@ func (g *CodeGenerator) initializeComponents(cfg *config.Config, typeInfos map[s
 
 // Generate executes a complete code generation task.
 func (g *CodeGenerator) Generate(cfg *config.Config, typeInfos map[string]*model.TypeInfo) (*model.GenerationResponse, error) {
-	sessionConfig := deepCopyConfig(cfg)
-	g.initializeComponents(sessionConfig, typeInfos)
+	finalConfig, activeRules := g.prepareConfigForSession(cfg, typeInfos)
+	g.initializeComponents(finalConfig, typeInfos)
 
-	slog.Debug("Generating code with orchestrator",
-		"type_count", len(typeInfos),
-		"initial_rules", len(sessionConfig.ConversionRules))
-
-	activeRules := sessionConfig.ConversionRules
-	if len(activeRules) == 0 {
-		slog.Debug("No explicit conversion rules found, discovering implicit rules...")
-		discoveredRules := g.discoverImplicitRules(typeInfos, sessionConfig.PackagePairs)
-		activeRules = append(activeRules, discoveredRules...)
-		slog.Debug("Implicit rule discovery finished", "discovered_rules", len(discoveredRules))
-	}
-
-	if sessionConfig.NamingRules.SourcePrefix == "" && sessionConfig.NamingRules.SourceSuffix == "" &&
-		sessionConfig.NamingRules.TargetPrefix == "" && sessionConfig.NamingRules.TargetSuffix == "" {
-		if g.needsDisambiguation(activeRules) {
-			slog.Debug("Ambiguous type names found, applying default 'Source'/'Target' suffixes for this session.")
-			sessionConfig.NamingRules.SourceSuffix = "Source"
-			sessionConfig.NamingRules.TargetSuffix = "Target"
-			g.initializeComponents(sessionConfig, typeInfos)
-		}
-	}
+	slog.Debug("Components initialized with final configuration.")
 
 	g.aliasManager.PopulateAliases()
 
@@ -99,6 +79,148 @@ func (g *CodeGenerator) Generate(cfg *config.Config, typeInfos map[string]*model
 		CustomStubs:      customStubs,
 		RequiredPackages: requiredPackages,
 	}, nil
+}
+
+// prepareConfigForSession creates a finalized configuration for a single generation run.
+func (g *CodeGenerator) prepareConfigForSession(originalCfg *config.Config, typeInfos map[string]*model.TypeInfo) (*config.Config, []*config.ConversionRule) {
+	sessionConfig := deepCopyConfig(originalCfg)
+	slog.Debug("Preparing session configuration", "initial_rules", len(sessionConfig.ConversionRules))
+
+	var activeRules []*config.ConversionRule
+	if len(sessionConfig.ConversionRules) > 0 {
+		// If rules are explicitly defined, use them as the entry points.
+		activeRules = g.expandRulesByDependencyAnalysis(sessionConfig.ConversionRules, typeInfos)
+	} else {
+		// Otherwise, find seed rules from package pairs and then expand.
+		slog.Debug("No explicit conversion rules found, discovering seed rules from package pairs...")
+		seedRules := g.findSeedRules(typeInfos, sessionConfig.PackagePairs)
+		activeRules = g.expandRulesByDependencyAnalysis(seedRules, typeInfos)
+	}
+	slog.Debug("Rule expansion finished", "total_active_rules", len(activeRules))
+
+	if sessionConfig.NamingRules.SourcePrefix == "" && sessionConfig.NamingRules.SourceSuffix == "" &&
+		sessionConfig.NamingRules.TargetPrefix == "" && sessionConfig.NamingRules.TargetSuffix == "" {
+		if g.needsDisambiguation(activeRules) {
+			slog.Debug("Ambiguous type names found, applying default 'Source'/'Target' suffixes for this session.")
+			sessionConfig.NamingRules.SourceSuffix = "Source"
+			sessionConfig.NamingRules.TargetSuffix = "Target"
+		}
+	}
+
+	sessionConfig.ConversionRules = activeRules
+	return sessionConfig, activeRules
+}
+
+// expandRulesByDependencyAnalysis takes a set of entry-point rules and discovers all
+// transitive dependencies by analyzing struct fields.
+func (g *CodeGenerator) expandRulesByDependencyAnalysis(seedRules []*config.ConversionRule, typeInfos map[string]*model.TypeInfo) []*config.ConversionRule {
+	allKnownRules := make(map[string]*config.ConversionRule)
+	worklist := make([]*config.ConversionRule, 0, len(seedRules))
+
+	// Initialize with seed rules.
+	for _, rule := range seedRules {
+		key := fmt.Sprintf("%s->%s", rule.SourceType, rule.TargetType)
+		if _, exists := allKnownRules[key]; !exists {
+			allKnownRules[key] = rule
+			worklist = append(worklist, rule)
+		}
+	}
+
+	for len(worklist) > 0 {
+		rule := worklist[0]
+		worklist = worklist[1:]
+
+		sourceInfo := typeInfos[rule.SourceType]
+		targetInfo := typeInfos[rule.TargetType]
+
+		if sourceInfo == nil || targetInfo == nil || sourceInfo.Kind != model.Struct || targetInfo.Kind != model.Struct {
+			continue
+		}
+
+		// "Read the recipe": Analyze fields to find new required conversions.
+		for _, sourceField := range sourceInfo.Fields {
+			targetFieldName := sourceField.Name
+			if remappedName, ok := rule.FieldRules.Remap[sourceField.Name]; ok {
+				targetFieldName = remappedName
+			}
+
+			var targetField *model.FieldInfo
+			for _, tf := range targetInfo.Fields {
+				if tf.Name == targetFieldName {
+					targetField = tf
+					break
+				}
+			}
+
+			if targetField == nil {
+				continue
+			}
+
+			// We found a pair of fields that need conversion.
+			// Get their base element types (e.g., Book from []*Book).
+			baseSourceType := g.typeConverter.GetElementType(sourceField.Type)
+			baseTargetType := g.typeConverter.GetElementType(targetField.Type)
+
+			if baseSourceType == nil || baseTargetType == nil || baseSourceType.UniqueKey() == baseTargetType.UniqueKey() {
+				continue
+			}
+
+			// Discovered a new dependency!
+			newRule := &config.ConversionRule{
+				SourceType: baseSourceType.UniqueKey(),
+				TargetType: baseTargetType.UniqueKey(),
+				Direction:  config.DirectionBoth, // Assume bidirectional for newly discovered rules.
+			}
+
+			key := fmt.Sprintf("%s->%s", newRule.SourceType, newRule.TargetType)
+			if _, exists := allKnownRules[key]; !exists {
+				allKnownRules[key] = newRule
+				worklist = append(worklist, newRule)
+				slog.Debug("Discovered new dependency rule", "source", newRule.SourceType, "target", newRule.TargetType)
+			}
+		}
+	}
+
+	finalRules := make([]*config.ConversionRule, 0, len(allKnownRules))
+	for _, rule := range allKnownRules {
+		finalRules = append(finalRules, rule)
+	}
+	sort.Slice(finalRules, func(i, j int) bool {
+		return finalRules[i].SourceType < finalRules[j].SourceType
+	})
+	return finalRules
+}
+
+// findSeedRules finds the initial set of conversion rules based on matching type names.
+func (g *CodeGenerator) findSeedRules(typeInfos map[string]*model.TypeInfo, packagePairs []*config.PackagePair) []*config.ConversionRule {
+	var seedRules []*config.ConversionRule
+	typesByPackage := make(map[string][]*model.TypeInfo)
+	for _, info := range typeInfos {
+		if info.IsNamedType() {
+			typesByPackage[info.ImportPath] = append(typesByPackage[info.ImportPath], info)
+		}
+	}
+
+	for _, pair := range packagePairs {
+		sourceTypes := typesByPackage[pair.SourcePath]
+		targetTypes := typesByPackage[pair.TargetPath]
+		targetMap := make(map[string]*model.TypeInfo)
+		for _, tt := range targetTypes {
+			targetMap[tt.Name] = tt
+		}
+
+		for _, sourceType := range sourceTypes {
+			if targetType, ok := targetMap[sourceType.Name]; ok {
+				rule := &config.ConversionRule{
+					SourceType: sourceType.UniqueKey(),
+					TargetType: targetType.UniqueKey(),
+					Direction:  config.DirectionBoth,
+				}
+				seedRules = append(seedRules, rule)
+			}
+		}
+	}
+	return seedRules
 }
 
 func deepCopyConfig(original *config.Config) *config.Config {
@@ -158,7 +280,6 @@ func (g *CodeGenerator) generateMainCode(typeInfos map[string]*model.TypeInfo, r
 	if err := g.codeEmitter.EmitImports(finalBuf, g.importManager.GetAllImports()); err != nil {
 		return nil, err
 	}
-	// Pass the rendered aliases to the emitter.
 	if err := g.codeEmitter.EmitAliases(finalBuf, g.aliasManager.GetAliasesToRender()); err != nil {
 		return nil, err
 	}
@@ -183,6 +304,7 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 		sourceInfo := typeInfos[rule.SourceType]
 		targetInfo := typeInfos[rule.TargetType]
 		if sourceInfo == nil || targetInfo == nil {
+			slog.Warn("Skipping rule due to missing type info", "source", rule.SourceType, "target", rule.TargetType)
 			continue
 		}
 		g.generateAndCollect(sourceInfo, targetInfo, rule, &conversionFuncs, requiredHelpers, generatedFunctions)
@@ -252,81 +374,6 @@ func extractFunctionName(functionBody string) string {
 
 func (g *CodeGenerator) generateCustomStubs() ([]byte, error) {
 	return nil, nil
-}
-
-func (g *CodeGenerator) discoverImplicitRules(typeInfos map[string]*model.TypeInfo, packagePairs []*config.PackagePair) []*config.ConversionRule {
-	typesByPackage := make(map[string][]*model.TypeInfo)
-	for _, info := range typeInfos {
-		if info.IsNamedType() {
-			typesByPackage[info.ImportPath] = append(typesByPackage[info.ImportPath], info)
-		}
-	}
-
-	var discoveredRules []*config.ConversionRule
-	for _, pair := range packagePairs {
-		if pair == nil {
-			continue
-		}
-		sourceTypes := typesByPackage[pair.SourcePath]
-		targetTypes := typesByPackage[pair.TargetPath]
-		targetMap := make(map[string]*model.TypeInfo)
-		for _, tt := range targetTypes {
-			targetMap[tt.Name] = tt
-		}
-
-		for _, sourceType := range sourceTypes {
-			if targetType, ok := targetMap[sourceType.Name]; ok {
-				rule := &config.ConversionRule{
-					SourceType: sourceType.UniqueKey(),
-					TargetType: targetType.UniqueKey(),
-					Direction:  config.DirectionBoth,
-				}
-				discoveredRules = append(discoveredRules, rule)
-			}
-		}
-	}
-
-	var sliceRules []*config.ConversionRule
-	for _, rule := range discoveredRules {
-		sourceInfo, okS := typeInfos[rule.SourceType]
-		targetInfo, okT := typeInfos[rule.TargetType]
-		if !okS || !okT {
-			continue
-		}
-
-		sourceSliceType := &model.TypeInfo{Kind: model.Slice, Underlying: sourceInfo}
-		targetSliceType := &model.TypeInfo{Kind: model.Slice, Underlying: targetInfo}
-		sliceRules = append(sliceRules, &config.ConversionRule{
-			SourceType: sourceSliceType.UniqueKey(),
-			TargetType: targetSliceType.UniqueKey(),
-			Direction:  rule.Direction,
-		})
-
-		sourcePtrType := &model.TypeInfo{Kind: model.Pointer, Underlying: sourceInfo}
-		targetPtrType := &model.TypeInfo{Kind: model.Pointer, Underlying: targetInfo}
-		sourcePtrSliceType := &model.TypeInfo{Kind: model.Slice, Underlying: sourcePtrType}
-		targetPtrSliceType := &model.TypeInfo{Kind: model.Slice, Underlying: targetPtrType}
-		sliceRules = append(sliceRules, &config.ConversionRule{
-			SourceType: sourcePtrSliceType.UniqueKey(),
-			TargetType: targetPtrSliceType.UniqueKey(),
-			Direction:  rule.Direction,
-		})
-	}
-
-	allDiscoveredRules := append(discoveredRules, sliceRules...)
-
-	uniqueRules := make(map[string]*config.ConversionRule)
-	for _, rule := range allDiscoveredRules {
-		key := fmt.Sprintf("%s->%s", rule.SourceType, rule.TargetType)
-		uniqueRules[key] = rule
-	}
-
-	finalRules := make([]*config.ConversionRule, 0, len(uniqueRules))
-	for _, rule := range uniqueRules {
-		finalRules = append(finalRules, rule)
-	}
-
-	return finalRules
 }
 
 func (g *CodeGenerator) needsDisambiguation(rules []*config.ConversionRule) bool {
