@@ -34,24 +34,42 @@ func NewConversionEngine(
 	}
 }
 
+// getTypeName intelligently selects the best name for a type in generated code.
+// It prioritizes a local alias if one exists, otherwise falls back to the
+// fully qualified name with a package qualifier.
+func (ce *ConversionEngine) getTypeName(info *model.TypeInfo, isSource bool) string {
+	var alias string
+	if isSource {
+		alias = ce.aliasManager.GetSourceAlias(info)
+	} else {
+		alias = ce.aliasManager.GetTargetAlias(info)
+	}
+
+	// If an alias exists and is not just the base name (for primitives), use it.
+	if alias != "" && (info.Kind != model.Primitive || alias != info.Name) {
+		return alias
+	}
+
+	// Fallback to the original name generator if no suitable alias is found.
+	return ce.nameGenerator.TypeName(info)
+}
+
 // GenerateConversionFunction generates a conversion function for structs or delegates to slice conversion.
 func (ce *ConversionEngine) GenerateConversionFunction(
 	sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule,
 ) (*model.GeneratedCode, error) {
-	// Delegate to slice conversion if both types are slices.
 	if ce.typeConverter.IsSlice(sourceInfo) && ce.typeConverter.IsSlice(targetInfo) {
 		return ce.GenerateSliceConversion(sourceInfo, targetInfo)
 	}
 
-	// Proceed with struct conversion only if both are structs.
 	if !ce.typeConverter.IsStruct(sourceInfo) || !ce.typeConverter.IsStruct(targetInfo) {
-		return nil, nil // Not a struct-to-struct or slice-to-slice conversion.
+		return nil, nil
 	}
 
 	var buf strings.Builder
 	funcName := ce.nameGenerator.ConversionFunctionName(sourceInfo, targetInfo)
-	sourceTypeStr := ce.nameGenerator.TypeName(sourceInfo)
-	targetTypeStr := ce.nameGenerator.TypeName(targetInfo)
+	sourceTypeStr := ce.getTypeName(sourceInfo, true)
+	targetTypeStr := ce.getTypeName(targetInfo, false)
 
 	buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceInfo.Name, targetInfo.Name))
 	buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, sourceTypeStr, targetTypeStr))
@@ -80,8 +98,8 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	sourceElem := ce.typeConverter.GetElementType(sourceInfo)
 	targetElem := ce.typeConverter.GetElementType(targetInfo)
 
-	sourceSliceStr := ce.nameGenerator.TypeName(sourceInfo)
-	targetSliceStr := ce.nameGenerator.TypeName(targetInfo)
+	sourceSliceStr := ce.getTypeName(sourceInfo, true)
+	targetSliceStr := ce.getTypeName(targetInfo, false)
 	funcName := ce.nameGenerator.ConversionFunctionName(sourceInfo, targetInfo)
 
 	slog.Debug("Generating slice conversion", "funcName", funcName, "source", sourceSliceStr, "target", targetSliceStr)
@@ -93,20 +111,16 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	buf.WriteString("\tfor i, f := range froms {\n")
 
 	elemFuncName := ce.nameGenerator.ConversionFunctionName(sourceElem, targetElem)
-	elementConversionExpr := elemFuncName + "(&f)" // Assuming element conversion takes a pointer
+	elementConversionExpr := elemFuncName + "(&f)"
 
-	// Handle pointer-to-value and value-to-pointer conversions for slice elements
 	sourceElemIsPointer := ce.typeConverter.IsPointer(sourceElem)
 	targetElemIsPointer := ce.typeConverter.IsPointer(targetElem)
 
 	if sourceElemIsPointer && !targetElemIsPointer {
-		// Dereference the result of the conversion function
 		elementConversionExpr = "*" + elemFuncName + "(f)"
 	} else if !sourceElemIsPointer && targetElemIsPointer {
-		// Standard case: conversion function returns a pointer
 		elementConversionExpr = elemFuncName + "(&f)"
 	} else {
-		// Pointer-to-pointer or value-to-value
 		elementConversionExpr = elemFuncName + "(f)"
 	}
 
@@ -126,14 +140,14 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 	var fieldAssignments []string
 	var allRequiredHelpers []string
 
-	targetTypeStr := ce.nameGenerator.TypeName(targetInfo)
+	targetTypeStr := ce.getTypeName(targetInfo, false)
 
 	for _, sourceField := range sourceInfo.Fields {
 		if _, shouldIgnore := rule.FieldRules.Ignore[sourceField.Name]; shouldIgnore {
 			continue
 		}
 		targetFieldName := sourceField.Name
-		if remappedName, shouldRemap := rule.FieldRules.Remap[sourceField.Name]; shouldRemap {
+		if remappedName, ok := rule.FieldRules.Remap[sourceField.Name]; ok {
 			targetFieldName = remappedName
 		}
 
@@ -170,12 +184,10 @@ func (ce *ConversionEngine) getConversionExpression(
 	targetType := targetField.Type
 	sourceFieldExpr := fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
 
-	// Case 1: Types are identical.
 	if sourceType.UniqueKey() == targetType.UniqueKey() {
 		return sourceFieldExpr, nil
 	}
 
-	// Case 2: Check for a built-in helper function (e.g., time.Time -> string).
 	helperKey, funcName := ce.findHelper(sourceType, targetType)
 	if funcName != "" {
 		slog.Debug("Found helper function", "key", helperKey, "funcName", funcName)
@@ -183,9 +195,7 @@ func (ce *ConversionEngine) getConversionExpression(
 		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), []string{funcName}
 	}
 
-	// Case 3: Fallback to a generated conversion function.
 	convFuncName := ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
-	// Handle pointer differences between source and target fields.
 	sourceIsPointer := ce.typeConverter.IsPointer(sourceType)
 	targetIsPointer := ce.typeConverter.IsPointer(targetType)
 
@@ -195,7 +205,6 @@ func (ce *ConversionEngine) getConversionExpression(
 	return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil
 }
 
-// findHelper looks for pre-defined conversion functions between common types.
 func (ce *ConversionEngine) findHelper(source, target *model.TypeInfo) (string, string) {
 	conversionMap := map[string]string{
 		"string->time.Time":                   "ConvertStringToTime",
@@ -212,7 +221,6 @@ func (ce *ConversionEngine) findHelper(source, target *model.TypeInfo) (string, 
 	return "", ""
 }
 
-// addRequiredImportsForHelper adds necessary imports for known helper functions.
 func (ce *ConversionEngine) addRequiredImportsForHelper(funcName string) {
 	if strings.Contains(funcName, "Time") {
 		ce.importManager.Add("time")

@@ -14,11 +14,10 @@ import (
 var _ model.AliasManager = (*AliasManager)(nil)
 
 // AliasManager implements the AliasManager interface.
-// It is responsible for creating and managing type aliases to avoid import conflicts.
 type AliasManager struct {
 	config        *config.Config
 	importManager model.ImportManager
-	nameGenerator model.NameGenerator // The new, clean name generator
+	typeConverter model.TypeConverter // Use TypeConverter to build original type names
 	aliasMap      map[string]string
 	typeInfos     map[string]*model.TypeInfo
 }
@@ -29,20 +28,19 @@ var camelCaseRegexp = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 func NewAliasManager(
 	config *config.Config,
 	importManager model.ImportManager,
-	nameGenerator model.NameGenerator,
+	typeConverter model.TypeConverter, // Changed dependency
 	typeInfos map[string]*model.TypeInfo,
 ) model.AliasManager {
 	return &AliasManager{
 		config:        config,
 		importManager: importManager,
-		nameGenerator: nameGenerator,
+		typeConverter: typeConverter,
 		aliasMap:      make(map[string]string),
 		typeInfos:     typeInfos,
 	}
 }
 
 // PopulateAliases is the main entry point for the alias manager.
-// It iterates through conversion rules and ensures all necessary types have aliases.
 func (am *AliasManager) PopulateAliases() {
 	slog.Debug("AliasManager: PopulateAliases started", "ruleCount", len(am.config.ConversionRules))
 
@@ -55,7 +53,6 @@ func (am *AliasManager) PopulateAliases() {
 			continue
 		}
 
-		// Ensure aliases are created for the source and target types and their fields.
 		am.ensureAliasesRecursively(sourceInfo, true)
 		am.ensureAliasesRecursively(targetInfo, false)
 	}
@@ -67,17 +64,14 @@ func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSou
 		return
 	}
 
-	// If an alias already exists, we assume its sub-types are also processed.
 	if _, exists := am.aliasMap[typeInfo.UniqueKey()]; exists {
 		return
 	}
 
-	// Generate and store the alias for the current type.
 	alias := am.generateAlias(typeInfo, isSource)
 	am.aliasMap[typeInfo.UniqueKey()] = alias
 	slog.Debug("AliasManager: created alias", "type", typeInfo.String(), "uniqueKey", typeInfo.UniqueKey(), "alias", alias, "isSource", isSource)
 
-	// Recursively process nested types within structs, slices, maps, etc.
 	switch typeInfo.Kind {
 	case model.Struct:
 		for _, field := range typeInfo.Fields {
@@ -92,7 +86,6 @@ func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSou
 }
 
 // generateAlias creates a new alias for a type based on naming rules.
-// This is where the core logic of naming aliases now resides.
 func (am *AliasManager) generateAlias(info *model.TypeInfo, isSource bool) string {
 	if info.Kind == model.Primitive {
 		return am.toCamelCase(info.Name)
@@ -102,7 +95,6 @@ func (am *AliasManager) generateAlias(info *model.TypeInfo, isSource bool) strin
 	rawBaseName := am.getRawTypeName(info)
 	processedBaseName := am.toCamelCase(rawBaseName)
 
-	// Add type indicators for container types.
 	switch info.Kind {
 	case model.Slice, model.Array:
 		processedBaseName += "s"
@@ -127,7 +119,6 @@ func (am *AliasManager) getRawTypeName(info *model.TypeInfo) string {
 	if info.Name != "" {
 		return info.Name
 	}
-	// Recursively find the name of the underlying type for containers.
 	switch info.Kind {
 	case model.Slice, model.Array, model.Pointer, model.Map:
 		return am.getRawTypeName(info.Underlying)
@@ -159,15 +150,16 @@ func (am *AliasManager) GetAliasesToRender() []*model.AliasRenderInfo {
 		if typeInfo == nil {
 			continue
 		}
-		// Use the new NameGenerator to get the full, correct original type name.
-		originalTypeName := am.nameGenerator.TypeName(typeInfo)
+		// Use TypeConverter to build the original type name for the alias declaration.
+		originalTypeName := am.typeConverter.Convert(typeInfo, func(pkgPath string) string {
+			return am.importManager.Add(pkgPath)
+		})
 		renderInfos = append(renderInfos, &model.AliasRenderInfo{
 			AliasName:        alias,
 			OriginalTypeName: originalTypeName,
 		})
 	}
 
-	// Sort for consistent output.
 	sort.Slice(renderInfos, func(i, j int) bool {
 		return renderInfos[i].AliasName < renderInfos[j].AliasName
 	})
@@ -175,13 +167,10 @@ func (am *AliasManager) GetAliasesToRender() []*model.AliasRenderInfo {
 	return renderInfos
 }
 
-// The following methods satisfy the model.AliasManager interface but are now backed by the new logic.
-
 func (am *AliasManager) GetSourceAlias(info *model.TypeInfo) string {
 	if alias, ok := am.aliasMap[info.UniqueKey()]; ok {
 		return alias
 	}
-	// Fallback if not populated, though it should be.
 	return am.generateAlias(info, true)
 }
 
@@ -189,7 +178,6 @@ func (am *AliasManager) GetTargetAlias(info *model.TypeInfo) string {
 	if alias, ok := am.aliasMap[info.UniqueKey()]; ok {
 		return alias
 	}
-	// Fallback if not populated.
 	return am.generateAlias(info, false)
 }
 

@@ -443,9 +443,9 @@ func TestAliasManager_PointerSliceAliasGeneration(t *testing.T) {
 
 	// Create alias manager
 	importManager := &mockImportManager{}
-	nameGenerator := components.NewNameGenerator(config, importManager)
+	typeConverter := components.NewTypeConverter()
 
-	aliasManager := components.NewAliasManager(config, importManager, nameGenerator, typeInfos)
+	aliasManager := components.NewAliasManager(config, importManager, typeConverter, typeInfos)
 
 	// Populate aliases
 	aliasManager.PopulateAliases()

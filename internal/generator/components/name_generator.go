@@ -9,14 +9,12 @@ import (
 )
 
 // NameGenerator implements the model.NameGenerator interface.
-// It relies on an ImportManager to get the correct package qualifiers for types.
 type NameGenerator struct {
 	importManager model.ImportManager
-	config        *config.Config // Keep config for naming rules if needed in the future
+	config        *config.Config
 }
 
 // NewNameGenerator creates a new name generator.
-// It requires an ImportManager to resolve package aliases correctly.
 func NewNameGenerator(cfg *config.Config, importManager model.ImportManager) model.NameGenerator {
 	return &NameGenerator{
 		config:        cfg,
@@ -25,7 +23,6 @@ func NewNameGenerator(cfg *config.Config, importManager model.ImportManager) mod
 }
 
 // TypeName returns the correct Go syntax for a given type, including its package qualifier.
-// It handles primitives, named types, pointers, slices, arrays, and maps.
 func (n *NameGenerator) TypeName(info *model.TypeInfo) string {
 	if info == nil {
 		return "nil"
@@ -38,6 +35,11 @@ func (n *NameGenerator) TypeName(info *model.TypeInfo) string {
 
 // buildTypeName is a recursive helper to construct the type string.
 func (n *NameGenerator) buildTypeName(sb *strings.Builder, info *model.TypeInfo) {
+	if info == nil {
+		sb.WriteString("interface{}")
+		return
+	}
+
 	switch info.Kind {
 	case model.Pointer:
 		sb.WriteString("*")
@@ -53,55 +55,57 @@ func (n *NameGenerator) buildTypeName(sb *strings.Builder, info *model.TypeInfo)
 		n.buildTypeName(sb, info.KeyType)
 		sb.WriteString("]")
 		n.buildTypeName(sb, info.Underlying)
-	case model.Named:
-		// For named types, get the package alias from the import manager.
-		if info.ImportPath != "" {
-			alias := n.importManager.Add(info.ImportPath)
-			if alias != "" {
-				sb.WriteString(alias)
-				sb.WriteString(".")
+	case model.Named, model.Struct:
+		if info.Name != "" {
+			if info.ImportPath != "" {
+				alias := n.importManager.Add(info.ImportPath)
+				if alias != "" {
+					sb.WriteString(alias)
+					sb.WriteString(".")
+				}
 			}
+			sb.WriteString(info.Name)
+		} else {
+			sb.WriteString("struct{}")
 		}
-		sb.WriteString(info.Name)
 	case model.Primitive:
 		sb.WriteString(info.Name)
 	case model.Interface:
-		// Assuming generic interface for now.
 		sb.WriteString("interface{}")
 	default:
-		// Fallback for unknown or unhandled types.
 		sb.WriteString("interface{}")
 	}
 }
 
-// ConversionFunctionName returns a standardized name for a function that converts from a source to a target type.
-// It creates a name like 'ConvertUserSourceToUserTarget'.
+// ConversionFunctionName returns a standardized name for a conversion function.
 func (n *NameGenerator) ConversionFunctionName(source, target *model.TypeInfo) string {
-	// To create a clean function name, we use the type's base name without package qualifiers.
-	// We also handle composite types to make the name readable.
 	sourceName := n.getCleanBaseName(source)
 	targetName := n.getCleanBaseName(target)
 	return fmt.Sprintf("Convert%sTo%s", sourceName, targetName)
 }
 
-// getCleanBaseName recursively finds the base name of a type and makes it suitable for a function name.
+// getCleanBaseName recursively finds the base name of a type for use in function names.
 func (n *NameGenerator) getCleanBaseName(info *model.TypeInfo) string {
 	if info == nil {
 		return ""
 	}
-
 	switch info.Kind {
 	case model.Pointer:
-		return n.getCleanBaseName(info.Underlying) // Pointers don't change the name
+		return n.getCleanBaseName(info.Underlying)
 	case model.Slice:
-		return n.getCleanBaseName(info.Underlying) + "s" // e.g., User -> Users
+		return n.getCleanBaseName(info.Underlying) + "s"
 	case model.Array:
-		return n.getCleanBaseName(info.Underlying) + "Array" // e.g., User -> UserArray
+		return n.getCleanBaseName(info.Underlying) + "Array"
 	case model.Map:
 		keyName := n.getCleanBaseName(info.KeyType)
 		valName := n.getCleanBaseName(info.Underlying)
-		return fmt.Sprintf("%sTo%sMap", keyName, valName) // e.g., StringToIntMap
-	case model.Named, model.Primitive:
+		return fmt.Sprintf("%sTo%sMap", keyName, valName)
+	case model.Named, model.Struct:
+		if info.Name != "" {
+			return info.Name
+		}
+		return "Struct"
+	case model.Primitive:
 		return info.Name
 	default:
 		return "Object"

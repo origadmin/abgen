@@ -34,7 +34,8 @@ func NewCodeGenerator() model.CodeGenerator {
 func (g *CodeGenerator) initializeComponents(cfg *config.Config, typeInfos map[string]*model.TypeInfo) {
 	g.importManager = components.NewImportManager()
 	g.nameGenerator = components.NewNameGenerator(cfg, g.importManager)
-	g.aliasManager = components.NewAliasManager(cfg, g.importManager, g.nameGenerator, typeInfos)
+	// AliasManager now needs the TypeConverter to generate original type names.
+	g.aliasManager = components.NewAliasManager(cfg, g.importManager, g.typeConverter, typeInfos)
 	g.conversionEngine = components.NewConversionEngine(
 		g.typeConverter,
 		g.nameGenerator,
@@ -88,10 +89,8 @@ func (g *CodeGenerator) prepareConfigForSession(originalCfg *config.Config, type
 
 	var activeRules []*config.ConversionRule
 	if len(sessionConfig.ConversionRules) > 0 {
-		// If rules are explicitly defined, use them as the entry points.
 		activeRules = g.expandRulesByDependencyAnalysis(sessionConfig.ConversionRules, typeInfos)
 	} else {
-		// Otherwise, find seed rules from package pairs and then expand.
 		slog.Debug("No explicit conversion rules found, discovering seed rules from package pairs...")
 		seedRules := g.findSeedRules(typeInfos, sessionConfig.PackagePairs)
 		activeRules = g.expandRulesByDependencyAnalysis(seedRules, typeInfos)
@@ -117,7 +116,6 @@ func (g *CodeGenerator) expandRulesByDependencyAnalysis(seedRules []*config.Conv
 	allKnownRules := make(map[string]*config.ConversionRule)
 	worklist := make([]*config.ConversionRule, 0, len(seedRules))
 
-	// Initialize with seed rules.
 	for _, rule := range seedRules {
 		key := fmt.Sprintf("%s->%s", rule.SourceType, rule.TargetType)
 		if _, exists := allKnownRules[key]; !exists {
@@ -137,7 +135,6 @@ func (g *CodeGenerator) expandRulesByDependencyAnalysis(seedRules []*config.Conv
 			continue
 		}
 
-		// "Read the recipe": Analyze fields to find new required conversions.
 		for _, sourceField := range sourceInfo.Fields {
 			targetFieldName := sourceField.Name
 			if remappedName, ok := rule.FieldRules.Remap[sourceField.Name]; ok {
@@ -156,8 +153,6 @@ func (g *CodeGenerator) expandRulesByDependencyAnalysis(seedRules []*config.Conv
 				continue
 			}
 
-			// We found a pair of fields that need conversion.
-			// Get their base element types (e.g., Book from []*Book).
 			baseSourceType := g.typeConverter.GetElementType(sourceField.Type)
 			baseTargetType := g.typeConverter.GetElementType(targetField.Type)
 
@@ -165,11 +160,10 @@ func (g *CodeGenerator) expandRulesByDependencyAnalysis(seedRules []*config.Conv
 				continue
 			}
 
-			// Discovered a new dependency!
 			newRule := &config.ConversionRule{
 				SourceType: baseSourceType.UniqueKey(),
 				TargetType: baseTargetType.UniqueKey(),
-				Direction:  config.DirectionBoth, // Assume bidirectional for newly discovered rules.
+				Direction:  config.DirectionBoth,
 			}
 
 			key := fmt.Sprintf("%s->%s", newRule.SourceType, newRule.TargetType)
