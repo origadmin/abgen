@@ -38,21 +38,34 @@ func NewConversionEngine(
 func (ce *ConversionEngine) GenerateConversionFunction(
 	sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule,
 ) (*model.GeneratedCode, []*model.ConversionTask, error) {
-	// Handle pointer to slice cases first
-	if ce.typeConverter.IsPointer(sourceInfo) && ce.typeConverter.IsPointer(targetInfo) {
-		sourceUnderlying := ce.typeConverter.GetElementType(sourceInfo)
-		targetUnderlying := ce.typeConverter.GetElementType(targetInfo)
-		if ce.typeConverter.IsSlice(sourceUnderlying) && ce.typeConverter.IsSlice(targetUnderlying) {
-			code, err := ce.GenerateSliceConversion(sourceInfo, targetInfo)
-			return code, nil, err
+	slog.Debug("ConversionEngine: Received task", "source", sourceInfo.UniqueKey(), "target", targetInfo.UniqueKey())
+
+	// Determine if this is a slice conversion, including pointers to slices.
+	isSliceConversion := ce.typeConverter.IsSlice(sourceInfo) && ce.typeConverter.IsSlice(targetInfo)
+	slog.Debug("ConversionEngine: Initial slice check", "isSlice", isSliceConversion)
+
+	if !isSliceConversion {
+		// Check for pointer-to-slice case
+		if ce.typeConverter.IsPointer(sourceInfo) && ce.typeConverter.IsPointer(targetInfo) {
+			slog.Debug("ConversionEngine: Detected pointer-to-something types")
+			sourceUnderlying := sourceInfo.Underlying
+			targetUnderlying := targetInfo.Underlying
+			if sourceUnderlying != nil && targetUnderlying != nil && ce.typeConverter.IsSlice(sourceUnderlying) && ce.typeConverter.IsSlice(targetUnderlying) {
+				slog.Debug("ConversionEngine: Confirmed pointer-to-slice types")
+				isSliceConversion = true
+			} else {
+				slog.Debug("ConversionEngine: Pointer types are not pointing to slices")
+			}
 		}
 	}
 
-	if ce.typeConverter.IsSlice(sourceInfo) && ce.typeConverter.IsSlice(targetInfo) {
+	if isSliceConversion {
+		slog.Debug("ConversionEngine: Dispatching to GenerateSliceConversion")
 		code, err := ce.GenerateSliceConversion(sourceInfo, targetInfo)
-		return code, nil, err // Slice conversion does not discover new tasks in this model
+		return code, nil, err
 	}
 
+	slog.Debug("ConversionEngine: Dispatching to Struct-to-Struct or skipping")
 	if !ce.typeConverter.IsStruct(sourceInfo) || !ce.typeConverter.IsStruct(targetInfo) {
 		return nil, nil, nil
 	}
@@ -86,17 +99,17 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 ) (*model.GeneratedCode, error) {
 	var buf strings.Builder
 
-	isSourcePtrToSlice := ce.typeConverter.IsPointer(sourceInfo) && ce.typeConverter.IsSlice(ce.typeConverter.GetElementType(sourceInfo))
-	isTargetPtrToSlice := ce.typeConverter.IsPointer(targetInfo) && ce.typeConverter.IsSlice(ce.typeConverter.GetElementType(targetInfo))
+	isSourcePtrToSlice := ce.typeConverter.IsPointer(sourceInfo) && ce.typeConverter.IsSlice(sourceInfo.Underlying)
+	isTargetPtrToSlice := ce.typeConverter.IsPointer(targetInfo) && ce.typeConverter.IsSlice(targetInfo.Underlying)
 
 	var actualSourceSlice, actualTargetSlice *model.TypeInfo
 	if isSourcePtrToSlice {
-		actualSourceSlice = ce.typeConverter.GetElementType(sourceInfo)
+		actualSourceSlice = sourceInfo.Underlying
 	} else {
 		actualSourceSlice = sourceInfo
 	}
 	if isTargetPtrToSlice {
-		actualTargetSlice = ce.typeConverter.GetElementType(targetInfo)
+		actualTargetSlice = targetInfo.Underlying
 	} else {
 		actualTargetSlice = targetInfo
 	}
@@ -116,7 +129,7 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 
 	slog.Debug("Generating slice conversion", "funcName", funcName, "source", sourceSliceStr, "target", targetSliceStr)
 
-	buf.WriteString(fmt.Sprintf("// %s converts a slice of %s to a slice of %s.\n", funcName, sourceInfo.Name, targetInfo.Name))
+	buf.WriteString(fmt.Sprintf("// %s converts a slice of %s to a slice of %s.\n", funcName, actualSourceSlice.Name, actualTargetSlice.Name))
 	buf.WriteString(fmt.Sprintf("func %s(froms %s) %s {\n", funcName, sourceSliceStr, targetSliceStr))
 	buf.WriteString("\tif froms == nil {\n\t\treturn nil\t}\n")
 
@@ -230,8 +243,8 @@ func (ce *ConversionEngine) getConversionExpression(
 	// This is the new logic to handle slice fields correctly
 	isSliceConversion := (ce.typeConverter.IsSlice(sourceType) && ce.typeConverter.IsSlice(targetType)) ||
 		(ce.typeConverter.IsPointer(sourceType) && ce.typeConverter.IsPointer(targetType) &&
-			ce.typeConverter.IsSlice(ce.typeConverter.GetElementType(sourceType)) &&
-			ce.typeConverter.IsSlice(ce.typeConverter.GetElementType(targetType)))
+			ce.typeConverter.IsSlice(sourceType.Underlying) &&
+			ce.typeConverter.IsSlice(targetType.Underlying))
 
 	if isSliceConversion {
 		newTask := &model.ConversionTask{
