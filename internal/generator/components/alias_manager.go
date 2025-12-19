@@ -45,6 +45,24 @@ func (am *AliasManager) EnsureTypeAlias(typeInfo *model.TypeInfo, isSource bool)
 		return
 	}
 
+	// --- 新增的保护逻辑 ---
+	// 如果是指针类型，则深入检查其基础类型。
+	// 我们主要关注为指向“命名结构体”或“命名基础类型（如 time.Time）”的指针创建别名。
+	// 对于指向非命名类型（如 *string, *int, *[]string）的指针，通常不创建顶层别名，而是直接使用其完整类型。
+	if typeInfo.Kind == model.Pointer && typeInfo.Underlying != nil {
+		// 如果底层类型是基础类型（非命名结构体或非命名类型），则跳过别名创建
+		// 命名类型例如 time.Time, uuid.UUID 等，它们虽然不是 struct，但也是有名字的类型
+		if typeInfo.Underlying.Kind != model.Struct && !typeInfo.Underlying.IsNamedType() {
+			slog.Debug("AliasManager: Skipping alias for pointer to non-struct and non-named underlying type",
+				"type", typeInfo.String(),
+				"underlyingKind", typeInfo.Underlying.Kind.String(),
+				"underlyingIsNamed", typeInfo.Underlying.IsNamedType(),
+				"fqn", typeInfo.FQN())
+			return // 跳过无效的指针类型别名
+		}
+	}
+	// --- 结束新增逻辑 ---
+
 	uniqueKey := typeInfo.UniqueKey()
 
 	// If the alias already exists, return immediately.

@@ -140,21 +140,17 @@ func (n *NameGenerator) GetAlias(info *model.TypeInfo, isSource bool) string {
 	}
 
 	prefix, suffix := n.getPrefixAndSuffix(isSource)
-	rawBaseName := n.getRawTypeName(info) // e.g., extracts "User" from "[]*User", or "UserList" from "type UserList []User"
+	rawBaseName := n.getRawTypeName(info) // e.g., extracts "User" from "[]*User"
 
 	// 1. Convert the raw base name to camel case.
-	processedBaseName := n.toCamelCase(rawBaseName) // e.g., "User" or "UserList"
+	processedBaseName := n.toCamelCase(rawBaseName) // e.g., "User"
 
 	// 2. Apply smart defaults as type indicators for container types.
-	// This happens before the global prefix/suffix.
 	switch info.Kind {
 	case model.Slice, model.Array:
-		// Unconditionally append 's' as a type indicator for slices/arrays to ensure uniqueness.
-		// This might result in names like "Userss" if the base name was already "Users",
-		// but it guarantees distinctness from a singular struct "Users".
 		processedBaseName += "s"
 	case model.Map:
-		processedBaseName += "Map" // e.g., "UserMap"
+		processedBaseName += "Map"
 	}
 
 	// 3. Apply the global prefix and suffix to the processed name.

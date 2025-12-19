@@ -171,15 +171,6 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 		}
 	}
 
-	// 新增：在生成所有转换函数后，确保字段类型别名已生成
-	g.aliasManager.PopulateAliases()
-
-	// Generate dynamically discovered slice conversion functions.
-	sliceConversions := g.discoverSliceConversions(typeInfos)
-	for _, conv := range sliceConversions {
-		g.generateAndCollect(conv.sourceInfo, conv.targetInfo, nil, &conversionFuncs, requiredHelpers, generatedFunctions)
-	}
-
 	return conversionFuncs, requiredHelpers, nil
 }
 
@@ -232,63 +223,6 @@ func extractFunctionName(functionBody string) string {
 	return ""
 }
 
-func (g *CodeGenerator) discoverSliceConversions(typeInfos map[string]*model.TypeInfo) []struct {
-	sourceInfo *model.TypeInfo
-	targetInfo *model.TypeInfo
-} {
-	sliceConversionSet := make(map[string]struct {
-		sourceInfo *model.TypeInfo
-		targetInfo *model.TypeInfo
-	})
-
-	for _, rule := range g.config.ConversionRules {
-		sourceInfo := typeInfos[rule.SourceType]
-		targetInfo := typeInfos[rule.TargetType]
-		if sourceInfo == nil || targetInfo == nil {
-			continue
-		}
-
-		for _, sourceField := range sourceInfo.Fields {
-			targetFieldName := sourceField.Name
-			if remap, ok := rule.FieldRules.Remap[sourceField.Name]; ok {
-				targetFieldName = remap
-			}
-
-			var targetField *model.FieldInfo
-			for _, tf := range targetInfo.Fields {
-				if tf.Name == targetFieldName {
-					targetField = tf
-					break
-				}
-			}
-
-			if targetField != nil &&
-				g.typeConverter.IsSlice(sourceField.Type) &&
-				g.typeConverter.IsSlice(targetField.Type) {
-				sourceElem := g.typeConverter.GetElementType(sourceField.Type)
-				targetElem := g.typeConverter.GetElementType(targetField.Type)
-
-				if sourceElem != nil && targetElem != nil && sourceElem.UniqueKey() != targetElem.UniqueKey() {
-					key := sourceField.Type.UniqueKey() + "->" + targetField.Type.UniqueKey()
-					sliceConversionSet[key] = struct {
-						sourceInfo *model.TypeInfo
-						targetInfo *model.TypeInfo
-					}{sourceInfo: sourceField.Type, targetInfo: targetField.Type}
-				}
-			}
-		}
-	}
-
-	var sliceConversions []struct {
-		sourceInfo *model.TypeInfo
-		targetInfo *model.TypeInfo
-	}
-	for _, v := range sliceConversionSet {
-		sliceConversions = append(sliceConversions, v)
-	}
-	return sliceConversions
-}
-
 func (g *CodeGenerator) generateCustomStubs() ([]byte, error) {
 	// Custom stub generation logic remains the same.
 	return nil, nil
@@ -308,11 +242,9 @@ func (g *CodeGenerator) discoverImplicitConversionRules(typeInfos map[string]*mo
 	}
 
 	var initialRules []*config.ConversionRule
-
 	for _, pair := range g.config.PackagePairs {
 		sourceTypes := typesByPackage[pair.SourcePath]
 		targetTypes := typesByPackage[pair.TargetPath]
-
 		targetMap := make(map[string]*model.TypeInfo)
 		for _, tt := range targetTypes {
 			targetMap[tt.Name] = tt
@@ -324,7 +256,6 @@ func (g *CodeGenerator) discoverImplicitConversionRules(typeInfos map[string]*mo
 					SourceType: sourceType.UniqueKey(),
 					TargetType: targetType.UniqueKey(),
 					Direction:  config.DirectionBoth,
-					FieldRules: config.FieldRuleSet{Ignore: make(map[string]struct{}), Remap: make(map[string]string)},
 				}
 				initialRules = append(initialRules, rule)
 			}
@@ -333,42 +264,54 @@ func (g *CodeGenerator) discoverImplicitConversionRules(typeInfos map[string]*mo
 
 	g.config.ConversionRules = append(g.config.ConversionRules, initialRules...)
 
-	// Now, generate rules for slice types based on the initial named type rules
+	// New, robust slice rule discovery
+	var newSliceRules []*config.ConversionRule
 	for _, rule := range initialRules {
-		sourceInfo := typeInfos[rule.SourceType]
-		targetInfo := typeInfos[rule.TargetType]
+		sourceInfo, okS := typeInfos[rule.SourceType]
+		targetInfo, okT := typeInfos[rule.TargetType]
+		if !okS || !okT {
+			continue
+		}
 
-		sourceSliceType := &model.TypeInfo{
-			Kind:       model.Slice,
-			Underlying: sourceInfo,
-		}
-		targetSliceType := &model.TypeInfo{
-			Kind:       model.Slice,
-			Underlying: targetInfo,
-		}
+		// Rule for []T -> []U
+		sourceSliceType := &model.TypeInfo{Kind: model.Slice, Underlying: sourceInfo}
+		targetSliceType := &model.TypeInfo{Kind: model.Slice, Underlying: targetInfo}
 		typeInfos[sourceSliceType.UniqueKey()] = sourceSliceType
 		typeInfos[targetSliceType.UniqueKey()] = targetSliceType
-
-		sliceRule := &config.ConversionRule{
+		newSliceRules = append(newSliceRules, &config.ConversionRule{
 			SourceType: sourceSliceType.UniqueKey(),
 			TargetType: targetSliceType.UniqueKey(),
-			Direction:  config.DirectionBoth,
-		}
+			Direction:  rule.Direction,
+		})
 
-		// Check if there are already rules related to sourceSliceType or targetSliceType
-		// Avoid generating duplicate or conflicting implicit slice rules
-		foundExistingSliceRule := false
-		for _, existingRule := range g.config.ConversionRules {
-			if (existingRule.SourceType == sliceRule.SourceType && existingRule.TargetType == sliceRule.TargetType) ||
-				(existingRule.SourceType == sliceRule.TargetType && existingRule.TargetType == sliceRule.SourceType && existingRule.Direction == config.DirectionBoth) {
-				foundExistingSliceRule = true
-				break
-			}
-		}
+		// Rule for []*T -> []*U
+		sourcePtrType := &model.TypeInfo{Kind: model.Pointer, Underlying: sourceInfo}
+		targetPtrType := &model.TypeInfo{Kind: model.Pointer, Underlying: targetInfo}
+		typeInfos[sourcePtrType.UniqueKey()] = sourcePtrType
+		typeInfos[targetPtrType.UniqueKey()] = targetPtrType
 
-		if !foundExistingSliceRule {
-			g.config.ConversionRules = append(g.config.ConversionRules, sliceRule)
-		}
+		sourcePtrSliceType := &model.TypeInfo{Kind: model.Slice, Underlying: sourcePtrType}
+		targetPtrSliceType := &model.TypeInfo{Kind: model.Slice, Underlying: targetPtrType}
+		typeInfos[sourcePtrSliceType.UniqueKey()] = sourcePtrSliceType
+		typeInfos[targetPtrSliceType.UniqueKey()] = targetPtrSliceType
+		newSliceRules = append(newSliceRules, &config.ConversionRule{
+			SourceType: sourcePtrSliceType.UniqueKey(),
+			TargetType: targetPtrSliceType.UniqueKey(),
+			Direction:  rule.Direction,
+		})
+	}
+
+	g.config.ConversionRules = append(g.config.ConversionRules, newSliceRules...)
+
+	// Sort and remove duplicates
+	uniqueRules := make(map[string]*config.ConversionRule)
+	for _, rule := range g.config.ConversionRules {
+		key := fmt.Sprintf("%s->%s", rule.SourceType, rule.TargetType)
+		uniqueRules[key] = rule
+	}
+	g.config.ConversionRules = make([]*config.ConversionRule, 0, len(uniqueRules))
+	for _, rule := range uniqueRules {
+		g.config.ConversionRules = append(g.config.ConversionRules, rule)
 	}
 
 	sort.Slice(g.config.ConversionRules, func(i, j int) bool {

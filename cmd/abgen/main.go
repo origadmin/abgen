@@ -91,77 +91,44 @@ func main() {
 	}
 	cfg.GenerationContext.CustomOutputFile = customOutputFile
 
-	// --- 2. Prepare parameters for the analyzer ---
-	slog.Debug("Extracting package paths and type FQNs for analysis...")
-	packagePaths := cfg.RequiredPackages()
-	typeFQNs := cfg.RequiredTypeFQNs()
-
-	// --- 3. Analyze Types ---
+	// --- 2. Analyze Types ---
 	slog.Debug("Analyzing types...")
-	analyzer := analyzer.NewTypeAnalyzer() // Pass config to analyzer
-	typeInfos, err := analyzer.Analyze(packagePaths, typeFQNs)
+	typeAnalyzer := analyzer.NewTypeAnalyzer()
+	typeInfos, err := typeAnalyzer.Analyze(cfg)
 	if err != nil {
 		slog.Error("Failed to analyze types", "error", err)
 		os.Exit(1)
 	}
 
-	// --- 4. Generate Code ---
+	// --- 3. Generate Code ---
 	slog.Debug("Generating code...")
-	
-	var mainGeneratedCode []byte
-	var response *model.GenerationResponse
-	var gen *generator.Generator // 旧架构生成器
-	
-	if *useNewArch {
-		slog.Info("Using new component-based architecture")
-		// 使用新架构
-		newGen := generator.NewOrchestratorGenerator(cfg, typeInfos)
-		response, err = newGen.Generate(&model.GenerationRequest{
-			Context: &model.GenerationContext{
-				Config:           cfg,
-				TypeInfos:        typeInfos,
-				InvolvedPackages: make(map[string]struct{}),
-			},
-		})
-		if err != nil {
-			slog.Error("Code generation failed with new architecture", "error", err)
-			os.Exit(1)
-		}
-		mainGeneratedCode = response.GeneratedCode
-	} else {
-		slog.Info("Using legacy architecture")
-		// 使用旧架构
-		gen = generator.NewGenerator(cfg)
-		mainGeneratedCode, err = gen.Generate(typeInfos)
-		if err != nil {
-			slog.Error("Code generation failed", "error", err)
-			os.Exit(1)
-		}
+	gen := generator.NewCodeGenerator(cfg, typeInfos)
+	genContext := &model.GenerationContext{
+		Config:           cfg,
+		TypeInfos:        typeInfos,
+		InvolvedPackages: make(map[string]struct{}),
+	}
+	request := &model.GenerationRequest{
+		Context: genContext,
+	}
+	response, err := gen.Generate(request)
+	if err != nil {
+		slog.Error("Code generation failed", "error", err)
+		os.Exit(1)
 	}
 
 	// --- 4. Write Main Output ---
 	slog.Info("Writing main generated code", "file", cfg.GenerationContext.MainOutputFile)
-	err = os.WriteFile(cfg.GenerationContext.MainOutputFile, mainGeneratedCode, 0644)
+	err = os.WriteFile(cfg.GenerationContext.MainOutputFile, response.GeneratedCode, 0644)
 	if err != nil {
 		slog.Error("Failed to write main output file", "error", err)
 		os.Exit(1)
 	}
 
 	// --- 5. Write Custom Stubs Output (if any) ---
-	var customGeneratedCode []byte
-	if *useNewArch {
-		if response != nil {
-			customGeneratedCode = response.CustomStubs
-		}
-	} else {
-		if gen != nil {
-			customGeneratedCode = gen.CustomStubs()
-		}
-	}
-	
-	if len(customGeneratedCode) > 0 {
+	if len(response.CustomStubs) > 0 {
 		slog.Info("Writing custom conversion stubs", "file", cfg.GenerationContext.CustomOutputFile)
-		err = os.WriteFile(cfg.GenerationContext.CustomOutputFile, customGeneratedCode, 0644)
+		err = os.WriteFile(cfg.GenerationContext.CustomOutputFile, response.CustomStubs, 0644)
 		if err != nil {
 			slog.Error("Failed to write custom stubs file", "error", err)
 			os.Exit(1)

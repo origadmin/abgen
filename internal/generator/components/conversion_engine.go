@@ -75,7 +75,7 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 ) (*model.GeneratedCode, error) {
 	var buf strings.Builder
 
-	// 关键修复：确保源类型和目标类型的基本信息被正确保存
+	// 获取切片元素类型
 	sourceElem := ce.typeConverter.GetElementType(sourceInfo)
 	targetElem := ce.typeConverter.GetElementType(targetInfo)
 
@@ -104,7 +104,18 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	elemFuncName := ce.nameGenerator.GetFunctionName(sourceElem, targetElem)
 	elementConversionExpr := elemFuncName + "(f)"
 
-	buf.WriteString(fmt.Sprintf("\t\ttos[i] = %s\n", elementConversionExpr))
+	// 添加指针/值转换检测和处理逻辑
+	sourceElemIsPointer := ce.typeConverter.IsPointer(sourceElem)
+	targetElemIsPointer := ce.typeConverter.IsPointer(targetElem)
+
+	if !sourceElemIsPointer && targetElemIsPointer {
+		// 值到指针的转换：需要临时变量和取地址
+		buf.WriteString(fmt.Sprintf("\t\ttmpVal := %s\n", elementConversionExpr))
+		buf.WriteString("\t\ttos[i] = &tmpVal\n")
+	} else {
+		// 标准转换
+		buf.WriteString(fmt.Sprintf("\t\ttos[i] = %s\n", elementConversionExpr))
+	}
 	buf.WriteString("\t}\n")
 	buf.WriteString("\treturn tos\n")
 	buf.WriteString("}\n\n")
