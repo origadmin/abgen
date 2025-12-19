@@ -34,24 +34,26 @@ func NewConversionEngine(
 	}
 }
 
-// GenerateConversionFunction generates a conversion function.
+// GenerateConversionFunction generates a conversion function for structs or delegates to slice conversion.
 func (ce *ConversionEngine) GenerateConversionFunction(
 	sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule,
 ) (*model.GeneratedCode, error) {
+	// Delegate to slice conversion if both types are slices.
+	if ce.typeConverter.IsSlice(sourceInfo) && ce.typeConverter.IsSlice(targetInfo) {
+		return ce.GenerateSliceConversion(sourceInfo, targetInfo)
+	}
+
+	// Proceed with struct conversion only if both are structs.
 	if !ce.typeConverter.IsStruct(sourceInfo) || !ce.typeConverter.IsStruct(targetInfo) {
-		if ce.typeConverter.IsSlice(sourceInfo) && ce.typeConverter.IsSlice(targetInfo) {
-			return ce.GenerateSliceConversion(sourceInfo, targetInfo)
-		}
-		return nil, nil
+		return nil, nil // Not a struct-to-struct or slice-to-slice conversion.
 	}
 
 	var buf strings.Builder
-	funcName := ce.nameGenerator.GetFunctionName(sourceInfo, targetInfo)
-	// 修复：使用GetTypeAliasString而不是GetTypeString来生成带别名的类型
-	sourceTypeStr := ce.nameGenerator.GetTypeAliasString(sourceInfo)
-	targetTypeStr := ce.nameGenerator.GetTypeAliasString(targetInfo)
+	funcName := ce.nameGenerator.ConversionFunctionName(sourceInfo, targetInfo)
+	sourceTypeStr := ce.nameGenerator.TypeName(sourceInfo)
+	targetTypeStr := ce.nameGenerator.TypeName(targetInfo)
 
-	buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceTypeStr, targetTypeStr))
+	buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceInfo.Name, targetInfo.Name))
 	buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, sourceTypeStr, targetTypeStr))
 	buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n\n")
 
@@ -69,53 +71,46 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 	}, nil
 }
 
-// GenerateSliceConversion generates a slice conversion function.
+// GenerateSliceConversion generates a function to convert a slice of one type to a slice of another.
 func (ce *ConversionEngine) GenerateSliceConversion(
 	sourceInfo, targetInfo *model.TypeInfo,
 ) (*model.GeneratedCode, error) {
 	var buf strings.Builder
 
-	// 获取切片元素类型
 	sourceElem := ce.typeConverter.GetElementType(sourceInfo)
 	targetElem := ce.typeConverter.GetElementType(targetInfo)
 
-	// 确保源类型和目标类型的别名被正确创建
-	// 传入正确的isSource参数，确保命名规则正确应用
-	ce.aliasManager.EnsureTypeAlias(sourceInfo, true)
-	ce.aliasManager.EnsureTypeAlias(targetInfo, false)
-
-	// 确保元素类型的别名也被正确创建
-	ce.aliasManager.EnsureTypeAlias(sourceElem, true)
-	ce.aliasManager.EnsureTypeAlias(targetElem, false)
-
-	// 修复：同样在slice转换中使用GetTypeAliasString
-	sourceSliceStr := ce.nameGenerator.GetTypeAliasString(sourceInfo)
-	targetSliceStr := ce.nameGenerator.GetTypeAliasString(targetInfo)
-	funcName := ce.nameGenerator.GetFunctionName(sourceInfo, targetInfo)
+	sourceSliceStr := ce.nameGenerator.TypeName(sourceInfo)
+	targetSliceStr := ce.nameGenerator.TypeName(targetInfo)
+	funcName := ce.nameGenerator.ConversionFunctionName(sourceInfo, targetInfo)
 
 	slog.Debug("Generating slice conversion", "funcName", funcName, "source", sourceSliceStr, "target", targetSliceStr)
 
-	buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceSliceStr, targetSliceStr))
+	buf.WriteString(fmt.Sprintf("// %s converts a slice of %s to a slice of %s.\n", funcName, sourceInfo.Name, targetInfo.Name))
 	buf.WriteString(fmt.Sprintf("func %s(froms %s) %s {\n", funcName, sourceSliceStr, targetSliceStr))
 	buf.WriteString("\tif froms == nil {\n\t\treturn nil\t}\n")
 	buf.WriteString(fmt.Sprintf("\ttos := make(%s, len(froms))\n", targetSliceStr))
 	buf.WriteString("\tfor i, f := range froms {\n")
 
-	elemFuncName := ce.nameGenerator.GetFunctionName(sourceElem, targetElem)
-	elementConversionExpr := elemFuncName + "(f)"
+	elemFuncName := ce.nameGenerator.ConversionFunctionName(sourceElem, targetElem)
+	elementConversionExpr := elemFuncName + "(&f)" // Assuming element conversion takes a pointer
 
-	// 添加指针/值转换检测和处理逻辑
+	// Handle pointer-to-value and value-to-pointer conversions for slice elements
 	sourceElemIsPointer := ce.typeConverter.IsPointer(sourceElem)
 	targetElemIsPointer := ce.typeConverter.IsPointer(targetElem)
 
-	if !sourceElemIsPointer && targetElemIsPointer {
-		// 值到指针的转换：需要临时变量和取地址
-		buf.WriteString(fmt.Sprintf("\t\ttmpVal := %s\n", elementConversionExpr))
-		buf.WriteString("\t\ttos[i] = &tmpVal\n")
+	if sourceElemIsPointer && !targetElemIsPointer {
+		// Dereference the result of the conversion function
+		elementConversionExpr = "*" + elemFuncName + "(f)"
+	} else if !sourceElemIsPointer && targetElemIsPointer {
+		// Standard case: conversion function returns a pointer
+		elementConversionExpr = elemFuncName + "(&f)"
 	} else {
-		// 标准转换
-		buf.WriteString(fmt.Sprintf("\t\ttos[i] = %s\n", elementConversionExpr))
+		// Pointer-to-pointer or value-to-value
+		elementConversionExpr = elemFuncName + "(f)"
 	}
+
+	buf.WriteString(fmt.Sprintf("\t\ttos[i] = %s\n", elementConversionExpr))
 	buf.WriteString("\t}\n")
 	buf.WriteString("\treturn tos\n")
 	buf.WriteString("}\n\n")
@@ -123,76 +118,15 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	return &model.GeneratedCode{FunctionBody: buf.String()}, nil
 }
 
-// GetConversionExpression gets the conversion expression.
-func (ce *ConversionEngine) GetConversionExpression(
-	parentSource *model.TypeInfo, sourceField *model.FieldInfo,
-	parentTarget *model.TypeInfo, targetField *model.FieldInfo,
-	fromVar string,
-) (string, bool, bool, []string) {
-	sourceType := sourceField.Type
-	targetType := targetField.Type
-	sourceFieldExpr := fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
-
-	if sourceType.UniqueKey() == targetType.UniqueKey() {
-		return sourceFieldExpr, sourceType.Kind == model.Pointer, false, nil
-	}
-
-	if ce.typeConverter.IsSlice(sourceType) && ce.typeConverter.IsSlice(targetType) {
-		// ... slice handling logic ...
-	}
-
-	// Check for built-in helper functions
-	helperKey, funcName := ce.findHelper(sourceType, targetType)
-	if funcName != "" {
-		slog.Debug("Found helper function", "key", helperKey, "funcName", funcName)
-		ce.addRequiredImportsForHelper(funcName)
-		isPointerReturn := targetType.Kind == model.Pointer
-		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), isPointerReturn, true, []string{funcName}
-	}
-
-	return ce.generateFallbackConversion(sourceType, sourceField, targetType, targetField, sourceFieldExpr)
-}
-
-func (ce *ConversionEngine) findHelper(source, target *model.TypeInfo) (string, string) {
-	// This map should be generated or configured more robustly.
-	conversionMap := map[string]string{
-		"string->time.Time":                   "ConvertStringToTime",
-		"string->github.com/google/uuid.UUID": "ConvertStringToUUID",
-		"time.Time->string":                   "ConvertTimeToString",
-		"github.com/google/uuid.UUID->string": "ConvertUUIDToString",
-		"time.Time->*google.golang.org/protobuf/types/known/timestamppb.Timestamp": "ConvertTimeToTimestamp",
-		"*google.golang.org/protobuf/types/known/timestamppb.Timestamp->time.Time": "ConvertTimestampToTime",
-	}
-	key := source.UniqueKey() + "->" + target.UniqueKey()
-	if name, ok := conversionMap[key]; ok {
-		return key, name
-	}
-	return "", ""
-}
-
-func (ce *ConversionEngine) addRequiredImportsForHelper(funcName string) {
-	if strings.Contains(funcName, "Time") {
-		ce.importManager.Add("time")
-	}
-	if strings.Contains(funcName, "UUID") {
-		ce.importManager.Add("github.com/google/uuid")
-	}
-	if strings.Contains(funcName, "Timestamp") {
-		ce.importManager.Add("google.golang.org/protobuf/types/known/timestamppb")
-	}
-}
-
-// generateStructToStructConversion generates a struct-to-struct conversion.
+// generateStructToStructConversion handles the field-by-field mapping.
 func (ce *ConversionEngine) generateStructToStructConversion(
 	sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule,
 ) (string, []string, error) {
 	var buf strings.Builder
-	var tempVarDecls []string
 	var fieldAssignments []string
 	var allRequiredHelpers []string
 
-	// 新增：收集字段类型信息，用于后续别名生成
-	fieldTypesToAlias := make(map[string]*model.TypeInfo)
+	targetTypeStr := ce.nameGenerator.TypeName(targetInfo)
 
 	for _, sourceField := range sourceInfo.Fields {
 		if _, shouldIgnore := rule.FieldRules.Ignore[sourceField.Name]; shouldIgnore {
@@ -212,43 +146,13 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 		}
 
 		if targetField != nil {
-			// 新增：收集字段类型信息
-			ce.collectFieldTypesForAliasing(sourceField.Type, targetField.Type, fieldTypesToAlias)
-
-			conversionExpr, returnsPointer, isFunctionCall, requiredHelpers := ce.GetConversionExpression(
-				sourceInfo, sourceField, targetInfo, targetField, "from")
+			conversionExpr, requiredHelpers := ce.getConversionExpression(sourceField, targetField, "from")
 			allRequiredHelpers = append(allRequiredHelpers, requiredHelpers...)
-
-			finalExpr := conversionExpr
-			targetIsPointer := targetField.Type.Kind == model.Pointer
-
-			if returnsPointer && !targetIsPointer {
-				finalExpr = fmt.Sprintf("*%s", conversionExpr)
-			} else if !returnsPointer && targetIsPointer {
-				if isFunctionCall {
-					tempVarName := fmt.Sprintf("tmp%s", targetField.Name)
-					tempVarDecls = append(tempVarDecls, fmt.Sprintf("\t%s := %s\n", tempVarName, conversionExpr))
-					finalExpr = fmt.Sprintf("&%s", tempVarName)
-				} else {
-					finalExpr = fmt.Sprintf("&%s", conversionExpr)
-				}
-			}
-			fieldAssignments = append(fieldAssignments, fmt.Sprintf("\t\t%s: %s,", targetField.Name, finalExpr))
+			fieldAssignments = append(fieldAssignments, fmt.Sprintf("\t\t%s: %s,", targetField.Name, conversionExpr))
 		}
 	}
 
-	// 新增：将收集的类型信息传递给别名管理器
-	ce.aliasManager.SetFieldTypesToAlias(fieldTypesToAlias)
-
-	if len(tempVarDecls) > 0 {
-		for _, decl := range tempVarDecls {
-			buf.WriteString(decl)
-		}
-		buf.WriteString("\n")
-	}
-
-	// 修复：在结构体初始化时也使用别名
-	buf.WriteString("\tto := &" + ce.nameGenerator.GetTypeAliasString(targetInfo) + "{\n")
+	buf.WriteString(fmt.Sprintf("\tto := &%s{\n", targetTypeStr))
 	for _, assignment := range fieldAssignments {
 		buf.WriteString(assignment + "\n")
 	}
@@ -258,58 +162,65 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 	return buf.String(), allRequiredHelpers, nil
 }
 
-// generateFallbackConversion generates a fallback conversion.
-func (ce *ConversionEngine) generateFallbackConversion(sourceType *model.TypeInfo, sourceField *model.FieldInfo, targetType *model.TypeInfo, targetField *model.FieldInfo, sourceFieldExpr string) (string, bool, bool, []string) {
-	sourceFieldType := sourceField.Type
-	targetFieldType := targetField.Type
+// getConversionExpression determines the Go expression needed to convert a source field to a target field.
+func (ce *ConversionEngine) getConversionExpression(
+	sourceField, targetField *model.FieldInfo, fromVar string,
+) (string, []string) {
+	sourceType := sourceField.Type
+	targetType := targetField.Type
+	sourceFieldExpr := fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
 
-	// 对于基本类型转换，检查是否可以直接转换
-	if sourceFieldType.Kind == model.Primitive && targetFieldType.Kind == model.Primitive {
-		if canDirectlyConvertPrimitives(sourceFieldType.Name, targetFieldType.Name) {
-			return fmt.Sprintf("%s(%s)", ce.nameGenerator.GetTypeString(targetFieldType), sourceFieldExpr), false, true, nil
-		}
-		// 生成存根函数名称
-		stubFuncName := ce.nameGenerator.GetPrimitiveConversionStubName(
-			sourceType, sourceField,
-			targetType, targetField,
-		)
-		return fmt.Sprintf("%s(%s)", stubFuncName, sourceFieldExpr), false, true, []string{stubFuncName}
+	// Case 1: Types are identical.
+	if sourceType.UniqueKey() == targetType.UniqueKey() {
+		return sourceFieldExpr, nil
 	}
 
-	funcName := ce.nameGenerator.GetFunctionName(sourceFieldType, targetFieldType)
-	shouldReturnPointer := targetFieldType.IsUltimatelyStruct()
-	return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), shouldReturnPointer, true, nil
+	// Case 2: Check for a built-in helper function (e.g., time.Time -> string).
+	helperKey, funcName := ce.findHelper(sourceType, targetType)
+	if funcName != "" {
+		slog.Debug("Found helper function", "key", helperKey, "funcName", funcName)
+		ce.addRequiredImportsForHelper(funcName)
+		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), []string{funcName}
+	}
+
+	// Case 3: Fallback to a generated conversion function.
+	convFuncName := ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
+	// Handle pointer differences between source and target fields.
+	sourceIsPointer := ce.typeConverter.IsPointer(sourceType)
+	targetIsPointer := ce.typeConverter.IsPointer(targetType)
+
+	if !sourceIsPointer && targetIsPointer {
+		return fmt.Sprintf("%s(&%s)", convFuncName, sourceFieldExpr), nil
+	}
+	return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil
 }
 
-// 新增方法：收集需要生成别名的字段类型
-func (ce *ConversionEngine) collectFieldTypesForAliasing(sourceType, targetType *model.TypeInfo, fieldTypesToAlias map[string]*model.TypeInfo) {
-	// 为源类型和目标类型生成别名
-	fieldTypesToAlias[sourceType.UniqueKey()] = sourceType
-	fieldTypesToAlias[targetType.UniqueKey()] = targetType
-
-	// 递归处理复合类型
-	ce.collectElementTypesForAliasing(sourceType, fieldTypesToAlias)
-	ce.collectElementTypesForAliasing(targetType, fieldTypesToAlias)
+// findHelper looks for pre-defined conversion functions between common types.
+func (ce *ConversionEngine) findHelper(source, target *model.TypeInfo) (string, string) {
+	conversionMap := map[string]string{
+		"string->time.Time":                   "ConvertStringToTime",
+		"string->github.com/google/uuid.UUID": "ConvertStringToUUID",
+		"time.Time->string":                   "ConvertTimeToString",
+		"github.com/google/uuid.UUID->string": "ConvertUUIDToString",
+		"time.Time->*google.golang.org/protobuf/types/known/timestamppb.Timestamp": "ConvertTimeToTimestamp",
+		"*google.golang.org/protobuf/types/known/timestamppb.Timestamp->time.Time": "ConvertTimestampToTime",
+	}
+	key := source.UniqueKey() + "->" + target.UniqueKey()
+	if name, ok := conversionMap[key]; ok {
+		return key, name
+	}
+	return "", ""
 }
 
-// 新增方法：递归收集复合类型的元素类型
-func (ce *ConversionEngine) collectElementTypesForAliasing(typ *model.TypeInfo, fieldTypesToAlias map[string]*model.TypeInfo) {
-	if ce.typeConverter.IsSlice(typ) || ce.typeConverter.IsArray(typ) {
-		elemType := ce.typeConverter.GetElementType(typ)
-		if elemType != nil {
-			fieldTypesToAlias[elemType.UniqueKey()] = elemType
-			ce.collectElementTypesForAliasing(elemType, fieldTypesToAlias)
-		}
-	} else if typ.Kind == model.Pointer {
-		elemType := ce.typeConverter.GetElementType(typ)
-		if elemType != nil {
-			fieldTypesToAlias[elemType.UniqueKey()] = elemType
-			ce.collectElementTypesForAliasing(elemType, fieldTypesToAlias)
-		}
-	} else if typ.Kind == model.Struct {
-		// 递归处理结构体字段
-		for _, field := range typ.Fields {
-			ce.collectFieldTypesForAliasing(field.Type, field.Type, fieldTypesToAlias)
-		}
+// addRequiredImportsForHelper adds necessary imports for known helper functions.
+func (ce *ConversionEngine) addRequiredImportsForHelper(funcName string) {
+	if strings.Contains(funcName, "Time") {
+		ce.importManager.Add("time")
+	}
+	if strings.Contains(funcName, "UUID") {
+		ce.importManager.Add("github.com/google/uuid")
+	}
+	if strings.Contains(funcName, "Timestamp") {
+		ce.importManager.Add("google.golang.org/protobuf/types/known/timestamppb")
 	}
 }

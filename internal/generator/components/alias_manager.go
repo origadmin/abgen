@@ -1,8 +1,12 @@
 package components
 
 import (
+	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
+	"strings"
+	"unicode"
 
 	"github.com/origadmin/abgen/internal/config"
 	"github.com/origadmin/abgen/internal/model"
@@ -11,276 +15,185 @@ import (
 var _ model.AliasManager = (*AliasManager)(nil)
 
 // AliasManager implements the AliasManager interface.
+// It is responsible for creating and managing type aliases to avoid import conflicts.
 type AliasManager struct {
-	config            *config.Config
-	nameGenerator     model.NameGenerator
-	importManager     model.ImportManager // 新增：导入管理器
-	aliasMap          map[string]string
-	requiredAliases   map[string]struct{}
-	typeInfos         map[string]*model.TypeInfo
-	fieldTypesToAlias map[string]*model.TypeInfo
+	config        *config.Config
+	importManager model.ImportManager
+	nameGenerator model.NameGenerator // The new, clean name generator
+	aliasMap      map[string]string
+	typeInfos     map[string]*model.TypeInfo
 }
+
+var camelCaseRegexp = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
 // NewAliasManager creates a new alias manager.
 func NewAliasManager(
 	config *config.Config,
+	importManager model.ImportManager,
 	nameGenerator model.NameGenerator,
-	importManager model.ImportManager, // 新增：导入管理器参数
 	typeInfos map[string]*model.TypeInfo,
 ) model.AliasManager {
 	return &AliasManager{
-		config:          config,
-		nameGenerator:   nameGenerator,
-		importManager:   importManager, // 新增：初始化导入管理器
-		aliasMap:        make(map[string]string),
-		requiredAliases: make(map[string]struct{}),
-		typeInfos:       typeInfos,
+		config:        config,
+		importManager: importManager,
+		nameGenerator: nameGenerator,
+		aliasMap:      make(map[string]string),
+		typeInfos:     typeInfos,
 	}
 }
 
-// EnsureTypeAlias ensures that the specified type has an alias, creating one if it doesn't exist.
-func (am *AliasManager) EnsureTypeAlias(typeInfo *model.TypeInfo, isSource bool) {
-	if typeInfo == nil {
-		slog.Debug("AliasManager: EnsureTypeAlias called with nil typeInfo")
-		return
-	}
-
-	// --- 新增的保护逻辑 ---
-	// 如果是指针类型，则深入检查其基础类型。
-	// 我们主要关注为指向“命名结构体”或“命名基础类型（如 time.Time）”的指针创建别名。
-	// 对于指向非命名类型（如 *string, *int, *[]string）的指针，通常不创建顶层别名，而是直接使用其完整类型。
-	if typeInfo.Kind == model.Pointer && typeInfo.Underlying != nil {
-		// 如果底层类型是基础类型（非命名结构体或非命名类型），则跳过别名创建
-		// 命名类型例如 time.Time, uuid.UUID 等，它们虽然不是 struct，但也是有名字的类型
-		if typeInfo.Underlying.Kind != model.Struct && !typeInfo.Underlying.IsNamedType() {
-			slog.Debug("AliasManager: Skipping alias for pointer to non-struct and non-named underlying type",
-				"type", typeInfo.String(),
-				"underlyingKind", typeInfo.Underlying.Kind.String(),
-				"underlyingIsNamed", typeInfo.Underlying.IsNamedType(),
-				"fqn", typeInfo.FQN())
-			return // 跳过无效的指针类型别名
-		}
-	}
-	// --- 结束新增逻辑 ---
-
-	uniqueKey := typeInfo.UniqueKey()
-
-	// If the alias already exists, return immediately.
-	if _, exists := am.aliasMap[uniqueKey]; exists {
-		slog.Debug("AliasManager: alias already exists",
-			"uniqueKey", uniqueKey,
-			"alias", am.aliasMap[uniqueKey])
-		return
-	}
-
-	// Create a new alias.
-	alias := am.nameGenerator.GetAlias(typeInfo, isSource)
-
-	// Store it in the map immediately.
-	am.aliasMap[uniqueKey] = alias
-	am.requiredAliases[uniqueKey] = struct{}{}
-
-	slog.Debug("AliasManager: ensured type alias",
-		"type", typeInfo.String(),
-		"uniqueKey", uniqueKey,
-		"alias", alias,
-		"isSource", isSource,
-		"kind", typeInfo.Kind.String())
-
-	// Recursively handle element types of composite types.
-	am.ensureElementTypeAlias(typeInfo, isSource)
-}
-
-// ensureElementTypeAlias recursively ensures aliases for element types.
-func (am *AliasManager) ensureElementTypeAlias(typeInfo *model.TypeInfo, isSource bool) {
-	slog.Debug("AliasManager: ensureElementTypeAlias",
-		"type", typeInfo.String(),
-		"kind", typeInfo.Kind.String())
-
-	switch typeInfo.Kind {
-	case model.Slice, model.Array, model.Pointer:
-		if typeInfo.Underlying != nil {
-			slog.Debug("AliasManager: processing container element",
-				"containerType", typeInfo.String(),
-				"elementType", typeInfo.Underlying.String())
-			am.EnsureTypeAlias(typeInfo.Underlying, isSource)
-			// 递归处理嵌套的容器类型
-			am.ensureElementTypeAlias(typeInfo.Underlying, isSource)
-		} else {
-			slog.Debug("AliasManager: container type has nil underlying type",
-				"type", typeInfo.String())
-		}
-	case model.Map:
-		if typeInfo.KeyType != nil {
-			am.EnsureTypeAlias(typeInfo.KeyType, isSource)
-		}
-		if typeInfo.Underlying != nil {
-			am.EnsureTypeAlias(typeInfo.Underlying, isSource)
-		}
-	case model.Struct:
-		// 递归处理结构体字段
-		slog.Debug("AliasManager: processing struct fields",
-			"structType", typeInfo.String(),
-			"fieldCount", len(typeInfo.Fields))
-		for _, field := range typeInfo.Fields {
-			am.EnsureTypeAlias(field.Type, isSource)
-		}
-	}
-}
-
-// GetAliasMap returns the alias map.
-func (am *AliasManager) GetAliasMap() map[string]string {
-	return am.aliasMap
-}
-
-// GetRequiredAliases returns the set of required aliases.
-func (am *AliasManager) GetRequiredAliases() map[string]struct{} {
-	return am.requiredAliases
-}
-
-// PopulateAliases populates aliases for all conversion rules.
+// PopulateAliases is the main entry point for the alias manager.
+// It iterates through conversion rules and ensures all necessary types have aliases.
 func (am *AliasManager) PopulateAliases() {
-	slog.Debug("AliasManager: PopulateAliases started",
-		"ruleCount", len(am.config.ConversionRules))
+	slog.Debug("AliasManager: PopulateAliases started", "ruleCount", len(am.config.ConversionRules))
 
 	for i, rule := range am.config.ConversionRules {
-		slog.Debug("AliasManager: processing conversion rule",
-			"index", i,
-			"sourceType", rule.SourceType,
-			"targetType", rule.TargetType)
+		slog.Debug("AliasManager: processing conversion rule", "index", i, "sourceType", rule.SourceType, "targetType", rule.TargetType)
 
 		sourceInfo := am.typeInfos[rule.SourceType]
 		targetInfo := am.typeInfos[rule.TargetType]
 		if sourceInfo == nil || targetInfo == nil {
-			slog.Debug("AliasManager: skipping rule - type info not found",
-				"sourceInfoNil", sourceInfo == nil,
-				"targetInfoNil", targetInfo == nil)
 			continue
 		}
 
-		slog.Debug("AliasManager: ensuring base type aliases",
-			"sourceType", sourceInfo.String(),
-			"targetType", targetInfo.String())
-
-		// Ensure base types have aliases.
-		am.EnsureTypeAlias(sourceInfo, true)
-		am.EnsureTypeAlias(targetInfo, false)
-
-		// 新增：递归处理结构体字段中的类型别名
-		am.ensureFieldTypeAliases(sourceInfo, true)
-		am.ensureFieldTypeAliases(targetInfo, false)
-
-		// 新增：添加源包和目标包的导入
-		if sourceInfo.ImportPath != "" && !am.isCurrentPackage(sourceInfo.ImportPath) {
-			am.importManager.Add(sourceInfo.ImportPath)
-		}
-		if targetInfo.ImportPath != "" && !am.isCurrentPackage(targetInfo.ImportPath) {
-			am.importManager.Add(targetInfo.ImportPath)
-		}
+		// Ensure aliases are created for the source and target types and their fields.
+		am.ensureAliasesRecursively(sourceInfo, true)
+		am.ensureAliasesRecursively(targetInfo, false)
 	}
 }
 
-// ensureFieldTypeAliases recursively ensures aliases for all field types in a struct
-func (am *AliasManager) ensureFieldTypeAliases(typeInfo *model.TypeInfo, isSource bool) {
+// ensureAliasesRecursively ensures that a type and all its nested types have aliases if needed.
+func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSource bool) {
 	if typeInfo == nil {
-		slog.Debug("AliasManager: ensureFieldTypeAliases called with nil typeInfo")
 		return
 	}
 
-	slog.Debug("AliasManager: ensureFieldTypeAliases",
-		"type", typeInfo.String(),
-		"kind", typeInfo.Kind.String())
+	// If an alias already exists, we assume its sub-types are also processed.
+	if _, exists := am.aliasMap[typeInfo.UniqueKey()]; exists {
+		return
+	}
 
-	// 对于结构体类型，递归处理所有字段
-	if typeInfo.Kind == model.Struct {
-		slog.Debug("AliasManager: processing struct fields",
-			"structType", typeInfo.String(),
-			"fieldCount", len(typeInfo.Fields))
-		for i, field := range typeInfo.Fields {
-			if field.Type != nil {
-				slog.Debug("AliasManager: ensuring field type alias",
-					"fieldIndex", i,
-					"fieldName", field.Name,
-					"fieldType", field.Type.String(),
-					"fieldTypeKind", field.Type.Kind.String())
-				// 确保字段类型本身有别名
-				am.EnsureTypeAlias(field.Type, isSource)
-				// 递归处理字段类型的所有嵌套结构（包括指针、切片等）
-				am.ensureElementTypeAlias(field.Type, isSource)
-			}
+	// Generate and store the alias for the current type.
+	alias := am.generateAlias(typeInfo, isSource)
+	am.aliasMap[typeInfo.UniqueKey()] = alias
+	slog.Debug("AliasManager: created alias", "type", typeInfo.String(), "uniqueKey", typeInfo.UniqueKey(), "alias", alias, "isSource", isSource)
+
+	// Recursively process nested types within structs, slices, maps, etc.
+	switch typeInfo.Kind {
+	case model.Struct:
+		for _, field := range typeInfo.Fields {
+			am.ensureAliasesRecursively(field.Type, isSource)
 		}
+	case model.Slice, model.Array, model.Pointer:
+		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
+	case model.Map:
+		am.ensureAliasesRecursively(typeInfo.KeyType, isSource)
+		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
 	}
 }
 
-// isCurrentPackage checks if the import path belongs to the current package
-func (am *AliasManager) isCurrentPackage(importPath string) bool {
-	return importPath == am.config.GenerationContext.PackagePath
+// generateAlias creates a new alias for a type based on naming rules.
+// This is where the core logic of naming aliases now resides.
+func (am *AliasManager) generateAlias(info *model.TypeInfo, isSource bool) string {
+	if info.Kind == model.Primitive {
+		return am.toCamelCase(info.Name)
+	}
+
+	prefix, suffix := am.getPrefixAndSuffix(isSource)
+	rawBaseName := am.getRawTypeName(info)
+	processedBaseName := am.toCamelCase(rawBaseName)
+
+	// Add type indicators for container types.
+	switch info.Kind {
+	case model.Slice, model.Array:
+		processedBaseName += "s"
+	case model.Map:
+		processedBaseName += "Map"
+	}
+
+	return am.toCamelCase(prefix) + processedBaseName + am.toCamelCase(suffix)
 }
 
-// GetAliasesToRender prepares and returns a sorted list of aliases that need to be rendered in the generated code.
+func (am *AliasManager) getPrefixAndSuffix(isSource bool) (string, string) {
+	if isSource {
+		return am.config.NamingRules.SourcePrefix, am.config.NamingRules.SourceSuffix
+	}
+	return am.config.NamingRules.TargetPrefix, am.config.NamingRules.TargetSuffix
+}
+
+func (am *AliasManager) getRawTypeName(info *model.TypeInfo) string {
+	if info == nil {
+		return ""
+	}
+	if info.Name != "" {
+		return info.Name
+	}
+	// Recursively find the name of the underlying type for containers.
+	switch info.Kind {
+	case model.Slice, model.Array, model.Pointer, model.Map:
+		return am.getRawTypeName(info.Underlying)
+	}
+	return ""
+}
+
+func (am *AliasManager) toCamelCase(s string) string {
+	if s == "" {
+		return ""
+	}
+	s = camelCaseRegexp.ReplaceAllString(s, " ")
+	parts := strings.Fields(s)
+	for i := range parts {
+		if len(parts[i]) > 0 {
+			runes := []rune(parts[i])
+			runes[0] = unicode.ToUpper(runes[0])
+			parts[i] = string(runes)
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+// GetAliasesToRender prepares a sorted list of aliases for code generation.
 func (am *AliasManager) GetAliasesToRender() []*model.AliasRenderInfo {
-	slog.Debug("AliasManager: GetAliasesToRender started",
-		"aliasMapSize", len(am.aliasMap),
-		"requiredAliasesSize", len(am.requiredAliases))
-
-	type aliasPair struct {
-		aliasName, fqn string
-	}
-	aliasesToWrite := make([]aliasPair, 0)
-
+	var renderInfos []*model.AliasRenderInfo
 	for fqn, alias := range am.aliasMap {
-		// Only consider aliases that are actually required.
-		if _, ok := am.requiredAliases[fqn]; !ok {
+		typeInfo := am.typeInfos[fqn]
+		if typeInfo == nil {
 			continue
 		}
-		// Skip aliases that are already defined in the config.
-		if _, exists := am.config.ExistingAliases[alias]; exists {
-			continue
-		}
-		// Skip aliases for types that were not resolved.
-		if am.typeInfos[fqn] == nil {
-			slog.Debug("AliasManager: skipping alias - type info not found",
-				"fqn", fqn,
-				"alias", alias)
-			continue
-		}
-		aliasesToWrite = append(aliasesToWrite, aliasPair{alias, fqn})
-	}
-
-	slog.Debug("AliasManager: aliases to write",
-		"count", len(aliasesToWrite))
-
-	// Sort for consistent output.
-	sort.Slice(aliasesToWrite, func(i, j int) bool {
-		return aliasesToWrite[i].aliasName < aliasesToWrite[j].aliasName
-	})
-
-	// Convert to the render info struct.
-	renderInfos := make([]*model.AliasRenderInfo, 0, len(aliasesToWrite))
-	for _, item := range aliasesToWrite {
-		typeInfo := am.typeInfos[item.fqn]
-		originalTypeName := am.nameGenerator.GetTypeString(typeInfo)
+		// Use the new NameGenerator to get the full, correct original type name.
+		originalTypeName := am.nameGenerator.TypeName(typeInfo)
 		renderInfos = append(renderInfos, &model.AliasRenderInfo{
-			AliasName:        item.aliasName,
+			AliasName:        alias,
 			OriginalTypeName: originalTypeName,
 		})
-		slog.Debug("AliasManager: alias to render",
-			"alias", item.aliasName,
-			"originalType", originalTypeName,
-			"fqn", item.fqn,
-			"typeInfoKind", typeInfo.Kind.String(),
-			"typeInfoString", typeInfo.String())
 	}
+
+	// Sort for consistent output.
+	sort.Slice(renderInfos, func(i, j int) bool {
+		return renderInfos[i].AliasName < renderInfos[j].AliasName
+	})
 
 	return renderInfos
 }
 
-// 新增方法：设置字段类型信息
-func (am *AliasManager) SetFieldTypesToAlias(fieldTypes map[string]*model.TypeInfo) {
-	if am.fieldTypesToAlias == nil {
-		am.fieldTypesToAlias = make(map[string]*model.TypeInfo)
+// The following methods satisfy the model.AliasManager interface but are now backed by the new logic.
+
+func (am *AliasManager) GetSourceAlias(info *model.TypeInfo) string {
+	if alias, ok := am.aliasMap[info.UniqueKey()]; ok {
+		return alias
 	}
-	for key, typ := range fieldTypes {
-		am.fieldTypesToAlias[key] = typ
+	// Fallback if not populated, though it should be.
+	return am.generateAlias(info, true)
+}
+
+func (am *AliasManager) GetTargetAlias(info *model.TypeInfo) string {
+	if alias, ok := am.aliasMap[info.UniqueKey()]; ok {
+		return alias
 	}
+	// Fallback if not populated.
+	return am.generateAlias(info, false)
+}
+
+func (am *AliasManager) GetAllAliases() map[string]string {
+	return am.aliasMap
 }

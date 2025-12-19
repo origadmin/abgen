@@ -15,80 +15,69 @@ import (
 
 // CodeGenerator is the main generator that orchestrates all generator components.
 type CodeGenerator struct {
-	config           *config.Config
 	importManager    model.ImportManager
 	nameGenerator    model.NameGenerator
 	aliasManager     model.AliasManager
 	conversionEngine model.ConversionEngine
 	codeEmitter      model.CodeEmitter
 	typeConverter    model.TypeConverter
-	typeInfos        map[string]*model.TypeInfo
 }
 
-// NewCodeGenerator creates a new orchestrator.
-func NewCodeGenerator(config *config.Config, typeInfos map[string]*model.TypeInfo) model.CodeGenerator {
-	importManager := components.NewImportManager()
-	typeConverter := components.NewTypeConverter()
-	aliasMap := make(map[string]string)
-	nameGenerator := components.NewNameGenerator(config, aliasMap)
-	// 修复：传递importManager给AliasManager
-	aliasManager := components.NewAliasManager(config, nameGenerator, importManager, typeInfos)
-	conversionEngine := components.NewConversionEngine(
-		typeConverter,
-		nameGenerator,
-		aliasManager,
-		importManager,
-	)
-	codeEmitter := components.NewCodeEmitter(
-		config,
-		importManager,
-		aliasManager,
-	)
-
+// NewCodeGenerator creates a new, stateless code generator.
+func NewCodeGenerator() model.CodeGenerator {
 	return &CodeGenerator{
-		config:           config,
-		importManager:    importManager,
-		nameGenerator:    nameGenerator,
-		aliasManager:     aliasManager,
-		conversionEngine: conversionEngine,
-		codeEmitter:      codeEmitter,
-		typeConverter:    typeConverter,
-		typeInfos:        typeInfos,
+		typeConverter: components.NewTypeConverter(),
 	}
 }
 
-// Generate implements the model.CodeGenerator interface.
-func (g *CodeGenerator) Generate(request *model.GenerationRequest) (*model.GenerationResponse, error) {
-	g.typeInfos = request.Context.TypeInfos
-	g.config = request.Context.Config
+// initializeComponents configures the generator's components for a specific generation task.
+func (g *CodeGenerator) initializeComponents(cfg *config.Config, typeInfos map[string]*model.TypeInfo) {
+	g.importManager = components.NewImportManager()
+	g.nameGenerator = components.NewNameGenerator(cfg, g.importManager)
+	g.aliasManager = components.NewAliasManager(cfg, g.importManager, g.nameGenerator, typeInfos)
+	g.conversionEngine = components.NewConversionEngine(
+		g.typeConverter,
+		g.nameGenerator,
+		g.aliasManager,
+		g.importManager,
+	)
+	g.codeEmitter = components.NewCodeEmitter(
+		cfg,
+		g.importManager,
+		g.aliasManager,
+	)
+}
+
+// Generate executes a complete code generation task.
+func (g *CodeGenerator) Generate(cfg *config.Config, typeInfos map[string]*model.TypeInfo) (*model.GenerationResponse, error) {
+	sessionConfig := deepCopyConfig(cfg)
+	g.initializeComponents(sessionConfig, typeInfos)
 
 	slog.Debug("Generating code with orchestrator",
-		"type_count", len(g.typeInfos),
-		"initial_rules", len(g.config.ConversionRules))
+		"type_count", len(typeInfos),
+		"initial_rules", len(sessionConfig.ConversionRules))
 
-	for _, pkgPath := range g.config.RequiredPackages() {
-		request.Context.InvolvedPackages[pkgPath] = struct{}{}
+	activeRules := sessionConfig.ConversionRules
+	if len(activeRules) == 0 {
+		slog.Debug("No explicit conversion rules found, discovering implicit rules...")
+		discoveredRules := g.discoverImplicitRules(typeInfos, sessionConfig.PackagePairs)
+		activeRules = append(activeRules, discoveredRules...)
+		slog.Debug("Implicit rule discovery finished", "discovered_rules", len(discoveredRules))
 	}
 
-	if len(g.config.ConversionRules) == 0 {
-		g.discoverImplicitConversionRules(g.typeInfos)
-		slog.Debug("Implicit rule discovery finished", "discovered_rules", len(g.config.ConversionRules))
-	}
-
-	g.nameGenerator.PopulateSourcePkgs(g.config)
-
-	if g.config.NamingRules.SourcePrefix == "" && g.config.NamingRules.SourceSuffix == "" &&
-		g.config.NamingRules.TargetPrefix == "" && g.config.NamingRules.TargetSuffix == "" {
-		if g.needsDisambiguation() {
-			slog.Debug("Ambiguous type names found with no explicit naming rules. Applying default 'Source'/'Target' suffixes.")
-			g.config.NamingRules.SourceSuffix = "Source"
-			g.config.NamingRules.TargetSuffix = "Target"
+	if sessionConfig.NamingRules.SourcePrefix == "" && sessionConfig.NamingRules.SourceSuffix == "" &&
+		sessionConfig.NamingRules.TargetPrefix == "" && sessionConfig.NamingRules.TargetSuffix == "" {
+		if g.needsDisambiguation(activeRules) {
+			slog.Debug("Ambiguous type names found, applying default 'Source'/'Target' suffixes for this session.")
+			sessionConfig.NamingRules.SourceSuffix = "Source"
+			sessionConfig.NamingRules.TargetSuffix = "Target"
+			g.initializeComponents(sessionConfig, typeInfos)
 		}
 	}
 
 	g.aliasManager.PopulateAliases()
 
-	generatedCode, err := g.generateMainCode(g.typeInfos)
+	generatedCode, err := g.generateMainCode(typeInfos, activeRules)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate main code: %w", err)
 	}
@@ -98,7 +87,12 @@ func (g *CodeGenerator) Generate(request *model.GenerationRequest) (*model.Gener
 		return nil, fmt.Errorf("failed to generate custom stubs: %w", err)
 	}
 
-	requiredPackages := g.importManager.GetAllImports()
+	importMap := g.importManager.GetAllImports()
+	requiredPackages := make([]string, 0, len(importMap))
+	for pkgPath := range importMap {
+		requiredPackages = append(requiredPackages, pkgPath)
+	}
+	sort.Strings(requiredPackages)
 
 	return &model.GenerationResponse{
 		GeneratedCode:    generatedCode,
@@ -107,23 +101,65 @@ func (g *CodeGenerator) Generate(request *model.GenerationRequest) (*model.Gener
 	}, nil
 }
 
-func (g *CodeGenerator) generateMainCode(typeInfos map[string]*model.TypeInfo) ([]byte, error) {
+func deepCopyConfig(original *config.Config) *config.Config {
+	if original == nil {
+		return nil
+	}
+
+	cpy := &config.Config{
+		NamingRules:       original.NamingRules,
+		GenerationContext: original.GenerationContext,
+		PackagePairs:      make([]*config.PackagePair, len(original.PackagePairs)),
+		ConversionRules:   make([]*config.ConversionRule, 0, len(original.ConversionRules)),
+	}
+
+	for i, pair := range original.PackagePairs {
+		if pair != nil {
+			pairCopy := *pair
+			cpy.PackagePairs[i] = &pairCopy
+		}
+	}
+
+	for _, rule := range original.ConversionRules {
+		if rule != nil {
+			ruleCopy := &config.ConversionRule{
+				SourceType: rule.SourceType,
+				TargetType: rule.TargetType,
+				Direction:  rule.Direction,
+				FieldRules: config.FieldRuleSet{
+					Ignore: make(map[string]struct{}, len(rule.FieldRules.Ignore)),
+					Remap:  make(map[string]string, len(rule.FieldRules.Remap)),
+				},
+			}
+			for k, v := range rule.FieldRules.Ignore {
+				ruleCopy.FieldRules.Ignore[k] = v
+			}
+			for k, v := range rule.FieldRules.Remap {
+				ruleCopy.FieldRules.Remap[k] = v
+			}
+			cpy.ConversionRules = append(cpy.ConversionRules, ruleCopy)
+		}
+	}
+
+	return cpy
+}
+
+func (g *CodeGenerator) generateMainCode(typeInfos map[string]*model.TypeInfo, rules []*config.ConversionRule) ([]byte, error) {
 	finalBuf := new(bytes.Buffer)
 
-	// Generate all conversion code first to collect required helpers and function bodies.
-	conversionFuncs, requiredHelpers, err := g.generateConversionCode(typeInfos)
+	conversionFuncs, requiredHelpers, err := g.generateConversionCode(typeInfos, rules)
 	if err != nil {
 		return nil, err
 	}
 
-	// Now, emit all parts in order.
 	if err := g.codeEmitter.EmitHeader(finalBuf); err != nil {
 		return nil, err
 	}
 	if err := g.codeEmitter.EmitImports(finalBuf, g.importManager.GetAllImports()); err != nil {
 		return nil, err
 	}
-	if err := g.codeEmitter.EmitAliases(finalBuf); err != nil {
+	// Pass the rendered aliases to the emitter.
+	if err := g.codeEmitter.EmitAliases(finalBuf, g.aliasManager.GetAliasesToRender()); err != nil {
 		return nil, err
 	}
 	if err := g.codeEmitter.EmitConversions(finalBuf, conversionFuncs); err != nil {
@@ -136,15 +172,11 @@ func (g *CodeGenerator) generateMainCode(typeInfos map[string]*model.TypeInfo) (
 	return format.Source(finalBuf.Bytes())
 }
 
-func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeInfo) ([]string, map[string]struct{}, error) {
+func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeInfo, rules []*config.ConversionRule) ([]string, map[string]struct{}, error) {
 	var conversionFuncs []string
 	requiredHelpers := make(map[string]struct{})
-
-	// 使用map来跟踪已生成的函数，避免重复
 	generatedFunctions := make(map[string]bool)
 
-	// Generate conversion functions from config rules.
-	rules := g.config.ConversionRules
 	sort.Slice(rules, func(i, j int) bool { return rules[i].SourceType < rules[j].SourceType })
 
 	for _, rule := range rules {
@@ -153,10 +185,8 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 		if sourceInfo == nil || targetInfo == nil {
 			continue
 		}
-		// Generate forward conversion
 		g.generateAndCollect(sourceInfo, targetInfo, rule, &conversionFuncs, requiredHelpers, generatedFunctions)
 
-		// Generate reverse conversion if needed
 		if rule.Direction == config.DirectionBoth {
 			reverseRule := &config.ConversionRule{
 				SourceType: targetInfo.FQN(),
@@ -196,7 +226,6 @@ func (g *CodeGenerator) generateAndCollect(
 	}
 
 	if generated != nil {
-		// 提取函数名，检查是否已生成
 		funcName := extractFunctionName(generated.FunctionBody)
 		if funcName != "" && !generatedFunctions[funcName] {
 			*funcs = append(*funcs, generated.FunctionBody)
@@ -208,12 +237,10 @@ func (g *CodeGenerator) generateAndCollect(
 	}
 }
 
-// extractFunctionName 从函数体中提取函数名
 func extractFunctionName(functionBody string) string {
 	lines := strings.Split(functionBody, "\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "func ") {
-			// 提取函数名，例如：func ConvertUserPPsSourceToUserPPsTarget
 			parts := strings.Fields(line)
 			if len(parts) >= 2 && strings.HasPrefix(parts[1], "Convert") {
 				return parts[1]
@@ -224,16 +251,10 @@ func extractFunctionName(functionBody string) string {
 }
 
 func (g *CodeGenerator) generateCustomStubs() ([]byte, error) {
-	// Custom stub generation logic remains the same.
 	return nil, nil
 }
 
-func (g *CodeGenerator) writeCustomStubsToBuffer(buf *bytes.Buffer, customStubs map[string]string) error {
-	// This logic also remains the same.
-	return nil
-}
-
-func (g *CodeGenerator) discoverImplicitConversionRules(typeInfos map[string]*model.TypeInfo) {
+func (g *CodeGenerator) discoverImplicitRules(typeInfos map[string]*model.TypeInfo, packagePairs []*config.PackagePair) []*config.ConversionRule {
 	typesByPackage := make(map[string][]*model.TypeInfo)
 	for _, info := range typeInfos {
 		if info.IsNamedType() {
@@ -241,8 +262,11 @@ func (g *CodeGenerator) discoverImplicitConversionRules(typeInfos map[string]*mo
 		}
 	}
 
-	var initialRules []*config.ConversionRule
-	for _, pair := range g.config.PackagePairs {
+	var discoveredRules []*config.ConversionRule
+	for _, pair := range packagePairs {
+		if pair == nil {
+			continue
+		}
 		sourceTypes := typesByPackage[pair.SourcePath]
 		targetTypes := typesByPackage[pair.TargetPath]
 		targetMap := make(map[string]*model.TypeInfo)
@@ -257,73 +281,56 @@ func (g *CodeGenerator) discoverImplicitConversionRules(typeInfos map[string]*mo
 					TargetType: targetType.UniqueKey(),
 					Direction:  config.DirectionBoth,
 				}
-				initialRules = append(initialRules, rule)
+				discoveredRules = append(discoveredRules, rule)
 			}
 		}
 	}
 
-	g.config.ConversionRules = append(g.config.ConversionRules, initialRules...)
-
-	// New, robust slice rule discovery
-	var newSliceRules []*config.ConversionRule
-	for _, rule := range initialRules {
+	var sliceRules []*config.ConversionRule
+	for _, rule := range discoveredRules {
 		sourceInfo, okS := typeInfos[rule.SourceType]
 		targetInfo, okT := typeInfos[rule.TargetType]
 		if !okS || !okT {
 			continue
 		}
 
-		// Rule for []T -> []U
 		sourceSliceType := &model.TypeInfo{Kind: model.Slice, Underlying: sourceInfo}
 		targetSliceType := &model.TypeInfo{Kind: model.Slice, Underlying: targetInfo}
-		typeInfos[sourceSliceType.UniqueKey()] = sourceSliceType
-		typeInfos[targetSliceType.UniqueKey()] = targetSliceType
-		newSliceRules = append(newSliceRules, &config.ConversionRule{
+		sliceRules = append(sliceRules, &config.ConversionRule{
 			SourceType: sourceSliceType.UniqueKey(),
 			TargetType: targetSliceType.UniqueKey(),
 			Direction:  rule.Direction,
 		})
 
-		// Rule for []*T -> []*U
 		sourcePtrType := &model.TypeInfo{Kind: model.Pointer, Underlying: sourceInfo}
 		targetPtrType := &model.TypeInfo{Kind: model.Pointer, Underlying: targetInfo}
-		typeInfos[sourcePtrType.UniqueKey()] = sourcePtrType
-		typeInfos[targetPtrType.UniqueKey()] = targetPtrType
-
 		sourcePtrSliceType := &model.TypeInfo{Kind: model.Slice, Underlying: sourcePtrType}
 		targetPtrSliceType := &model.TypeInfo{Kind: model.Slice, Underlying: targetPtrType}
-		typeInfos[sourcePtrSliceType.UniqueKey()] = sourcePtrSliceType
-		typeInfos[targetPtrSliceType.UniqueKey()] = targetPtrSliceType
-		newSliceRules = append(newSliceRules, &config.ConversionRule{
+		sliceRules = append(sliceRules, &config.ConversionRule{
 			SourceType: sourcePtrSliceType.UniqueKey(),
 			TargetType: targetPtrSliceType.UniqueKey(),
 			Direction:  rule.Direction,
 		})
 	}
 
-	g.config.ConversionRules = append(g.config.ConversionRules, newSliceRules...)
+	allDiscoveredRules := append(discoveredRules, sliceRules...)
 
-	// Sort and remove duplicates
 	uniqueRules := make(map[string]*config.ConversionRule)
-	for _, rule := range g.config.ConversionRules {
+	for _, rule := range allDiscoveredRules {
 		key := fmt.Sprintf("%s->%s", rule.SourceType, rule.TargetType)
 		uniqueRules[key] = rule
 	}
-	g.config.ConversionRules = make([]*config.ConversionRule, 0, len(uniqueRules))
+
+	finalRules := make([]*config.ConversionRule, 0, len(uniqueRules))
 	for _, rule := range uniqueRules {
-		g.config.ConversionRules = append(g.config.ConversionRules, rule)
+		finalRules = append(finalRules, rule)
 	}
 
-	sort.Slice(g.config.ConversionRules, func(i, j int) bool {
-		if g.config.ConversionRules[i].SourceType != g.config.ConversionRules[j].SourceType {
-			return g.config.ConversionRules[i].SourceType < g.config.ConversionRules[j].SourceType
-		}
-		return g.config.ConversionRules[i].TargetType < g.config.ConversionRules[j].TargetType
-	})
+	return finalRules
 }
 
-func (g *CodeGenerator) needsDisambiguation() bool {
-	for _, rule := range g.config.ConversionRules {
+func (g *CodeGenerator) needsDisambiguation(rules []*config.ConversionRule) bool {
+	for _, rule := range rules {
 		sourceBaseName := ""
 		if lastDot := strings.LastIndex(rule.SourceType, "."); lastDot != -1 {
 			sourceBaseName = rule.SourceType[lastDot+1:]
@@ -339,15 +346,4 @@ func (g *CodeGenerator) needsDisambiguation() bool {
 		}
 	}
 	return false
-}
-
-func (g *CodeGenerator) getPackageName() string {
-	if g.config.GenerationContext.PackageName != "" {
-		return g.config.GenerationContext.PackageName
-	}
-	return "generated"
-}
-
-func (g *CodeGenerator) GetConfig() *config.Config {
-	return g.config
 }

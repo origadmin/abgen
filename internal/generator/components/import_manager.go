@@ -62,19 +62,22 @@ func (im *ImportManager) Add(importPath string) string {
 	return alias
 }
 
-// GetAlias returns the alias for an import path.
-func (im *ImportManager) GetAlias(importPath string) string {
-	return im.aliases[importPath]
+// AddAs adds an import with a specific alias.
+func (im *ImportManager) AddAs(importPath, alias string) string {
+	im.imports[importPath] = alias
+	im.aliases[importPath] = alias
+	return alias
 }
 
-// GetAllImports returns all imports as a sorted slice.
-func (im *ImportManager) GetAllImports() []string {
-	paths := make([]string, 0, len(im.imports))
-	for p := range im.imports {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	return paths
+// GetAlias returns the alias for an import path.
+func (im *ImportManager) GetAlias(importPath string) (string, bool) {
+	alias, ok := im.aliases[importPath]
+	return alias, ok
+}
+
+// GetAllImports returns all imports as a map of path to alias.
+func (im *ImportManager) GetAllImports() map[string]string {
+	return im.imports
 }
 
 // WriteImportsToBuffer writes the import block to the given buffer (helper method, not exposed in the interface).
@@ -83,9 +86,17 @@ func (im *ImportManager) WriteImportsToBuffer(buf *bytes.Buffer) {
 	if len(imports) == 0 {
 		return
 	}
+
+	// Sort paths for consistent output
+	paths := make([]string, 0, len(imports))
+	for p := range imports {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
 	buf.WriteString("import(\n")
-	for _, importPath := range imports {
-		alias := im.GetAlias(importPath)
+	for _, importPath := range paths {
+		alias := im.imports[importPath]
 		// Only show the alias if it's different from the base name or is a generated alias.
 		baseAlias := path.Base(importPath)
 		if alias == baseAlias && !strings.HasPrefix(alias, "pkg") {
@@ -106,7 +117,14 @@ func (im *ImportManager) String() string {
 	var result string
 	result += "import(\n"
 
-	for _, importPath := range im.GetAllImports() {
+	// Sort paths for consistent output
+	paths := make([]string, 0, len(im.imports))
+	for p := range im.imports {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	for _, importPath := range paths {
 		alias := im.imports[importPath]
 		// Only show the alias if it's different from the base name.
 		baseAlias := path.Base(importPath)

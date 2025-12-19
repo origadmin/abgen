@@ -3,6 +3,7 @@ package components
 import (
 	"bytes"
 	"fmt"
+	"path"
 	"sort"
 
 	"github.com/origadmin/abgen/internal/config"
@@ -43,31 +44,41 @@ func (ce *CodeEmitter) EmitHeader(buf *bytes.Buffer) error {
 }
 
 // EmitImports emits the import statements.
-func (ce *CodeEmitter) EmitImports(buf *bytes.Buffer, imports []string) error {
+func (ce *CodeEmitter) EmitImports(buf *bytes.Buffer, imports map[string]string) error {
 	if len(imports) == 0 {
 		return nil
 	}
 
+	paths := make([]string, 0, len(imports))
+	for p := range imports {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
 	buf.WriteString("import(\n")
-	sort.Strings(imports)
-	for _, importPath := range imports {
-		alias := ce.importManager.GetAlias(importPath)
-		buf.WriteString(fmt.Sprintf("\t%s %q\n", alias, importPath))
+	for _, importPath := range paths {
+		alias := imports[importPath]
+		baseAlias := path.Base(importPath)
+
+		if alias != baseAlias {
+			buf.WriteString(fmt.Sprintf("\t%s %q\n", alias, importPath))
+		} else {
+			buf.WriteString(fmt.Sprintf("\t%q\n", importPath))
+		}
 	}
 	buf.WriteString(")\n\n")
 	return nil
 }
 
 // EmitAliases emits the type aliases.
-func (ce *CodeEmitter) EmitAliases(buf *bytes.Buffer) error {
-	aliasesToRender := ce.aliasManager.GetAliasesToRender()
-	if len(aliasesToRender) == 0 {
+func (ce *CodeEmitter) EmitAliases(buf *bytes.Buffer, aliases []*model.AliasRenderInfo) error {
+	if len(aliases) == 0 {
 		return nil
 	}
 
 	buf.WriteString("// Local type aliases for external types.\n")
 	buf.WriteString("type(\n")
-	for _, item := range aliasesToRender {
+	for _, item := range aliases {
 		buf.WriteString(fmt.Sprintf("\t%s = %s\n", item.AliasName, item.OriginalTypeName))
 	}
 	buf.WriteString(")\n\n")
@@ -109,7 +120,6 @@ func (ce *CodeEmitter) EmitHelpers(buf *bytes.Buffer, requiredHelpers map[string
 	return nil
 }
 
-// getPackageName gets the package name.
 func (ce *CodeEmitter) getPackageName() string {
 	if ce.config.GenerationContext.PackageName != "" {
 		return ce.config.GenerationContext.PackageName

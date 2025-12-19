@@ -13,7 +13,6 @@ import (
 	"github.com/origadmin/abgen/internal/analyzer"
 	"github.com/origadmin/abgen/internal/config"
 	"github.com/origadmin/abgen/internal/generator"
-	"github.com/origadmin/abgen/internal/model"
 )
 
 var (
@@ -25,8 +24,7 @@ var (
 	debug        = flag.Bool("debug", false, "Enable debug logging")
 	output       = flag.String("output", "", "Output file name for the main generated code. Defaults to <package_name>.gen.go.")
 	customOutput = flag.String("custom-output", "custom.gen.go", "Output file name for custom conversion stubs.")
-	logFile      = flag.String("log-file", "", "Path to a file where logs should be written. If empty, logs go to stderr.") // Added log-file flag
-	useNewArch   = flag.Bool("new-arch", false, "Use the new component-based architecture for code generation (experimental)")
+	logFile      = flag.String("log-file", "", "Path to a file where logs should be written. If empty, logs go to stderr.")
 )
 
 func main() {
@@ -46,7 +44,7 @@ func main() {
 		logWriter = os.Stderr
 	}
 
-	logLevel := slog.LevelWarn // Changed default log level to Warn
+	logLevel := slog.LevelWarn
 	if *debug {
 		logLevel = slog.LevelDebug
 	}
@@ -66,11 +64,10 @@ func main() {
 	sourceDir := flag.Arg(0)
 	slog.Info("Starting abgen", "sourceDir", sourceDir)
 
-	// --- 1. Load the initial package to find directives ---
-	// Use the new high-level parser to get the config.
+	// --- 1. Load Configuration ---
 	slog.Debug("Parsing configuration...")
 	parser := config.NewParser()
-	cfg, err := parser.Parse(sourceDir) // The new Parse method handles initial package loading and directive parsing.
+	cfg, err := parser.Parse(sourceDir)
 	if err != nil {
 		slog.Error("Failed to parse configuration", "error", err)
 		os.Exit(1)
@@ -102,16 +99,10 @@ func main() {
 
 	// --- 3. Generate Code ---
 	slog.Debug("Generating code...")
-	gen := generator.NewCodeGenerator(cfg, typeInfos)
-	genContext := &model.GenerationContext{
-		Config:           cfg,
-		TypeInfos:        typeInfos,
-		InvolvedPackages: make(map[string]struct{}),
-	}
-	request := &model.GenerationRequest{
-		Context: genContext,
-	}
-	response, err := gen.Generate(request)
+	// Create a new, stateless generator "worker".
+	gen := generator.NewCodeGenerator()
+	// Call Generate with the specific task's configuration and type info.
+	response, err := gen.Generate(cfg, typeInfos)
 	if err != nil {
 		slog.Error("Code generation failed", "error", err)
 		os.Exit(1)
