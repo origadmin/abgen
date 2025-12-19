@@ -3,7 +3,6 @@ package components
 import (
 	"fmt"
 	"go/types"
-	"strings"
 
 	"github.com/origadmin/abgen/internal/model"
 )
@@ -28,88 +27,76 @@ func NewTypeFormatter(aliasManager model.AliasManager, importManager model.Impor
 
 // Format converts the given Go type into its string representation.
 // It's a sophisticated version of types.TypeString that is aware of the generator's aliasing and import context.
-func (f *TypeFormatter) Format(typ types.Type) string {
-	return f.formatType(typ, true) // Check for aliases
+func (f *TypeFormatter) Format(info *model.TypeInfo) string {
+	return f.formatTypeInfo(info, true) // Check for aliases
 }
 
 // FormatWithoutAlias converts the given Go type into its string representation without using aliases.
 // This is used when we need the original type name for alias generation.
-func (f *TypeFormatter) FormatWithoutAlias(typ types.Type) string {
-	return f.formatType(typ, false) // Do not check for aliases
+func (f *TypeFormatter) FormatWithoutAlias(info *model.TypeInfo) string {
+	return f.formatTypeInfo(info, false) // Do not check for aliases
 }
 
-func (f *TypeFormatter) formatType(typ types.Type, checkAlias bool) string {
-	// Try to get model.TypeInfo for the current Go type
-	typeInfo := f.getTypeInfoFromGoType(typ)
+func (f *TypeFormatter) formatTypeInfo(info *model.TypeInfo, checkAlias bool) string {
+	if info == nil {
+		return "nil"
+	}
 
-	if checkAlias && typeInfo != nil {
-		if alias, ok := f.aliasManager.GetAlias(typeInfo); ok {
+	if checkAlias {
+		if alias, ok := f.aliasManager.GetAlias(info); ok {
 			return alias
 		}
 	}
 
-	switch t := typ.(type) {
-	case *types.Basic:
-		return t.String()
-	case *types.Pointer:
-		return "*" + f.formatType(t.Elem(), checkAlias)
-	case *types.Named:
-		// If alias check failed or not requested, format as qualified name
-		return f.qualifiedName(t)
-	case *types.Slice:
-		return "[]" + f.formatType(t.Elem(), checkAlias)
-	case *types.Array:
-		return fmt.Sprintf("[%d]%s", t.Len(), f.formatType(t.Elem(), checkAlias))
-	case *types.Map:
-		key := f.formatType(t.Key(), checkAlias)
-		elem := f.formatType(t.Elem(), checkAlias)
+	switch info.Kind {
+	case model.Primitive:
+		return info.Name
+	case model.Pointer:
+		return "*" + f.formatTypeInfo(info.Underlying, checkAlias)
+	case model.Named:
+		return f.qualifiedNameFromInfo(info)
+	case model.Slice:
+		return "[]" + f.formatTypeInfo(info.Underlying, checkAlias)
+	case model.Array:
+		return fmt.Sprintf("[%d]%s", info.ArrayLen, f.formatTypeInfo(info.Underlying, checkAlias))
+	case model.Map:
+		key := f.formatTypeInfo(info.KeyType, checkAlias)
+		elem := f.formatTypeInfo(info.Underlying, checkAlias)
 		return fmt.Sprintf("map[%s]%s", key, elem)
-	case *types.Interface:
-		// Handle `error` and `any` as special cases
-		if t.NumEmbeddeds() == 0 && t.NumExplicitMethods() == 0 {
-			return "any" // for empty interface
+	case model.Interface:
+		if info.Name == "interface{}" || info.Name == "any" {
+			return "any"
 		}
-		// A bit of a simplification, but good for most cases like `error`
-		if named, ok := typ.(*types.Named); ok && named.Obj().Pkg() == nil && named.Obj().Name() == "error" {
+		if info.Name == "error" {
 			return "error"
 		}
-		return t.String() // fallback for other interfaces
-	case *types.Signature:
-		params := make([]string, t.Params().Len())
-		for i := 0; i < t.Params().Len(); i++ {
-			params[i] = f.formatType(t.Params().At(i).Type(), checkAlias)
-		}
-		results := make([]string, t.Results().Len())
-		for i := 0; i < t.Results().Len(); i++ {
-			results[i] = f.formatType(t.Results().At(i).Type(), checkAlias)
-		}
-		paramStr := strings.Join(params, ", ")
-		resultStr := strings.Join(results, ", ")
-		if len(results) > 1 {
-			resultStr = "(" + resultStr + ")"
-		}
-		return fmt.Sprintf("func(%s) %s", paramStr, resultStr)
-
+		return info.TypeString() // Fallback
+	case model.Struct:
+		// This case is for anonymous structs, which are rare in this context.
+		// Named structs are handled by model.Named.
+		return "struct{}"
 	default:
-		// Fallback for types not explicitly handled (e.g., Chan, Struct, etc.)
-		return types.TypeString(typ, f.qualifier)
+		// Fallback for types not explicitly handled (e.g., Chan, Func, etc.)
+		if info.Original != nil {
+			return types.TypeString(info.Original.Type(), f.qualifier)
+		}
+		return info.TypeString()
 	}
 }
 
-func (f *TypeFormatter) qualifiedName(named *types.Named) string {
-	pkg := named.Obj().Pkg()
-	if pkg == nil {
-		return named.Obj().Name() // Built-in type
+func (f *TypeFormatter) qualifiedNameFromInfo(info *model.TypeInfo) string {
+	if info.ImportPath == "" {
+		return info.Name // Built-in type
 	}
 
-	// Use the import manager to get the correct package name (it might be aliased)
-	pkgName := f.importManager.PackageName(pkg)
-	if pkgName == "" {
-		// Should not happen if imports are managed correctly
-		return named.Obj().Name()
+	// Find the package from the import manager to get the correct alias
+	pkgAlias, found := f.importManager.GetAlias(info.ImportPath)
+	if !found {
+		// This should not happen if all types are analyzed correctly
+		return info.Name
 	}
 
-	return fmt.Sprintf("%s.%s", pkgName, named.Obj().Name())
+	return fmt.Sprintf("%s.%s", pkgAlias, info.Name)
 }
 
 // qualifier is a helper for the fallback types.TypeString function.

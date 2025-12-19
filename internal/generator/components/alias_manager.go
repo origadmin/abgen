@@ -18,6 +18,7 @@ type AliasManager struct {
 	importManager model.ImportManager
 	aliasMap      map[string]string
 	typeInfos     map[string]*model.TypeInfo
+	aliasedTypes  map[string]*model.TypeInfo
 }
 
 var camelCaseRegexp = regexp.MustCompile(`[^a-zA-Z0-9]+`)
@@ -33,7 +34,13 @@ func NewAliasManager(
 		importManager: importManager,
 		aliasMap:      make(map[string]string),
 		typeInfos:     typeInfos,
+		aliasedTypes:  make(map[string]*model.TypeInfo),
 	}
+}
+
+// GetAliasedTypes returns the map of aliased types.
+func (am *AliasManager) GetAliasedTypes() map[string]*model.TypeInfo {
+	return am.aliasedTypes
 }
 
 // GetAlias looks up an alias for a given *model.TypeInfo.
@@ -110,6 +117,7 @@ func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSou
 
 	// Update the map with the real alias.
 	am.aliasMap[typeInfo.UniqueKey()] = alias
+	am.aliasedTypes[typeInfo.UniqueKey()] = typeInfo
 	slog.Debug("AliasManager: created alias", "type", typeInfo.String(), "uniqueKey", typeInfo.UniqueKey(), "alias", alias)
 }
 

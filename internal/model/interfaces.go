@@ -60,6 +60,7 @@ type AliasManager interface {
 	AliasLookup // Embed AliasLookup interface
 	PopulateAliases()
 	GetAllAliases() map[string]string
+	GetAliasedTypes() map[string]*TypeInfo
 	GetAlias(info *TypeInfo) (string, bool)
 	GetSourcePath() string
 	GetTargetPath() string
@@ -92,5 +93,6 @@ type TypeConverter interface {
 	IsPrimitive(info *TypeInfo) bool
 	IsUltimatelyPrimitive(info *TypeInfo) bool
 	GetElementType(info *TypeInfo) *TypeInfo
+	GetSliceElementType(info *TypeInfo) *TypeInfo
 	GetKeyType(info *TypeInfo) *TypeInfo
 }

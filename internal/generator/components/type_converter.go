@@ -46,6 +46,15 @@ func (c *TypeConverter) GetElementType(info *model.TypeInfo) *model.TypeInfo {
 	}
 }
 
+// GetSliceElementType returns the element type of a slice.
+func (c *TypeConverter) GetSliceElementType(info *model.TypeInfo) *model.TypeInfo {
+	info = c.resolveConcreteType(info)
+	if info != nil && info.Kind == model.Slice {
+		return info.Underlying
+	}
+	return nil
+}
+
 // GetKeyType returns the key type of a map.
 func (c *TypeConverter) GetKeyType(info *model.TypeInfo) *model.TypeInfo {
 	info = c.resolveConcreteType(info)

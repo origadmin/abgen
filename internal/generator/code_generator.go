@@ -37,7 +37,7 @@ func (g *CodeGenerator) initializeComponents(cfg *config.Config, typeInfos map[s
 	// Create components in dependency order.
 	// 1. Components with no internal dependencies.
 	g.importManager = components.NewImportManager()
-	
+
 	// Add required imports directly from PackageAliases
 	for alias, path := range cfg.PackageAliases {
 		if alias == "source" || alias == "target" {
@@ -45,7 +45,7 @@ func (g *CodeGenerator) initializeComponents(cfg *config.Config, typeInfos map[s
 		}
 	}
 	slog.Debug("ImportManager after PackageAliases processing", "imports", g.importManager.GetAllImports())
-	
+
 	g.nameGenerator = components.NewNameGenerator(cfg)
 	// g.typeConverter is already initialized in NewCodeGenerator.
 
@@ -329,15 +329,17 @@ func (g *CodeGenerator) prepareAliasesForRender(typeInfos map[string]*model.Type
 
 	for uniqueKey, alias := range allAliases {
 		var originalTypeName string
-		if typeInfo, ok := typeInfos[uniqueKey]; ok && typeInfo.Original != nil {
-			originalTypeName = g.typeFormatter.FormatWithoutAlias(typeInfo.Original.Type())
+		typeInfo, ok := typeInfos[uniqueKey]
+		if !ok {
+			slog.Debug("prepareAliasesForRender: TypeInfo not found for key, creating temporary one.", "uniqueKey", uniqueKey)
+			typeInfo = g.reconstructTypeInfoFromKey(uniqueKey, typeInfos)
+		}
+
+		if typeInfo != nil {
+			originalTypeName = g.typeFormatter.FormatWithoutAlias(typeInfo)
 		} else {
-			// This is a workaround for composite types not in typeInfos
-			tempName := uniqueKey
-			for pkgPath, pkgAlias := range g.importManager.GetAllImports() {
-				tempName = strings.Replace(tempName, pkgPath, pkgAlias, -1)
-			}
-			originalTypeName = tempName
+			slog.Warn("prepareAliasesForRender: Could not reconstruct TypeInfo, falling back to uniqueKey.", "uniqueKey", uniqueKey)
+			originalTypeName = uniqueKey // This should not happen with the new reconstructor
 		}
 
 		renderInfos = append(renderInfos, &model.AliasRenderInfo{
@@ -352,6 +354,42 @@ func (g *CodeGenerator) prepareAliasesForRender(typeInfos map[string]*model.Type
 
 	return renderInfos
 }
+
+// reconstructTypeInfoFromKey attempts to build a temporary TypeInfo from a unique key string.
+func (g *CodeGenerator) reconstructTypeInfoFromKey(key string, typeInfos map[string]*model.TypeInfo) *model.TypeInfo {
+	if info, ok := typeInfos[key]; ok {
+		return info
+	}
+
+	if strings.HasPrefix(key, "[]") {
+		underlying := g.reconstructTypeInfoFromKey(key[2:], typeInfos)
+		if underlying != nil {
+			return &model.TypeInfo{Kind: model.Slice, Underlying: underlying}
+		}
+	} else if strings.HasPrefix(key, "*") {
+		underlying := g.reconstructTypeInfoFromKey(key[1:], typeInfos)
+		if underlying != nil {
+			return &model.TypeInfo{Kind: model.Pointer, Underlying: underlying}
+		}
+	} else {
+		// It's a named type that wasn't in the original map.
+		// Create a partial TypeInfo for it.
+		lastDot := strings.LastIndex(key, ".")
+		if lastDot != -1 {
+			pkgPath := key[:lastDot]
+			typeName := key[lastDot+1:]
+			return &model.TypeInfo{
+				Name:       typeName,
+				ImportPath: pkgPath,
+				Kind:       model.Named, // Assume it's a named type
+			}
+		}
+	}
+
+	slog.Warn("reconstructTypeInfoFromKey: could not fully reconstruct type", "key", key)
+	return nil
+}
+
 
 func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeInfo, rules []*config.ConversionRule) ([]string, map[string]struct{}, error) {
 	var conversionFuncs []string

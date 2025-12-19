@@ -38,6 +38,16 @@ func NewConversionEngine(
 func (ce *ConversionEngine) GenerateConversionFunction(
 	sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule,
 ) (*model.GeneratedCode, []*model.ConversionTask, error) {
+	// Handle pointer to slice cases first
+	if ce.typeConverter.IsPointer(sourceInfo) && ce.typeConverter.IsPointer(targetInfo) {
+		sourceUnderlying := ce.typeConverter.GetElementType(sourceInfo)
+		targetUnderlying := ce.typeConverter.GetElementType(targetInfo)
+		if ce.typeConverter.IsSlice(sourceUnderlying) && ce.typeConverter.IsSlice(targetUnderlying) {
+			code, err := ce.GenerateSliceConversion(sourceInfo, targetInfo)
+			return code, nil, err
+		}
+	}
+
 	if ce.typeConverter.IsSlice(sourceInfo) && ce.typeConverter.IsSlice(targetInfo) {
 		code, err := ce.GenerateSliceConversion(sourceInfo, targetInfo)
 		return code, nil, err // Slice conversion does not discover new tasks in this model
@@ -49,8 +59,8 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 
 	var buf strings.Builder
 	funcName := ce.nameGenerator.ConversionFunctionName(sourceInfo, targetInfo)
-	sourceTypeStr := ce.typeFormatter.Format(sourceInfo.Original.Type())
-	targetTypeStr := ce.typeFormatter.Format(targetInfo.Original.Type())
+	sourceTypeStr := ce.typeFormatter.Format(sourceInfo)
+	targetTypeStr := ce.typeFormatter.Format(targetInfo)
 
 	buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceInfo.Name, targetInfo.Name))
 	buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, sourceTypeStr, targetTypeStr))
@@ -76,11 +86,32 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 ) (*model.GeneratedCode, error) {
 	var buf strings.Builder
 
-	sourceElem := ce.typeConverter.GetElementType(sourceInfo)
-	targetElem := ce.typeConverter.GetElementType(targetInfo)
+	isSourcePtrToSlice := ce.typeConverter.IsPointer(sourceInfo) && ce.typeConverter.IsSlice(ce.typeConverter.GetElementType(sourceInfo))
+	isTargetPtrToSlice := ce.typeConverter.IsPointer(targetInfo) && ce.typeConverter.IsSlice(ce.typeConverter.GetElementType(targetInfo))
 
-	sourceSliceStr := ce.typeFormatter.Format(sourceInfo.Original.Type())
-	targetSliceStr := ce.typeFormatter.Format(targetInfo.Original.Type())
+	var actualSourceSlice, actualTargetSlice *model.TypeInfo
+	if isSourcePtrToSlice {
+		actualSourceSlice = ce.typeConverter.GetElementType(sourceInfo)
+	} else {
+		actualSourceSlice = sourceInfo
+	}
+	if isTargetPtrToSlice {
+		actualTargetSlice = ce.typeConverter.GetElementType(targetInfo)
+	} else {
+		actualTargetSlice = targetInfo
+	}
+
+	sourceElem := ce.typeConverter.GetSliceElementType(actualSourceSlice)
+	targetElem := ce.typeConverter.GetSliceElementType(actualTargetSlice)
+
+	if sourceElem == nil || targetElem == nil {
+		return nil, fmt.Errorf("could not determine element types for slice conversion from %s to %s", sourceInfo.UniqueKey(), targetInfo.UniqueKey())
+	}
+
+	sourceSliceStr := ce.typeFormatter.Format(sourceInfo)
+	targetSliceStr := ce.typeFormatter.Format(targetInfo)
+	targetSliceAllocStr := ce.typeFormatter.Format(actualTargetSlice)
+
 	funcName := ce.nameGenerator.ConversionFunctionName(sourceInfo, targetInfo)
 
 	slog.Debug("Generating slice conversion", "funcName", funcName, "source", sourceSliceStr, "target", targetSliceStr)
@@ -88,28 +119,40 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	buf.WriteString(fmt.Sprintf("// %s converts a slice of %s to a slice of %s.\n", funcName, sourceInfo.Name, targetInfo.Name))
 	buf.WriteString(fmt.Sprintf("func %s(froms %s) %s {\n", funcName, sourceSliceStr, targetSliceStr))
 	buf.WriteString("\tif froms == nil {\n\t\treturn nil\t}\n")
-	buf.WriteString(fmt.Sprintf("\ttos := make(%s, len(froms))\n", targetSliceStr))
-	buf.WriteString("\tfor i, f := range froms {\n")
+
+	loopVar := "froms"
+	if isSourcePtrToSlice {
+		loopVar = "(*froms)"
+	}
+
+	buf.WriteString(fmt.Sprintf("\ttos := make(%s, len(%s))\n", targetSliceAllocStr, loopVar))
+	buf.WriteString(fmt.Sprintf("\tfor i, f := range %s {\n", loopVar))
 
 	elemFuncName := ce.nameGenerator.ConversionFunctionName(sourceElem, targetElem)
 
-	sourceIsPtr := ce.typeConverter.IsPointer(sourceElem)
-	targetIsPtr := ce.typeConverter.IsPointer(targetElem)
+	sourceElemIsPtr := ce.typeConverter.IsPointer(sourceElem)
+	targetElemIsPtr := ce.typeConverter.IsPointer(targetElem)
 
 	var conversionExpr string
-	if !sourceIsPtr && !targetIsPtr {
+	if !sourceElemIsPtr && !targetElemIsPtr { // V -> V
 		conversionExpr = fmt.Sprintf("tos[i] = *%s(&f)", elemFuncName)
-	} else if !sourceIsPtr && targetIsPtr {
+	} else if !sourceElemIsPtr && targetElemIsPtr { // V -> *P
 		conversionExpr = fmt.Sprintf("tos[i] = %s(&f)", elemFuncName)
-	} else if sourceIsPtr && !targetIsPtr {
+	} else if sourceElemIsPtr && !targetElemIsPtr { // *P -> V
 		conversionExpr = fmt.Sprintf("tos[i] = *%s(f)", elemFuncName)
-	} else { // sourceIsPtr && targetIsPtr
+	} else { // *P -> *P
 		conversionExpr = fmt.Sprintf("tos[i] = %s(f)", elemFuncName)
 	}
 
 	buf.WriteString(fmt.Sprintf("\t\t%s\n", conversionExpr))
 	buf.WriteString("\t}\n")
-	buf.WriteString("\treturn tos\n")
+
+	if isTargetPtrToSlice {
+		buf.WriteString("\treturn &tos\n")
+	} else {
+		buf.WriteString("\treturn tos\n")
+	}
+
 	buf.WriteString("}\n\n")
 
 	return &model.GeneratedCode{FunctionBody: buf.String()}, nil
@@ -124,7 +167,7 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 	var allRequiredHelpers []string
 	var newTasks []*model.ConversionTask
 
-	targetTypeStr := ce.typeFormatter.Format(targetInfo.Original.Type())
+	targetTypeStr := ce.typeFormatter.Format(targetInfo)
 
 	for _, sourceField := range sourceInfo.Fields {
 		if _, shouldIgnore := rule.FieldRules.Ignore[sourceField.Name]; shouldIgnore {
@@ -183,6 +226,21 @@ func (ce *ConversionEngine) getConversionExpression(
 	}
 
 	convFuncName := ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
+
+	// This is the new logic to handle slice fields correctly
+	isSliceConversion := (ce.typeConverter.IsSlice(sourceType) && ce.typeConverter.IsSlice(targetType)) ||
+		(ce.typeConverter.IsPointer(sourceType) && ce.typeConverter.IsPointer(targetType) &&
+			ce.typeConverter.IsSlice(ce.typeConverter.GetElementType(sourceType)) &&
+			ce.typeConverter.IsSlice(ce.typeConverter.GetElementType(targetType)))
+
+	if isSliceConversion {
+		newTask := &model.ConversionTask{
+			Source: sourceType,
+			Target: targetType,
+		}
+		return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, newTask
+	}
+
 	sourceIsPointer := ce.typeConverter.IsPointer(sourceType)
 	targetIsPointer := ce.typeConverter.IsPointer(targetType)
 
