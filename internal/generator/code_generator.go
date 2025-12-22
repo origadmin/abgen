@@ -3,10 +3,11 @@ package generator
 import (
 	"bytes"
 	"fmt"
-	"go/format"
 	"log/slog"
 	"sort"
 	"strings"
+
+	"golang.org/x/tools/imports"
 
 	"github.com/origadmin/abgen/internal/config"
 	"github.com/origadmin/abgen/internal/generator/components"
@@ -289,8 +290,13 @@ func (g *CodeGenerator) generateMainCode(cfg *config.Config, typeInfos map[strin
 	if err := g.codeEmitter.EmitHelpers(finalBuf, helpersToEmit); err != nil {
 		return nil, err
 	}
-
-	return format.Source(finalBuf.Bytes())
+	process, err := imports.Process("", finalBuf.Bytes(), &imports.Options{
+		FormatOnly: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return process, nil
 }
 
 // prepareAliasesForRender creates the list of aliases to be rendered in the final code.
@@ -521,8 +527,13 @@ func (g *CodeGenerator) generateCustomStubs(cfg *config.Config, typeInfos map[st
 		return nil, fmt.Errorf("failed to emit stubs: %w", err)
 	}
 
-	// Format the code
-	return format.Source(finalBuf.Bytes())
+	process, err := imports.Process("", finalBuf.Bytes(), &imports.Options{
+		FormatOnly: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return process, nil
 }
 
 func (g *CodeGenerator) needsDisambiguation(rules []*config.ConversionRule) bool {
