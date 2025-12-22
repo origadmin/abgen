@@ -371,18 +371,26 @@ func (g *CodeGenerator) reconstructTypeInfoFromKey(key string, typeInfos map[str
 		if underlying != nil {
 			return &model.TypeInfo{Kind: model.Pointer, Underlying: underlying}
 		}
-	} else {
-		// It's a named type that wasn't in the original map.
-		// Create a partial TypeInfo for it.
-		lastDot := strings.LastIndex(key, ".")
-		if lastDot != -1 {
-			pkgPath := key[:lastDot]
-			typeName := key[lastDot+1:]
-			return &model.TypeInfo{
-				Name:       typeName,
-				ImportPath: pkgPath,
-				Kind:       model.Named, // Assume it's a named type
-			}
+	}
+
+	// It's a named type that wasn't in the original map.
+	// Create a partial TypeInfo for it.
+	lastDot := strings.LastIndex(key, ".")
+	if lastDot != -1 {
+		pkgPath := key[:lastDot]
+		typeName := key[lastDot+1:]
+		return &model.TypeInfo{
+			Name:       typeName,
+			ImportPath: pkgPath,
+			Kind:       model.Named, // Assume it's a named type
+		}
+	}
+
+	// It's a primitive type
+	if !strings.Contains(key, ".") {
+		return &model.TypeInfo{
+			Name: key,
+			Kind: model.Primitive,
 		}
 	}
 
