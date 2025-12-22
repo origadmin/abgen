@@ -6,6 +6,7 @@ import (
 
 // Config holds the complete, parsed configuration for a generation task.
 type Config struct {
+	Version             string
 	GenerationContext   GenerationContext
 	PackageAliases      map[string]string
 	LocalAliases        map[string]string
@@ -174,6 +175,7 @@ func (c *Config) Clone() *Config {
 	}
 
 	clone := &Config{
+		Version:             c.Version,
 		GenerationContext:   c.GenerationContext,
 		PackageAliases:      make(map[string]string, len(c.PackageAliases)),
 		LocalAliases:        make(map[string]string, len(c.LocalAliases)),

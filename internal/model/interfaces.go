@@ -87,6 +87,7 @@ type ConversionEngine interface {
 // generated Go file.
 type CodeEmitter interface {
 	EmitHeader(buf *bytes.Buffer) error
+	EmitStubHeader(buf *bytes.Buffer) error
 	EmitImports(buf *bytes.Buffer, imports map[string]string) error
 	EmitAliases(buf *bytes.Buffer, aliases []*AliasRenderInfo) error
 	EmitConversions(buf *bytes.Buffer, funcs []string) error

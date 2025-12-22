@@ -53,8 +53,8 @@ func main() {
 		Level: logLevel,
 	})))
 
+	v := buildVersion(version, commit, date, builtBy, treeState)
 	if len(flag.Args()) == 0 {
-		v := buildVersion(version, commit, date, builtBy, treeState)
 		fmt.Println(v.String())
 		fmt.Println("Usage: abgen [options] <source_directory>")
 		flag.PrintDefaults()
@@ -72,6 +72,7 @@ func main() {
 		slog.Error("Failed to parse configuration", "error", err)
 		os.Exit(1)
 	}
+	cfg.Version = v.String()
 
 	// Resolve output file paths and store them in GenerationContext
 	mainOutputFile := *output

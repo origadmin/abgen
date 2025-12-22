@@ -506,7 +506,7 @@ func (g *CodeGenerator) generateCustomStubs(cfg *config.Config, typeInfos map[st
 	var finalBuf bytes.Buffer
 
 	// 1. Header
-	if err := g.codeEmitter.EmitHeader(&finalBuf); err != nil {
+	if err := g.codeEmitter.EmitStubHeader(&finalBuf); err != nil {
 		return nil, fmt.Errorf("failed to emit header for stubs: %w", err)
 	}
 
