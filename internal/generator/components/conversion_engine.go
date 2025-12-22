@@ -273,73 +273,46 @@ func (ce *ConversionEngine) getConversionExpression(
 		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), []string{funcName}, nil
 	}
 
-	// Determine the function name.
+	isStructConv := sourceType.Kind == model.Struct && targetType.Kind == model.Struct
+	isSliceConv := sourceType.Kind == model.Slice && targetType.Kind == model.Slice
+
 	var convFuncName string
-	isPurelyPrimitive := ce.typeConverter.IsPurelyPrimitiveOrCompositeOfPrimitives(sourceType) &&
-		ce.typeConverter.IsPurelyPrimitiveOrCompositeOfPrimitives(targetType)
-
-	if isPurelyPrimitive {
-		convFuncName = ce.nameGenerator.FieldConversionFunctionName(sourceParent, targetParent, sourceField, targetField)
-	} else {
-		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
-	}
-
-	// This is the new logic to handle slice fields correctly
-	isSliceConversion := (sourceType.Kind == model.Slice && targetType.Kind == model.Slice) ||
-		(sourceType.Kind == model.Pointer && targetType.Kind == model.Pointer &&
-			sourceType.Underlying != nil && sourceType.Underlying.Kind == model.Slice &&
-			targetType.Underlying != nil && targetType.Underlying.Kind == model.Slice)
-
-	if isSliceConversion {
-		// For pointer-to-slice types, we want to generate conversion functions for the slice types,
-		// not the pointer types. But the field access should remain the same.
-		actualSourceType := sourceType
-		actualTargetType := targetType
-
-		// Adjust the field access expression for pointer-to-slice source fields
-		fieldAccessExpr := sourceFieldExpr
-		if sourceType.Kind == model.Pointer && sourceType.Underlying != nil && sourceType.Underlying.Kind == model.Slice {
-			actualSourceType = sourceType.Underlying
-			fieldAccessExpr = fmt.Sprintf("*%s", sourceFieldExpr) // dereference pointer to slice
-		}
-		if targetType.Kind == model.Pointer && targetType.Underlying != nil && targetType.Underlying.Kind == model.Slice {
-			actualTargetType = targetType.Underlying
-		}
-
-		newTask := &model.ConversionTask{
-			Source: actualSourceType,
-			Target: actualTargetType,
-		}
-
-		// Build the conversion expression
-		conversionExpr := fmt.Sprintf("%s(%s)", convFuncName, fieldAccessExpr)
-
-		return conversionExpr, nil, newTask
-	}
-
-	sourceIsPointer := sourceType.Kind == model.Pointer
-	targetIsPointer := targetType.Kind == model.Pointer
-
-	// For primitive conversions, we don't create a new task because abgen doesn't generate bodies for them.
-	// We assume the user will provide the implementation.
 	var newTask *model.ConversionTask
-	if !isPurelyPrimitive {
+
+	if isStructConv || isSliceConv {
+		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
 		newTask = &model.ConversionTask{
 			Source: sourceType,
 			Target: targetType,
 		}
 	} else {
-		// This is a primitive conversion, so we need to generate a stub for it.
+		// This is for primitives, named primitives, etc., that need a stub.
+		convFuncName = ce.nameGenerator.FieldConversionFunctionName(sourceParent, targetParent, sourceField, targetField)
 		stubTask := &model.ConversionTask{
 			Source: sourceType,
 			Target: targetType,
 		}
 		ce.stubsToGenerate[convFuncName] = stubTask
+		// For stubs, we don't create a new task for the main worklist.
 	}
 
-	if !sourceIsPointer && targetIsPointer {
-		return fmt.Sprintf("%s(&%s)", convFuncName, sourceFieldExpr), nil, newTask
+	// Handle pointer/value mismatches for struct-to-struct field conversions.
+	if isStructConv {
+		arg := sourceFieldExpr
+		if sourceType.Kind != model.Pointer {
+			arg = fmt.Sprintf("&%s", sourceFieldExpr)
+		}
+
+		expr := fmt.Sprintf("%s(%s)", convFuncName, arg)
+
+		if targetType.Kind != model.Pointer {
+			expr = fmt.Sprintf("*%s", expr)
+		}
+		return expr, nil, newTask
 	}
+
+	// Default behavior for slices and stubs.
+	// Assumes the generated function/stub handles pointer/value logic internally or has a matching signature.
 	return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, newTask
 }
 
