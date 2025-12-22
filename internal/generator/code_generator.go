@@ -228,6 +228,7 @@ func (g *CodeGenerator) findSeedRules(typeInfos map[string]*model.TypeInfo, pack
 					TargetType: targetType.UniqueKey(),
 					Direction:  config.DirectionBoth,
 				}
+				slog.Debug("Created seed rule", "source", rule.SourceType, "target", rule.TargetType, "direction", rule.Direction)
 				seedRules = append(seedRules, rule)
 			}
 		}
@@ -417,7 +418,12 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 		targetInfo := typeInfos[rule.TargetType]
 		if sourceInfo != nil && targetInfo != nil {
 			worklist = append(worklist, &model.ConversionTask{Source: sourceInfo, Target: targetInfo, Rule: rule})
-			if rule.Direction == config.DirectionBoth {
+			
+			// Add crucial debug log
+			slog.Debug("Checking rule for bilateral conversion", "source", rule.SourceType, "target", rule.TargetType, "direction", rule.Direction)
+
+			if rule.Direction == "both" {
+				slog.Debug("Bilateral rule detected, creating reverse task.", "source", rule.SourceType, "target", rule.TargetType)
 				reverseRule := &config.ConversionRule{
 					SourceType: targetInfo.FQN(),
 					TargetType: sourceInfo.FQN(),

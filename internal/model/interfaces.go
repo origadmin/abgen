@@ -65,7 +65,7 @@ type AliasManager interface {
 	GetAllAliases() map[string]string
 	GetAliasedTypes() map[string]*TypeInfo
 	GetAlias(info *TypeInfo) (string, bool)
-	IsUserDefined(uniqueKey string) bool // New method
+	IsUserDefined(uniqueKey string) bool
 	GetSourcePath() string
 	GetTargetPath() string
 }
