@@ -13,10 +13,11 @@ var _ model.ConversionEngine = (*ConversionEngine)(nil)
 
 // ConversionEngine implements the ConversionEngine interface.
 type ConversionEngine struct {
-	typeConverter model.TypeConverter
-	nameGenerator model.NameGenerator
-	typeFormatter *TypeFormatter
-	importManager model.ImportManager
+	typeConverter   model.TypeConverter
+	nameGenerator   model.NameGenerator
+	typeFormatter   *TypeFormatter
+	importManager   model.ImportManager
+	stubsToGenerate map[string]*model.ConversionTask
 }
 
 // NewConversionEngine creates a new conversion engine.
@@ -27,10 +28,11 @@ func NewConversionEngine(
 	importManager model.ImportManager,
 ) model.ConversionEngine {
 	return &ConversionEngine{
-		typeConverter: typeConverter,
-		nameGenerator: nameGenerator,
-		typeFormatter: typeFormatter,
-		importManager: importManager,
+		typeConverter:   typeConverter,
+		nameGenerator:   nameGenerator,
+		typeFormatter:   typeFormatter,
+		importManager:   importManager,
+		stubsToGenerate: make(map[string]*model.ConversionTask),
 	}
 }
 
@@ -320,6 +322,13 @@ func (ce *ConversionEngine) getConversionExpression(
 			Source: sourceType,
 			Target: targetType,
 		}
+	} else {
+		// This is a primitive conversion, so we need to generate a stub for it.
+		stubTask := &model.ConversionTask{
+			Source: sourceType,
+			Target: targetType,
+		}
+		ce.stubsToGenerate[convFuncName] = stubTask
 	}
 
 	if !sourceIsPointer && targetIsPointer {
@@ -373,4 +382,9 @@ func (ce *ConversionEngine) needsTemporaryVariable(sourceType, targetType *model
 
 	// If target is pointer-to-slice, we need a temporary variable
 	return targetType.Kind == model.Pointer && targetType.Underlying != nil && targetType.Underlying.Kind == model.Slice
+}
+
+// GetStubsToGenerate returns the stubs that need to be generated.
+func (ce *ConversionEngine) GetStubsToGenerate() map[string]*model.ConversionTask {
+	return ce.stubsToGenerate
 }

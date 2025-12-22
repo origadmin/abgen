@@ -75,6 +75,7 @@ type AliasManager interface {
 type ConversionEngine interface {
 	GenerateConversionFunction(source, target *TypeInfo, rule *config.ConversionRule) (*GeneratedCode, []*ConversionTask, error)
 	GenerateSliceConversion(source, target *TypeInfo) (*GeneratedCode, error)
+	GetStubsToGenerate() map[string]*ConversionTask
 }
 
 // CodeEmitter defines the interface for writing the various sections of the final
