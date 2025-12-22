@@ -56,7 +56,7 @@ func (g *CodeGenerator) initializeComponents(cfg *config.Config, analysisResult 
 
 // Generate executes a complete code generation task.
 func (g *CodeGenerator) Generate(cfg *config.Config, analysisResult *model.AnalysisResult) (*model.GenerationResponse, error) {
-	finalConfig, activeRules := g.prepareConfigForSession(cfg, analysisResult.TypeInfos)
+	finalConfig, activeRules := g.prepareConfigForSession(cfg, analysisResult)
 	g.initializeComponents(finalConfig, analysisResult)
 
 	slog.Debug("Components initialized with final configuration.")
@@ -88,17 +88,20 @@ func (g *CodeGenerator) Generate(cfg *config.Config, analysisResult *model.Analy
 }
 
 // prepareConfigForSession creates a finalized configuration for a single generation run.
-func (g *CodeGenerator) prepareConfigForSession(originalCfg *config.Config, typeInfos map[string]*model.TypeInfo) (*config.Config, []*config.ConversionRule) {
+func (g *CodeGenerator) prepareConfigForSession(originalCfg *config.Config, analysisResult *model.AnalysisResult) (*config.Config, []*config.ConversionRule) {
 	sessionConfig := originalCfg.Clone()
 	slog.Debug("Preparing session configuration", "initial_rules", len(sessionConfig.ConversionRules))
 
+	// Populate config with analysis results
+	sessionConfig.ExistingAliases = analysisResult.ExistingAliases
+
 	var activeRules []*config.ConversionRule
 	if len(sessionConfig.ConversionRules) > 0 {
-		activeRules = g.expandRulesByDependencyAnalysis(sessionConfig.ConversionRules, typeInfos)
+		activeRules = g.expandRulesByDependencyAnalysis(sessionConfig.ConversionRules, analysisResult.TypeInfos)
 	} else {
 		slog.Debug("No explicit conversion rules found, discovering seed rules from package pairs...")
-		seedRules := g.findSeedRules(typeInfos, sessionConfig.PackagePairs)
-		activeRules = g.expandRulesByDependencyAnalysis(seedRules, typeInfos)
+		seedRules := g.findSeedRules(analysisResult.TypeInfos, sessionConfig.PackagePairs)
+		activeRules = g.expandRulesByDependencyAnalysis(seedRules, analysisResult.TypeInfos)
 	}
 	slog.Debug("Rule expansion finished", "total_active_rules", len(activeRules))
 

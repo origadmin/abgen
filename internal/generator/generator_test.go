@@ -340,11 +340,11 @@ var testCases = []struct {
 	// === 06_regression: Regression Tests ===
 	{
 		name:           "array_slice_test",
-		directivePath:  "../../testdata/06_regression/array_slice_fix/array_slice_test",
+		directivePath:  "../../testdata/06_regression/array_slice_test",
 		goldenFileName: "expected.gen.go",
 		dependencies: []string{
-			"github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/source",
-			"github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/target",
+			"github.com/origadmin/abgen/testdata/06_regression/array_slice_test/source",
+			"github.com/origadmin/abgen/testdata/06_regression/array_slice_test/target",
 		},
 		priority: "P0",
 		category: "regression",

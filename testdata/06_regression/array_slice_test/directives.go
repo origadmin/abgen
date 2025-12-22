@@ -5,8 +5,8 @@ import (
 	_ "github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/target"
 )
 
-//go:abgen:package:path=github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/source,alias=source
-//go:abgen:package:path=github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/target,alias=target
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/06_regression/array_slice_test/source,alias=source
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/06_regression/array_slice_test/target,alias=target
 
 // Test case for array/slice conversion issues
 // Tests: direct slice-to-slice conversion for array aliases

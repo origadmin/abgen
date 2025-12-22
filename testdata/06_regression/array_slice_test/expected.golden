@@ -7,8 +7,8 @@
 package array_slice_test
 
 import (
-	source "github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/source"
-	target "github.com/origadmin/abgen/testdata/06_regression/array_slice_fix/array_slice_test/target"
+	source "github.com/origadmin/abgen/testdata/06_regression/array_slice_test/source"
+	target "github.com/origadmin/abgen/testdata/06_regression/array_slice_test/target"
 	time "time"
 )
 
