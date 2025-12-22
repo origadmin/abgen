@@ -95,6 +95,7 @@ type TypeConverter interface {
 	IsMap(info *TypeInfo) bool
 	IsPrimitive(info *TypeInfo) bool
 	IsUltimatelyPrimitive(info *TypeInfo) bool
+	IsPurelyPrimitiveOrCompositeOfPrimitives(info *TypeInfo) bool // New method
 	GetElementType(info *TypeInfo) *TypeInfo
 	GetSliceElementType(info *TypeInfo) *TypeInfo
 	GetKeyType(info *TypeInfo) *TypeInfo

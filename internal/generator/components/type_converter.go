@@ -99,3 +99,27 @@ func (c *TypeConverter) IsUltimatelyPrimitive(info *model.TypeInfo) bool {
 	info = c.resolveConcreteType(info)
 	return info != nil && info.Kind == model.Primitive
 }
+
+// IsPurelyPrimitiveOrCompositeOfPrimitives checks if the type is a primitive or a composite type
+// (slice, array, map, pointer) made entirely of primitives.
+// It returns false if the type involves any Named types or Structs.
+func (c *TypeConverter) IsPurelyPrimitiveOrCompositeOfPrimitives(info *model.TypeInfo) bool {
+	if info == nil {
+		return false
+	}
+
+	switch info.Kind {
+	case model.Primitive:
+		return true
+	case model.Named, model.Struct:
+		// If it's a named type (even if underlying is int) or a struct, it's NOT purely primitive.
+		return false
+	case model.Pointer, model.Slice, model.Array:
+		return c.IsPurelyPrimitiveOrCompositeOfPrimitives(info.Underlying)
+	case model.Map:
+		return c.IsPurelyPrimitiveOrCompositeOfPrimitives(info.KeyType) &&
+			c.IsPurelyPrimitiveOrCompositeOfPrimitives(info.Underlying)
+	default:
+		return false
+	}
+}

@@ -241,11 +241,11 @@ func (ce *ConversionEngine) getConversionExpression(
 	}
 
 	// Determine the function name.
-	// If both types are primitives (or pointers to primitives), use the field-specific naming convention.
 	var convFuncName string
-	isPrimitiveConversion := ce.typeConverter.IsUltimatelyPrimitive(sourceType) && ce.typeConverter.IsUltimatelyPrimitive(targetType)
+	isPurelyPrimitive := ce.typeConverter.IsPurelyPrimitiveOrCompositeOfPrimitives(sourceType) &&
+		ce.typeConverter.IsPurelyPrimitiveOrCompositeOfPrimitives(targetType)
 
-	if isPrimitiveConversion {
+	if isPurelyPrimitive {
 		convFuncName = ce.nameGenerator.FieldConversionFunctionName(sourceParent, targetParent, sourceField, targetField)
 	} else {
 		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
@@ -271,7 +271,7 @@ func (ce *ConversionEngine) getConversionExpression(
 	// For primitive conversions, we don't create a new task because abgen doesn't generate bodies for them.
 	// We assume the user will provide the implementation.
 	var newTask *model.ConversionTask
-	if !isPrimitiveConversion {
+	if !isPurelyPrimitive {
 		newTask = &model.ConversionTask{
 			Source: sourceType,
 			Target: targetType,
