@@ -274,12 +274,12 @@ var testCases = []struct {
 		},
 	},
 	{
-		name:           "slice_conversions",
-		directivePath:  "../../testdata/03_advanced_features/slice_conversions",
+		name:           "slice_conversion",
+		directivePath:  "../../testdata/03_advanced_features/slice_conversion",
 		goldenFileName: "expected.gen.go",
 		dependencies: []string{
-			"github.com/origadmin/abgen/testdata/03_advanced_features/slice_conversions/source",
-			"github.com/origadmin/abgen/testdata/03_advanced_features/slice_conversions/target",
+			"github.com/origadmin/abgen/testdata/03_advanced_features/slice_conversion/source",
+			"github.com/origadmin/abgen/testdata/03_advanced_features/slice_conversion/target",
 		},
 
 		priority: "P0",
