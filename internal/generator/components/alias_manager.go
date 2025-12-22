@@ -58,7 +58,13 @@ func NewAliasManager(
 	}
 }
 
-// GetAliasedTypes returns the map of aliased types.
+// IsUserDefined checks if an alias for the given type FQN was defined by the user.
+func (am *AliasManager) IsUserDefined(uniqueKey string) bool {
+	_, ok := am.fqnToExistingAlias[uniqueKey]
+	return ok
+}
+
+// GetAliasedTypes returns the map of aliased types that need to be generated.
 func (am *AliasManager) GetAliasedTypes() map[string]*model.TypeInfo {
 	return am.aliasedTypes
 }
@@ -68,6 +74,7 @@ func (am *AliasManager) GetAlias(info *model.TypeInfo) (string, bool) {
 	if info == nil {
 		return "", false
 	}
+	// For non-aliased types, we don't return an alias.
 	if info.Kind == model.Primitive || info.Kind == model.Pointer {
 		return "", false
 	}
@@ -124,7 +131,8 @@ func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSou
 	}
 	am.visited[uniqueKey] = true
 
-	// Recurse on component types first.
+	// --- Step 1: Recurse first ---
+	// Always recurse into child types to ensure they are processed, regardless of the parent's status.
 	switch typeInfo.Kind {
 	case model.Struct:
 		for _, field := range typeInfo.Fields {
@@ -139,28 +147,25 @@ func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSou
 		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
 	}
 
-	// After recursing, decide if THIS type needs an alias.
-	if !am.isManagedType(typeInfo) {
+	// --- Step 2: Process the current type ---
+	// Check if this type should have an alias at all.
+	if !am.isManagedType(typeInfo) || typeInfo.Kind == model.Pointer {
 		return
 	}
 
-	// CRITICAL: Do not generate aliases for pointer types themselves.
-	if typeInfo.Kind == model.Pointer {
-		return
-	}
-
-	// Check if an alias already exists from user directives.
+	// Check if an alias was already defined by the user.
 	if existingAlias, ok := am.fqnToExistingAlias[uniqueKey]; ok {
+		// User-defined alias exists. Use it for lookups, but do NOT add it to aliasedTypes for generation.
 		am.aliasMap[uniqueKey] = existingAlias
-		slog.Debug("AliasManager: using existing user-defined alias", "type", typeInfo.String(), "uniqueKey", uniqueKey, "alias", existingAlias)
-		return
+		slog.Debug("AliasManager: using existing user-defined alias", "type", typeInfo.String(), "alias", existingAlias)
+	} else {
+		// No user-defined alias. Generate a new one.
+		alias := am.generateAlias(typeInfo, isSource)
+		am.aliasMap[uniqueKey] = alias
+		// Add it to aliasedTypes so it will be rendered in the generated file.
+		am.aliasedTypes[uniqueKey] = typeInfo
+		slog.Debug("AliasManager: created new alias", "type", typeInfo.String(), "alias", alias)
 	}
-
-	// Generate and store the alias.
-	alias := am.generateAlias(typeInfo, isSource)
-	am.aliasMap[uniqueKey] = alias
-	am.aliasedTypes[uniqueKey] = typeInfo
-	slog.Debug("AliasManager: created alias", "type", typeInfo.String(), "uniqueKey", uniqueKey, "alias", alias)
 }
 
 // isManagedType recursively checks if a type or any of its component types

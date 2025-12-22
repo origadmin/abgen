@@ -65,6 +65,7 @@ type AliasManager interface {
 	GetAllAliases() map[string]string
 	GetAliasedTypes() map[string]*TypeInfo
 	GetAlias(info *TypeInfo) (string, bool)
+	IsUserDefined(uniqueKey string) bool // New method
 	GetSourcePath() string
 	GetTargetPath() string
 }
@@ -95,7 +96,7 @@ type TypeConverter interface {
 	IsMap(info *TypeInfo) bool
 	IsPrimitive(info *TypeInfo) bool
 	IsUltimatelyPrimitive(info *TypeInfo) bool
-	IsPurelyPrimitiveOrCompositeOfPrimitives(info *TypeInfo) bool // New method
+	IsPurelyPrimitiveOrCompositeOfPrimitives(info *TypeInfo) bool
 	GetElementType(info *TypeInfo) *TypeInfo
 	GetSliceElementType(info *TypeInfo) *TypeInfo
 	GetKeyType(info *TypeInfo) *TypeInfo

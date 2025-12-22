@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"go/types"
 	"log/slog"
 	"strings"
 
@@ -74,8 +73,6 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 	p.config.GenerationContext.PackageName = pkg.Name
 	p.config.GenerationContext.PackagePath = pkg.ID
 
-	p.extractExistingAliases(pkg)
-
 	var directives []string
 	for _, file := range pkg.Syntax {
 		for _, commentGroup := range file.Comments {
@@ -94,12 +91,17 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 		return p.config, nil
 	}
 
-	// First pass: Parse global configuration directives
+	// First pass: Parse global configuration directives (including package:path)
 	for _, directive := range directives {
 		if err := p.parseGlobalDirective(directive); err != nil {
 			return nil, err
 		}
 	}
+
+	// Extract existing aliases AFTER parsing package:path directives.
+	// This ensures that p.config.PackageAliases is populated, allowing us to resolve
+	// aliases like "types.User" correctly.
+	p.extractExistingAliases(pkg)
 
 	// Second pass: Parse conversion rules
 	for _, directive := range directives {
@@ -300,65 +302,46 @@ func (p *Parser) resolveTypeFQN(typeStr string) string {
 	return packagePath + "." + typeName
 }
 
-// extractExistingAliases extracts type aliases from the source code
+// extractExistingAliases extracts type aliases from the source code using AST,
+// which is more reliable than relying on potentially incomplete types.Info.
 func (p *Parser) extractExistingAliases(pkg *packages.Package) {
-	if pkg.TypesInfo == nil {
-		return
-	}
-
-	// Also check for type aliases in type declarations (GenDecl)
 	for _, file := range pkg.Syntax {
 		for _, decl := range file.Decls {
-			if genDecl, ok := decl.(*ast.GenDecl); ok && genDecl.Tok == token.TYPE {
-				for _, spec := range genDecl.Specs {
-					if typeSpec, ok := spec.(*ast.TypeSpec); ok {
-						// Check if this is a type alias (typeSpec.Assign != 0)
-						if typeSpec.Assign != 0 {
-							// This is a type alias, try to resolve the RHS
-							if selExpr, ok := typeSpec.Type.(*ast.SelectorExpr); ok {
-								// Handle qualified identifiers like "ent.User"
-								if pkgName, ok := selExpr.X.(*ast.Ident); ok {
-									// First, try to resolve using PackageAliases
-									if pkgPath, exists := p.config.PackageAliases[pkgName.Name]; exists {
-										typeName := selExpr.Sel.Name
-										fqn := pkgPath + "." + typeName
-										p.config.ExistingAliases[typeSpec.Name.Name] = fqn
-									} else if obj := pkg.TypesInfo.Uses[pkgName]; obj != nil && obj.Pkg() != nil {
-										if obj := pkg.TypesInfo.Uses[pkgName]; obj != nil && obj.Pkg() != nil {
-											pkgPath := obj.Pkg().Path()
-											typeName := selExpr.Sel.Name
-											fqn := pkgPath + "." + typeName
-											p.config.ExistingAliases[typeSpec.Name.Name] = fqn
-										} else if obj := pkg.TypesInfo.Defs[pkgName]; obj != nil && obj.Pkg() != nil {
-											// Try in Definitions as well
-											pkgPath := obj.Pkg().Path()
-											typeName := selExpr.Sel.Name
-											fqn := pkgPath + "." + typeName
-											p.config.ExistingAliases[typeSpec.Name.Name] = fqn
-										} else {
-											// Fallback: look for the package in imports
-											for _, imp := range pkg.Imports {
-												if imp.Name == pkgName.Name {
-													typeName := selExpr.Sel.Name
-													fqn := imp.PkgPath + "." + typeName
-													p.config.ExistingAliases[typeSpec.Name.Name] = fqn
-													break
-												}
-											}
-										}
-									}
-								} else if ident, ok := typeSpec.Type.(*ast.Ident); ok {
-									// Handle simple identifiers
-									if obj := pkg.TypesInfo.Uses[ident]; obj != nil {
-										if named, ok := obj.Type().(*types.Named); ok && named.Obj() != nil && named.Obj().Pkg() != nil {
-											fqn := named.Obj().Pkg().Path() + "." + named.Obj().Name()
-											p.config.ExistingAliases[typeSpec.Name.Name] = fqn
-										}
-									}
-								}
-							}
-						}
-					}
+			genDecl, ok := decl.(*ast.GenDecl)
+			if !ok || genDecl.Tok != token.TYPE {
+				continue
+			}
+
+			for _, spec := range genDecl.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok || typeSpec.Assign == 0 { // Not a type alias
+					continue
+				}
+
+				aliasName := typeSpec.Name.Name
+
+				// We are interested in aliases like `User = ent.User`
+				selExpr, ok := typeSpec.Type.(*ast.SelectorExpr)
+				if !ok {
+					continue
+				}
+
+				// `selExpr.X` is the package identifier, e.g., `ent`
+				pkgIdent, ok := selExpr.X.(*ast.Ident)
+				if !ok {
+					continue
+				}
+
+				pkgAlias := pkgIdent.Name
+				typeName := selExpr.Sel.Name
+
+				// Resolve the package alias to a full package path using the now-populated PackageAliases map.
+				if pkgPath, exists := p.config.PackageAliases[pkgAlias]; exists {
+					fqn := pkgPath + "." + typeName
+					p.config.ExistingAliases[aliasName] = fqn
+					slog.Debug("AST Parser: successfully extracted user-defined alias", "alias", aliasName, "fqn", fqn)
+				} else {
+					slog.Warn("AST Parser: could not resolve package alias for user-defined type", "alias", aliasName, "pkgAlias", pkgAlias)
 				}
 			}
 		}

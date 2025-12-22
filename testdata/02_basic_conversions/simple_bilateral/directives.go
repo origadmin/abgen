@@ -1,7 +1,9 @@
 package simple_bilateral
 
 import (
+	"github.com/origadmin/abgen/testdata/fixtures/ent"
 	_ "github.com/origadmin/abgen/testdata/fixtures/ent"
+	"github.com/origadmin/abgen/testdata/fixtures/types"
 	_ "github.com/origadmin/abgen/testdata/fixtures/types"
 )
 
@@ -20,3 +22,13 @@ import (
 
 // Expected: standard ent.User ↔ types.User conversion
 // with all basic type mappings and field copying.
+
+func ConvertUserStatusToUserBilateralStatus(status string) int32 {
+	// TODO: implement
+	return 0
+}
+
+func ConvertGenderToGenderBilateral(gender ent.Gender) types.Gender {
+	// TODO: implement
+	return types.Gender(0)
+}

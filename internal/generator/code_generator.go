@@ -76,7 +76,7 @@ func (g *CodeGenerator) Generate(cfg *config.Config, typeInfos map[string]*model
 
 	g.aliasManager.PopulateAliases()
 
-	generatedCode, err := g.generateMainCode(typeInfos, activeRules)
+	generatedCode, err := g.generateMainCode(finalConfig, typeInfos, activeRules)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate main code: %w", err)
 	}
@@ -241,12 +241,13 @@ func deepCopyConfig(original *config.Config) *config.Config {
 	}
 
 	cpy := &config.Config{
-		NamingRules:       original.NamingRules,
-		GenerationContext: original.GenerationContext,
-		PackagePairs:      make([]*config.PackagePair, len(original.PackagePairs)),
-		ConversionRules:   make([]*config.ConversionRule, 0, len(original.ConversionRules)),
-		PackageAliases:    make(map[string]string, len(original.PackageAliases)),    // Deep copy PackageAliases
-		CustomFunctionRules: make(map[string]string, len(original.CustomFunctionRules)), // Deep copy CustomFunctionRules
+		NamingRules:         original.NamingRules,
+		GenerationContext:   original.GenerationContext,
+		PackagePairs:        make([]*config.PackagePair, len(original.PackagePairs)),
+		ConversionRules:     make([]*config.ConversionRule, 0, len(original.ConversionRules)),
+		PackageAliases:      make(map[string]string, len(original.PackageAliases)),
+		CustomFunctionRules: make(map[string]string, len(original.CustomFunctionRules)),
+		ExistingAliases:     make(map[string]string, len(original.ExistingAliases)), // Correctly copy ExistingAliases
 	}
 
 	for i, pair := range original.PackagePairs {
@@ -277,20 +278,22 @@ func deepCopyConfig(original *config.Config) *config.Config {
 		}
 	}
 
-	// Deep copy PackageAliases
 	for k, v := range original.PackageAliases {
 		cpy.PackageAliases[k] = v
 	}
 
-	// Deep copy CustomFunctionRules
 	for k, v := range original.CustomFunctionRules {
 		cpy.CustomFunctionRules[k] = v
+	}
+
+	for k, v := range original.ExistingAliases {
+		cpy.ExistingAliases[k] = v
 	}
 
 	return cpy
 }
 
-func (g *CodeGenerator) generateMainCode(typeInfos map[string]*model.TypeInfo, rules []*config.ConversionRule) ([]byte, error) {
+func (g *CodeGenerator) generateMainCode(cfg *config.Config, typeInfos map[string]*model.TypeInfo, rules []*config.ConversionRule) ([]byte, error) {
 	finalBuf := new(bytes.Buffer)
 
 	conversionFuncs, requiredHelpers, err := g.generateConversionCode(typeInfos, rules)
@@ -299,7 +302,7 @@ func (g *CodeGenerator) generateMainCode(typeInfos map[string]*model.TypeInfo, r
 	}
 
 	// Prepare the alias information for rendering.
-	aliasesToRender := g.prepareAliasesForRender(typeInfos)
+	aliasesToRender := g.prepareAliasesForRender(cfg, typeInfos)
 
 	if err := g.codeEmitter.EmitHeader(finalBuf); err != nil {
 		return nil, err
@@ -321,27 +324,32 @@ func (g *CodeGenerator) generateMainCode(typeInfos map[string]*model.TypeInfo, r
 }
 
 // prepareAliasesForRender creates the list of aliases to be rendered in the final code.
-func (g *CodeGenerator) prepareAliasesForRender(typeInfos map[string]*model.TypeInfo) []*model.AliasRenderInfo {
+// This is the gatekeeper that prevents regenerating user-defined aliases.
+func (g *CodeGenerator) prepareAliasesForRender(cfg *config.Config, typeInfos map[string]*model.TypeInfo) []*model.AliasRenderInfo {
 	var renderInfos []*model.AliasRenderInfo
-	allAliases := g.aliasManager.GetAllAliases()
 
-	for uniqueKey, alias := range allAliases {
-		var originalTypeName string
-		typeInfo, ok := typeInfos[uniqueKey]
+	// Get the map of types that the AliasManager thinks we need to generate aliases for.
+	typesToAlias := g.aliasManager.GetAliasedTypes()
+
+	for uniqueKey, typeInfo := range typesToAlias {
+		// Get the alias name that was decided for this type.
+		aliasName, ok := g.aliasManager.LookupAlias(uniqueKey)
 		if !ok {
-			slog.Debug("prepareAliasesForRender: TypeInfo not found for key, creating temporary one.", "uniqueKey", uniqueKey)
-			typeInfo = g.reconstructTypeInfoFromKey(uniqueKey, typeInfos)
+			continue
 		}
 
-		if typeInfo != nil {
-			originalTypeName = g.typeFormatter.FormatWithoutAlias(typeInfo)
-		} else {
-			slog.Warn("prepareAliasesForRender: Could not reconstruct TypeInfo, falling back to uniqueKey.", "uniqueKey", uniqueKey)
-			originalTypeName = uniqueKey // This should not happen with the new reconstructor
+		// --- THE CRITICAL FILTER ---
+		// Check if the alias NAME already exists in the user-defined aliases.
+		// This is the most direct way to check for user overrides.
+		if _, exists := cfg.ExistingAliases[aliasName]; exists {
+			slog.Debug("Skipping alias rendering, name already defined by user", "alias", aliasName)
+			continue
 		}
+
+		originalTypeName := g.typeFormatter.FormatWithoutAlias(typeInfo)
 
 		renderInfos = append(renderInfos, &model.AliasRenderInfo{
-			AliasName:        alias,
+			AliasName:        aliasName,
 			OriginalTypeName: originalTypeName,
 		})
 	}
