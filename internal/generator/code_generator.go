@@ -77,7 +77,7 @@ func (g *CodeGenerator) Generate(cfg *config.Config, typeInfos map[string]*model
 		return nil, fmt.Errorf("failed to generate main code: %w", err)
 	}
 
-	customStubs, err := g.generateCustomStubs()
+	customStubs, err := g.generateCustomStubs(finalConfig, typeInfos)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate custom stubs: %w", err)
 	}
@@ -453,8 +453,65 @@ func extractFunctionName(functionBody string) string {
 	return ""
 }
 
-func (g *CodeGenerator) generateCustomStubs() ([]byte, error) {
-	return nil, nil
+func (g *CodeGenerator) generateCustomStubs(cfg *config.Config, typeInfos map[string]*model.TypeInfo) ([]byte, error) {
+	stubs := g.conversionEngine.GetStubsToGenerate()
+	if len(stubs) == 0 {
+		return nil, nil
+	}
+
+	// Create a dedicated ImportManager for the stubs file.
+	stubImportManager := components.NewImportManager()
+
+	// Create a dedicated TypeFormatter that uses the stubImportManager.
+	// We reuse g.aliasManager because type aliases should be consistent,
+	// but we need to ensure that if an alias is used, the corresponding import is added to stubImportManager.
+	stubTypeFormatter := components.NewTypeFormatter(g.aliasManager, stubImportManager, typeInfos)
+
+	var stubFunctions []string
+	var stubNames []string
+	for name := range stubs {
+		stubNames = append(stubNames, name)
+	}
+	sort.Strings(stubNames)
+
+	for _, name := range stubNames {
+		task := stubs[name]
+		// Format types using the stub-specific formatter.
+		// This will register necessary imports in stubImportManager.
+		sourceTypeStr := stubTypeFormatter.Format(task.Source)
+		targetTypeStr := stubTypeFormatter.Format(task.Target)
+
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("// %s is a custom conversion function stub.\n", name))
+		sb.WriteString(fmt.Sprintf("// Please implement this function to complete the conversion.\n"))
+		sb.WriteString(fmt.Sprintf("func %s(from %s) %s {\n", name, sourceTypeStr, targetTypeStr))
+		sb.WriteString(fmt.Sprintf("\t// TODO: Implement this custom conversion\n"))
+		sb.WriteString(fmt.Sprintf("\tpanic(\"stub! not implemented\")\n"))
+		sb.WriteString("}\n\n")
+		stubFunctions = append(stubFunctions, sb.String())
+	}
+
+	// Use CodeEmitter to generate the file content
+	var finalBuf bytes.Buffer
+
+	// 1. Header
+	if err := g.codeEmitter.EmitHeader(&finalBuf); err != nil {
+		return nil, fmt.Errorf("failed to emit header for stubs: %w", err)
+	}
+
+	// 2. Imports
+	// Note: We use the stubImportManager's imports, not the main one's.
+	if err := g.codeEmitter.EmitImports(&finalBuf, stubImportManager.GetAllImports()); err != nil {
+		return nil, fmt.Errorf("failed to emit imports for stubs: %w", err)
+	}
+
+	// 3. Conversions (Stubs)
+	if err := g.codeEmitter.EmitConversions(&finalBuf, stubFunctions); err != nil {
+		return nil, fmt.Errorf("failed to emit stubs: %w", err)
+	}
+
+	// Format the code
+	return format.Source(finalBuf.Bytes())
 }
 
 func (g *CodeGenerator) needsDisambiguation(rules []*config.ConversionRule) bool {
