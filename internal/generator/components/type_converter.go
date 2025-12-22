@@ -12,11 +12,22 @@ func NewTypeConverter() model.TypeConverter {
 	return &TypeConverter{}
 }
 
-// resolveConcreteType traverses the 'Underlying' chain of a TypeInfo
+// GetConcreteType traverses the 'Underlying' chain of a TypeInfo
 // until it finds a non-Named type, which represents the concrete physical type.
-func (c *TypeConverter) resolveConcreteType(info *model.TypeInfo) *model.TypeInfo {
+func (c *TypeConverter) GetConcreteType(info *model.TypeInfo) *model.TypeInfo {
 	for info != nil && info.Kind == model.Named {
 		info = info.Underlying
+	}
+	return info
+}
+
+// GetEffectiveType unwraps only named types to get the effective type, preserving pointers.
+func (c *TypeConverter) GetEffectiveType(info *model.TypeInfo) *model.TypeInfo {
+	if info == nil {
+		return nil
+	}
+	if info.Kind == model.Named {
+		return c.GetEffectiveType(info.Underlying)
 	}
 	return info
 }
@@ -42,7 +53,7 @@ func (c *TypeConverter) GetElementType(info *model.TypeInfo) *model.TypeInfo {
 
 // GetSliceElementType returns the element type of a slice.
 func (c *TypeConverter) GetSliceElementType(info *model.TypeInfo) *model.TypeInfo {
-	info = c.resolveConcreteType(info)
+	info = c.GetConcreteType(info)
 	if info != nil && info.Kind == model.Slice {
 		return info.Underlying
 	}
@@ -51,7 +62,7 @@ func (c *TypeConverter) GetSliceElementType(info *model.TypeInfo) *model.TypeInf
 
 // GetKeyType returns the key type of a map.
 func (c *TypeConverter) GetKeyType(info *model.TypeInfo) *model.TypeInfo {
-	info = c.resolveConcreteType(info)
+	info = c.GetConcreteType(info)
 	if info != nil && info.Kind == model.Map {
 		return info.KeyType
 	}
@@ -60,7 +71,7 @@ func (c *TypeConverter) GetKeyType(info *model.TypeInfo) *model.TypeInfo {
 
 // IsUltimatelyPrimitive checks if the given TypeInfo or its underlying type is ultimately a primitive type.
 func (c *TypeConverter) IsUltimatelyPrimitive(info *model.TypeInfo) bool {
-	info = c.resolveConcreteType(info)
+	info = c.GetConcreteType(info)
 	return info != nil && info.Kind == model.Primitive
 }
 

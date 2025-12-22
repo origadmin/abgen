@@ -24,6 +24,7 @@ type GeneratedCode struct {
 
 // AliasRenderInfo holds information for rendering a type alias.
 type AliasRenderInfo struct {
+
 	AliasName        string
 	OriginalTypeName string
 }
@@ -91,6 +92,8 @@ type CodeEmitter interface {
 // TypeConverter defines the interface for utility functions that inspect TypeInfo objects.
 // Most type checking methods are removed in favor of direct access to info.Kind.
 type TypeConverter interface {
+	GetConcreteType(info *TypeInfo) *TypeInfo
+	GetEffectiveType(info *TypeInfo) *TypeInfo
 	GetElementType(info *TypeInfo) *TypeInfo
 	GetSliceElementType(info *TypeInfo) *TypeInfo
 	GetKeyType(info *TypeInfo) *TypeInfo

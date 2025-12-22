@@ -42,11 +42,11 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 ) (*model.GeneratedCode, []*model.ConversionTask, error) {
 	slog.Debug("ConversionEngine: Received task", "source", sourceInfo.UniqueKey(), "target", targetInfo.UniqueKey())
 
-	effectiveSource := getEffectiveTypeInfo(sourceInfo)
-	effectiveTarget := getEffectiveTypeInfo(targetInfo)
+	concreteSource := getConcreteType(sourceInfo)
+	concreteTarget := getConcreteType(targetInfo)
 
-	isSliceConversion := effectiveSource.Kind == model.Slice && effectiveTarget.Kind == model.Slice
-	isStructConversion := effectiveSource.Kind == model.Struct && effectiveTarget.Kind == model.Struct
+	isSliceConversion := concreteSource.Kind == model.Slice && concreteTarget.Kind == model.Slice
+	isStructConversion := concreteSource.Kind == model.Struct && concreteTarget.Kind == model.Struct
 
 	if isSliceConversion {
 		slog.Debug("ConversionEngine: Dispatching to GenerateSliceConversion")
@@ -88,11 +88,11 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 ) (*model.GeneratedCode, error) {
 	var buf strings.Builder
 
-	isSourcePtrToSlice := sourceInfo.Kind == model.Pointer
-	isTargetPtrToSlice := targetInfo.Kind == model.Pointer
+	isSourcePtr := sourceInfo.Kind == model.Pointer
+	isTargetPtr := targetInfo.Kind == model.Pointer
 
-	actualSourceSlice := getEffectiveTypeInfo(sourceInfo)
-	actualTargetSlice := getEffectiveTypeInfo(targetInfo)
+	actualSourceSlice := getConcreteType(sourceInfo)
+	actualTargetSlice := getConcreteType(targetInfo)
 
 	sourceElem := ce.typeConverter.GetSliceElementType(actualSourceSlice)
 	targetElem := ce.typeConverter.GetSliceElementType(actualTargetSlice)
@@ -105,8 +105,8 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	targetSliceStr := ce.typeFormatter.Format(targetInfo)
 
 	targetAllocType := targetInfo
-	if isTargetPtrToSlice {
-		targetAllocType = targetInfo.Underlying
+	if isTargetPtr {
+		targetAllocType = getEffectiveTypeInfo(targetInfo).Underlying
 	}
 	targetSliceAllocStr := ce.typeFormatter.Format(targetAllocType)
 
@@ -119,39 +119,38 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	buf.WriteString("\tif froms == nil {\n\t\treturn nil\t}\n")
 
 	loopVar := "froms"
-	if isSourcePtrToSlice {
+	if isSourcePtr {
 		loopVar = "(*froms)"
 	}
 
 	buf.WriteString(fmt.Sprintf("\ttos := make(%s, len(%s))\n", targetSliceAllocStr, loopVar))
 	buf.WriteString(fmt.Sprintf("\tfor i, f := range %s {\n", loopVar))
 
-	elemSourceIsPtr := sourceElem.Kind == model.Pointer
-	elemTargetIsPtr := targetElem.Kind == model.Pointer
+	// --- Corrected Logic ---
+	// Always generate a function call for element conversion.
 	elemFuncName := ce.nameGenerator.ConversionFunctionName(sourceElem, targetElem)
 
-	var assignment string
-	effectiveElemSourceType := getEffectiveTypeInfo(sourceElem)
-	effectiveElemTargetType := getEffectiveTypeInfo(targetElem)
-
-	if effectiveElemSourceType.Kind == model.Struct && effectiveElemTargetType.Kind == model.Struct {
-		arg := "f"
-		if !elemSourceIsPtr {
-			arg = "&f"
-		}
-		call := fmt.Sprintf("%s(%s)", elemFuncName, arg)
-		if !elemTargetIsPtr {
-			call = "*" + call
-		}
-		assignment = fmt.Sprintf("tos[i] = %s", call)
-	} else {
-		assignment = fmt.Sprintf("tos[i] = %s(f)", elemFuncName)
+	// The argument is the loop variable 'f'.
+	// If the source element's concrete type is a struct and the element itself is not a pointer, pass its address.
+	arg := "f"
+	if getConcreteType(sourceElem).Kind == model.Struct && sourceElem.Kind != model.Pointer {
+		arg = "&f"
 	}
+
+	call := fmt.Sprintf("%s(%s)", elemFuncName, arg)
+
+	// If the target element's concrete type is a struct and the element itself is not a pointer, dereference the result.
+	if getConcreteType(targetElem).Kind == model.Struct && targetElem.Kind != model.Pointer {
+		call = "*" + call
+	}
+
+	assignment := fmt.Sprintf("tos[i] = %s", call)
+	// --- End of Corrected Logic ---
 
 	buf.WriteString(fmt.Sprintf("\t\t%s\n", assignment))
 	buf.WriteString("\t}\n")
 
-	if isTargetPtrToSlice {
+	if isTargetPtr {
 		buf.WriteString(fmt.Sprintf("\treturn &tos\n"))
 	} else {
 		buf.WriteString(fmt.Sprintf("\treturn tos\n"))
@@ -206,7 +205,7 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 				tempVarName := fmt.Sprintf("temp%s", targetField.Name)
 				preAssignments = append(preAssignments, fmt.Sprintf("\t%s := %s", tempVarName, conversionExpr))
 				conversionExpr = tempVarName
-				if targetField.Type.Kind == model.Pointer && getEffectiveTypeInfo(targetField.Type.Underlying).Kind == model.Slice {
+				if targetField.Type.Kind == model.Pointer && getConcreteType(targetField.Type.Underlying).Kind == model.Slice {
 					conversionExpr = fmt.Sprintf("&%s", conversionExpr)
 				}
 			}
@@ -232,7 +231,21 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 	return buf.String(), allRequiredHelpers, newTasks, nil
 }
 
-// getEffectiveTypeInfo unwraps named types to get to the underlying kind.
+// getConcreteType unwraps named types and pointers to get to the core type.
+func getConcreteType(info *model.TypeInfo) *model.TypeInfo {
+	if info == nil {
+		return nil
+	}
+	if info.Kind == model.Named {
+		return getConcreteType(info.Underlying)
+	}
+	if info.Kind == model.Pointer && info.Underlying != nil {
+		return getConcreteType(info.Underlying)
+	}
+	return info
+}
+
+// getEffectiveTypeInfo unwraps only named types to get the effective type, preserving pointers.
 func getEffectiveTypeInfo(info *model.TypeInfo) *model.TypeInfo {
 	if info == nil {
 		return nil
@@ -266,13 +279,13 @@ func (ce *ConversionEngine) getConversionExpression(
 		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), []string{funcName}, nil
 	}
 
-	effectiveSourceType := getEffectiveTypeInfo(sourceType)
-	effectiveTargetType := getEffectiveTypeInfo(targetType)
+	concreteSourceType := getConcreteType(sourceType)
+	concreteTargetType := getConcreteType(targetType)
 	var convFuncName string
 	var newTask *model.ConversionTask
 
 	// Case 1: Struct Conversion
-	if effectiveSourceType.Kind == model.Struct && effectiveTargetType.Kind == model.Struct {
+	if concreteSourceType.Kind == model.Struct && concreteTargetType.Kind == model.Struct {
 		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
 		newTask = &model.ConversionTask{Source: sourceType, Target: targetType}
 		arg := sourceFieldExpr
@@ -287,10 +300,24 @@ func (ce *ConversionEngine) getConversionExpression(
 	}
 
 	// Case 2: Slice Conversion
-	if effectiveSourceType.Kind == model.Slice && effectiveTargetType.Kind == model.Slice {
-		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
-		newTask = &model.ConversionTask{Source: sourceType, Target: targetType}
-		return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, newTask
+	if concreteSourceType.Kind == model.Slice && concreteTargetType.Kind == model.Slice {
+		// --- Corrected Logic for Pointer-to-Slice Fields ---
+		isSourcePtr := sourceType.Kind == model.Pointer
+		isTargetPtr := targetType.Kind == model.Pointer
+
+		actualSourceType := sourceType
+		actualTargetType := targetType
+		arg := sourceFieldExpr
+
+		if isSourcePtr && isTargetPtr {
+			actualSourceType = sourceType.Underlying
+			actualTargetType = targetType.Underlying
+			arg = "*" + arg
+		}
+
+		convFuncName = ce.nameGenerator.ConversionFunctionName(actualSourceType, actualTargetType)
+		newTask = &model.ConversionTask{Source: actualSourceType, Target: actualTargetType}
+		return fmt.Sprintf("%s(%s)", convFuncName, arg), nil, newTask
 	}
 
 	// Case 3: Fallback to Stub with corrected naming logic
@@ -335,10 +362,10 @@ func (ce *ConversionEngine) addRequiredImportsForHelper(funcName string) {
 }
 
 func (ce *ConversionEngine) needsTemporaryVariable(sourceType, targetType *model.TypeInfo) bool {
-	effectiveSource := getEffectiveTypeInfo(sourceType)
-	effectiveTarget := getEffectiveTypeInfo(targetType)
+	concreteSource := getConcreteType(sourceType)
+	concreteTarget := getConcreteType(targetType)
 
-	if effectiveSource.Kind != model.Slice || effectiveTarget.Kind != model.Slice {
+	if concreteSource.Kind != model.Slice || concreteTarget.Kind != model.Slice {
 		return false
 	}
 	return targetType.Kind == model.Pointer
@@ -351,8 +378,8 @@ func (ce *ConversionEngine) GetStubsToGenerate() map[string]*model.ConversionTas
 
 // canUseSimpleTypeConversion checks if a simple Go type conversion T(v) is valid.
 func canUseSimpleTypeConversion(source, target *model.TypeInfo) bool {
-	sourceBase := getEffectiveTypeInfo(source)
-	targetBase := getEffectiveTypeInfo(target)
+	sourceBase := getConcreteType(source)
+	targetBase := getConcreteType(target)
 
 	if sourceBase.Kind == model.Primitive && targetBase.Kind == model.Primitive {
 		if isNumeric(sourceBase.Name) && isNumeric(targetBase.Name) {
