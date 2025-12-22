@@ -51,7 +51,8 @@ type NamingRules struct {
 
 // BehaviorRules defines conversion behaviors.
 type BehaviorRules struct {
-	GenerateAlias bool
+	GenerateAlias    bool
+	DefaultDirection ConversionDirection // Added field
 }
 
 // FieldRuleSet defines field-specific rules for a given type conversion.
@@ -79,7 +80,9 @@ func NewConfig() *Config {
 		ConversionRules:     []*ConversionRule{},
 		CustomFunctionRules: make(map[string]string),
 		NamingRules:         NamingRules{},
-		GlobalBehaviorRules: BehaviorRules{},
+		GlobalBehaviorRules: BehaviorRules{
+			DefaultDirection: DirectionBoth, // Default to both
+		},
 	}
 }
 

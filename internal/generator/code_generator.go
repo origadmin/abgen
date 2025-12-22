@@ -40,9 +40,7 @@ func (g *CodeGenerator) initializeComponents(cfg *config.Config, typeInfos map[s
 
 	// Add required imports directly from PackageAliases
 	for alias, path := range cfg.PackageAliases {
-		if alias == "source" || alias == "target" {
-			g.importManager.AddAs(path, alias)
-		}
+		g.importManager.AddAs(path, alias)
 	}
 	slog.Debug("ImportManager after PackageAliases processing", "imports", g.importManager.GetAllImports())
 

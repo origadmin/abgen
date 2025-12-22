@@ -94,8 +94,16 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 		return p.config, nil
 	}
 
+	// First pass: Parse global configuration directives
 	for _, directive := range directives {
-		if err := p.parseSingleDirective(directive); err != nil {
+		if err := p.parseGlobalDirective(directive); err != nil {
+			return nil, err
+		}
+	}
+
+	// Second pass: Parse conversion rules
+	for _, directive := range directives {
+		if err := p.parseRuleDirective(directive); err != nil {
 			return nil, err
 		}
 	}
@@ -105,8 +113,8 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 	return p.config, nil
 }
 
-// parseSingleDirective processes a single directive string.
-func (p *Parser) parseSingleDirective(directive string) error {
+// parseGlobalDirective processes global configuration directives.
+func (p *Parser) parseGlobalDirective(directive string) error {
 	directive = strings.TrimPrefix(directive, "//go:abgen:")
 	parts := strings.SplitN(directive, "=", 2)
 	key := parts[0]
@@ -130,6 +138,27 @@ func (p *Parser) parseSingleDirective(directive string) error {
 		p.config.NamingRules.TargetPrefix = value
 	case "convert:alias:generate":
 		p.config.GlobalBehaviorRules.GenerateAlias = value == "true"
+	case "convert:direction":
+		if value == "oneway" {
+			p.config.GlobalBehaviorRules.DefaultDirection = DirectionOneway
+		} else {
+			p.config.GlobalBehaviorRules.DefaultDirection = DirectionBoth
+		}
+	}
+	return nil
+}
+
+// parseRuleDirective processes conversion rule directives.
+func (p *Parser) parseRuleDirective(directive string) error {
+	directive = strings.TrimPrefix(directive, "//go:abgen:")
+	parts := strings.SplitN(directive, "=", 2)
+	key := parts[0]
+	var value string
+	if len(parts) > 1 {
+		value = strings.Trim(parts[1], `"`)
+	}
+
+	switch key {
 	case "convert":
 		p.parseConvertRule(value)
 	case "convert:rule":
@@ -177,7 +206,7 @@ func (p *Parser) parsePackagePairs(value string) {
 func (p *Parser) parseConvertRule(value string) {
 	parts := strings.Split(value, ",")
 	rule := &ConversionRule{
-		Direction: DirectionBoth,
+		Direction: p.config.GlobalBehaviorRules.DefaultDirection,
 		FieldRules: FieldRuleSet{
 			Ignore: make(map[string]struct{}),
 			Remap:  make(map[string]string),
@@ -197,6 +226,8 @@ func (p *Parser) parseConvertRule(value string) {
 		case "direction":
 			if val == "oneway" {
 				rule.Direction = DirectionOneway
+			} else if val == "both" {
+				rule.Direction = DirectionBoth
 			}
 		case "ignore":
 			for _, field := range strings.Split(val, ";") {

@@ -53,6 +53,9 @@ type AliasLookup interface {
 type NameGenerator interface {
 	// ConversionFunctionName returns a standardized name for a function that converts between two types.
 	ConversionFunctionName(source, target *TypeInfo) string
+	// FieldConversionFunctionName returns a standardized name for a function that converts a specific field
+	// between two parent structs.
+	FieldConversionFunctionName(sourceParent, targetParent *TypeInfo, sourceField, targetField *FieldInfo) string
 }
 
 // AliasManager defines the interface for creating and managing local type aliases.

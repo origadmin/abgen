@@ -200,7 +200,8 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 		}
 
 		if targetField != nil {
-			conversionExpr, requiredHelpers, newTask := ce.getConversionExpression(sourceField, targetField, "from")
+			// Pass parent info to getConversionExpression
+			conversionExpr, requiredHelpers, newTask := ce.getConversionExpression(sourceInfo, targetInfo, sourceField, targetField, "from")
 			allRequiredHelpers = append(allRequiredHelpers, requiredHelpers...)
 			if newTask != nil {
 				newTasks = append(newTasks, newTask)
@@ -221,6 +222,7 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 
 // getConversionExpression determines the Go expression needed to convert a source field to a target field.
 func (ce *ConversionEngine) getConversionExpression(
+	sourceParent, targetParent *model.TypeInfo,
 	sourceField, targetField *model.FieldInfo, fromVar string,
 ) (string, []string, *model.ConversionTask) {
 	sourceType := sourceField.Type
@@ -238,7 +240,16 @@ func (ce *ConversionEngine) getConversionExpression(
 		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), []string{funcName}, nil
 	}
 
-	convFuncName := ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
+	// Determine the function name.
+	// If both types are primitives (or pointers to primitives), use the field-specific naming convention.
+	var convFuncName string
+	isPrimitiveConversion := ce.typeConverter.IsUltimatelyPrimitive(sourceType) && ce.typeConverter.IsUltimatelyPrimitive(targetType)
+
+	if isPrimitiveConversion {
+		convFuncName = ce.nameGenerator.FieldConversionFunctionName(sourceParent, targetParent, sourceField, targetField)
+	} else {
+		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
+	}
 
 	// This is the new logic to handle slice fields correctly
 	isSliceConversion := (ce.typeConverter.IsSlice(sourceType) && ce.typeConverter.IsSlice(targetType)) ||
@@ -257,9 +268,14 @@ func (ce *ConversionEngine) getConversionExpression(
 	sourceIsPointer := ce.typeConverter.IsPointer(sourceType)
 	targetIsPointer := ce.typeConverter.IsPointer(targetType)
 
-	newTask := &model.ConversionTask{
-		Source: sourceType,
-		Target: targetType,
+	// For primitive conversions, we don't create a new task because abgen doesn't generate bodies for them.
+	// We assume the user will provide the implementation.
+	var newTask *model.ConversionTask
+	if !isPrimitiveConversion {
+		newTask = &model.ConversionTask{
+			Source: sourceType,
+			Target: targetType,
+		}
 	}
 
 	if !sourceIsPointer && targetIsPointer {

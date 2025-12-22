@@ -12,13 +12,24 @@ import (
 
 var _ model.AliasManager = (*AliasManager)(nil)
 
+// nonManagedPackages contains a set of standard library or common third-party packages
+// that should never have their types aliased.
+var nonManagedPackages = map[string]struct{}{
+	"time":           {},
+	"encoding/json":  {},
+	"github.com/google/uuid": {},
+}
+
 // AliasManager implements the AliasManager interface.
 type AliasManager struct {
-	config        *config.Config
-	importManager model.ImportManager
-	aliasMap      map[string]string
-	typeInfos     map[string]*model.TypeInfo
-	aliasedTypes  map[string]*model.TypeInfo
+	config              *config.Config
+	importManager       model.ImportManager
+	aliasMap            map[string]string
+	typeInfos           map[string]*model.TypeInfo
+	aliasedTypes        map[string]*model.TypeInfo
+	managedPackagePaths map[string]struct{}
+	fqnToExistingAlias  map[string]string
+	visited             map[string]bool
 }
 
 var camelCaseRegexp = regexp.MustCompile(`[^a-zA-Z0-9]+`)
@@ -29,12 +40,21 @@ func NewAliasManager(
 	importManager model.ImportManager,
 	typeInfos map[string]*model.TypeInfo,
 ) model.AliasManager {
+	// Create the reverse map from FQN to existing alias name
+	fqnToAlias := make(map[string]string, len(config.ExistingAliases))
+	for alias, fqn := range config.ExistingAliases {
+		fqnToAlias[fqn] = alias
+	}
+
 	return &AliasManager{
-		config:        config,
-		importManager: importManager,
-		aliasMap:      make(map[string]string),
-		typeInfos:     typeInfos,
-		aliasedTypes:  make(map[string]*model.TypeInfo),
+		config:              config,
+		importManager:       importManager,
+		aliasMap:            make(map[string]string),
+		typeInfos:           typeInfos,
+		aliasedTypes:        make(map[string]*model.TypeInfo),
+		managedPackagePaths: make(map[string]struct{}),
+		fqnToExistingAlias:  fqnToAlias,
+		visited:             make(map[string]bool),
 	}
 }
 
@@ -62,6 +82,13 @@ func (am *AliasManager) LookupAlias(uniqueKey string) (string, bool) {
 
 // PopulateAliases is the main entry point for the alias manager.
 func (am *AliasManager) PopulateAliases() {
+	// Infer "managed" packages from conversion rules, excluding blacklisted packages.
+	for _, rule := range am.config.ConversionRules {
+		am.addManagedPackage(getPkgPath(rule.SourceType))
+		am.addManagedPackage(getPkgPath(rule.TargetType))
+	}
+	slog.Debug("AliasManager: collected managed packages for aliasing", "paths", am.managedPackagePaths)
+
 	for _, rule := range am.config.ConversionRules {
 		sourceInfo := am.typeInfos[rule.SourceType]
 		targetInfo := am.typeInfos[rule.TargetType]
@@ -74,32 +101,30 @@ func (am *AliasManager) PopulateAliases() {
 	}
 }
 
+// addManagedPackage adds a package path to the set of managed packages, if it's not empty and not blacklisted.
+func (am *AliasManager) addManagedPackage(pkgPath string) {
+	if pkgPath == "" {
+		return
+	}
+	if _, isExcluded := nonManagedPackages[pkgPath]; isExcluded {
+		return
+	}
+	am.managedPackagePaths[pkgPath] = struct{}{}
+}
+
 // ensureAliasesRecursively ensures that a type and all its nested types have aliases if needed.
 func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSource bool) {
 	if typeInfo == nil {
 		return
 	}
 
-	// CRITICAL: Check if alias already exists to break recursion cycles.
-	if _, exists := am.aliasMap[typeInfo.UniqueKey()]; exists {
+	uniqueKey := typeInfo.UniqueKey()
+	if am.visited[uniqueKey] {
 		return
 	}
+	am.visited[uniqueKey] = true
 
-	// For types that we won't generate an alias for (primitives, pointers),
-	// we just need to recurse on their children and then return.
-	if typeInfo.Kind == model.Primitive {
-		return // Primitives don't have children and don't get aliases.
-	}
-	if typeInfo.Kind == model.Pointer {
-		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
-		return // Pointers themselves don't get aliases.
-	}
-
-	// For all other types (Struct, Slice, Map, etc.), we generate an alias.
-	// CRITICAL: Add a placeholder to the map *before* recursing to handle cyclic dependencies.
-	am.aliasMap[typeInfo.UniqueKey()] = "placeholder"
-
-	// Recurse on component types.
+	// Recurse on component types first.
 	switch typeInfo.Kind {
 	case model.Struct:
 		for _, field := range typeInfo.Fields {
@@ -110,17 +135,57 @@ func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSou
 	case model.Map:
 		am.ensureAliasesRecursively(typeInfo.KeyType, isSource)
 		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
+	case model.Pointer:
+		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
 	}
 
-	// Now that all children are processed, generate the real alias.
-	alias := am.generateAlias(typeInfo, isSource)
+	// After recursing, decide if THIS type needs an alias.
+	if !am.isManagedType(typeInfo) {
+		return
+	}
 
-	// Update the map with the real alias.
-	am.aliasMap[typeInfo.UniqueKey()] = alias
-	am.aliasedTypes[typeInfo.UniqueKey()] = typeInfo
-	slog.Debug("AliasManager: created alias", "type", typeInfo.String(), "uniqueKey", typeInfo.UniqueKey(), "alias", alias)
+	// CRITICAL: Do not generate aliases for pointer types themselves.
+	if typeInfo.Kind == model.Pointer {
+		return
+	}
+
+	// Check if an alias already exists from user directives.
+	if existingAlias, ok := am.fqnToExistingAlias[uniqueKey]; ok {
+		am.aliasMap[uniqueKey] = existingAlias
+		slog.Debug("AliasManager: using existing user-defined alias", "type", typeInfo.String(), "uniqueKey", uniqueKey, "alias", existingAlias)
+		return
+	}
+
+	// Generate and store the alias.
+	alias := am.generateAlias(typeInfo, isSource)
+	am.aliasMap[uniqueKey] = alias
+	am.aliasedTypes[uniqueKey] = typeInfo
+	slog.Debug("AliasManager: created alias", "type", typeInfo.String(), "uniqueKey", uniqueKey, "alias", alias)
 }
 
+// isManagedType recursively checks if a type or any of its component types
+// belong to the source or target packages defined in the configuration.
+func (am *AliasManager) isManagedType(info *model.TypeInfo) bool {
+	if info == nil {
+		return false
+	}
+
+	switch info.Kind {
+	case model.Primitive:
+		return false
+	case model.Pointer:
+		return am.isManagedType(info.Underlying)
+	case model.Named, model.Struct:
+		_, isManaged := am.managedPackagePaths[info.ImportPath]
+		return isManaged
+	case model.Slice, model.Array:
+		return am.isManagedType(info.Underlying)
+	case model.Map:
+		return am.isManagedType(info.KeyType) || am.isManagedType(info.Underlying)
+	default:
+		return false
+	}
+}
 
 // getCleanBaseNameForAlias recursively builds a clean, suffix-free base name for a type.
 func (am *AliasManager) getCleanBaseNameForAlias(info *model.TypeInfo) string {
@@ -134,10 +199,8 @@ func (am *AliasManager) getCleanBaseNameForAlias(info *model.TypeInfo) string {
 	case model.Named, model.Struct:
 		return am.toCamelCase(info.Name)
 	case model.Pointer:
-		// Pointers are transparent for naming purposes.
 		return am.getCleanBaseNameForAlias(info.Underlying)
 	case model.Slice:
-		// Pluralize the underlying type's base name.
 		return am.getCleanBaseNameForAlias(info.Underlying) + "s"
 	case model.Array:
 		return am.getCleanBaseNameForAlias(info.Underlying) + "Array"
@@ -152,13 +215,8 @@ func (am *AliasManager) getCleanBaseNameForAlias(info *model.TypeInfo) string {
 
 // generateAlias creates a new alias for a type based on naming rules.
 func (am *AliasManager) generateAlias(info *model.TypeInfo, isSource bool) string {
-	// 1. Get the clean, unprocessed base name.
 	baseName := am.getCleanBaseNameForAlias(info)
-
-	// 2. Get the appropriate prefix and suffix.
 	prefix, suffix := am.getPrefixAndSuffix(isSource)
-
-	// 3. Combine them into the final alias.
 	finalAlias := am.toCamelCase(prefix) + baseName + am.toCamelCase(suffix)
 	slog.Debug("AliasManager: final alias generated", "type", info.String(), "baseName", baseName, "finalAlias", finalAlias)
 	return finalAlias
@@ -203,4 +261,13 @@ func (am *AliasManager) GetTargetPath() string {
 		return am.config.PackagePairs[0].TargetPath
 	}
 	return ""
+}
+
+// getPkgPath extracts the package path from a fully-qualified type name.
+func getPkgPath(fqn string) string {
+	lastDot := strings.LastIndex(fqn, ".")
+	if lastDot == -1 {
+		return ""
+	}
+	return fqn[:lastDot]
 }
