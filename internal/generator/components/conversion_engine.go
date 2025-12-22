@@ -197,6 +197,11 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 				targetField = tf
 				break
 			}
+			// Try case-insensitive matching if exact match fails
+			if strings.EqualFold(tf.Name, targetFieldName) {
+				targetField = tf
+				break
+			}
 		}
 
 		if targetField != nil {
