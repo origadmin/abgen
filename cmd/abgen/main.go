@@ -72,7 +72,7 @@ func main() {
 		slog.Error("Failed to parse configuration", "error", err)
 		os.Exit(1)
 	}
-	cfg.Version = v.String()
+	cfg.Version = version
 
 	// Resolve output file paths and store them in GenerationContext
 	mainOutputFile := *output
