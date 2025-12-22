@@ -88,17 +88,11 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 ) (*model.GeneratedCode, error) {
 	var buf strings.Builder
 
-	isSourcePtrToSlice := sourceInfo.Kind == model.Pointer && getEffectiveTypeInfo(sourceInfo.Underlying).Kind == model.Slice
-	isTargetPtrToSlice := targetInfo.Kind == model.Pointer && getEffectiveTypeInfo(targetInfo.Underlying).Kind == model.Slice
+	isSourcePtrToSlice := sourceInfo.Kind == model.Pointer
+	isTargetPtrToSlice := targetInfo.Kind == model.Pointer
 
 	actualSourceSlice := getEffectiveTypeInfo(sourceInfo)
-	if isSourcePtrToSlice {
-		actualSourceSlice = getEffectiveTypeInfo(sourceInfo.Underlying)
-	}
 	actualTargetSlice := getEffectiveTypeInfo(targetInfo)
-	if isTargetPtrToSlice {
-		actualTargetSlice = getEffectiveTypeInfo(targetInfo.Underlying)
-	}
 
 	sourceElem := ce.typeConverter.GetSliceElementType(actualSourceSlice)
 	targetElem := ce.typeConverter.GetSliceElementType(actualTargetSlice)
@@ -109,7 +103,12 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 
 	sourceSliceStr := ce.typeFormatter.Format(sourceInfo)
 	targetSliceStr := ce.typeFormatter.Format(targetInfo)
-	targetSliceAllocStr := ce.typeFormatter.Format(actualTargetSlice)
+
+	targetAllocType := targetInfo
+	if isTargetPtrToSlice {
+		targetAllocType = targetInfo.Underlying
+	}
+	targetSliceAllocStr := ce.typeFormatter.Format(targetAllocType)
 
 	funcName := ce.nameGenerator.ConversionFunctionName(sourceInfo, targetInfo)
 
@@ -127,23 +126,29 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	buf.WriteString(fmt.Sprintf("\ttos := make(%s, len(%s))\n", targetSliceAllocStr, loopVar))
 	buf.WriteString(fmt.Sprintf("\tfor i, f := range %s {\n", loopVar))
 
+	elemSourceIsPtr := sourceElem.Kind == model.Pointer
+	elemTargetIsPtr := targetElem.Kind == model.Pointer
 	elemFuncName := ce.nameGenerator.ConversionFunctionName(sourceElem, targetElem)
 
-	sourceElemIsPtr := sourceElem.Kind == model.Pointer
-	targetElemIsPtr := targetElem.Kind == model.Pointer
+	var assignment string
+	effectiveElemSourceType := getEffectiveTypeInfo(sourceElem)
+	effectiveElemTargetType := getEffectiveTypeInfo(targetElem)
 
-	var conversionExpr string
-	if !sourceElemIsPtr && !targetElemIsPtr { // V -> V
-		conversionExpr = fmt.Sprintf("tos[i] = *%s(&f)", elemFuncName)
-	} else if !sourceElemIsPtr && targetElemIsPtr { // V -> *P
-		conversionExpr = fmt.Sprintf("tos[i] = %s(&f)", elemFuncName)
-	} else if sourceElemIsPtr && !targetElemIsPtr { // *P -> V
-		conversionExpr = fmt.Sprintf("tos[i] = *%s(f)", elemFuncName)
-	} else { // *P -> *P
-		conversionExpr = fmt.Sprintf("tos[i] = %s(f)", elemFuncName)
+	if effectiveElemSourceType.Kind == model.Struct && effectiveElemTargetType.Kind == model.Struct {
+		arg := "f"
+		if !elemSourceIsPtr {
+			arg = "&f"
+		}
+		call := fmt.Sprintf("%s(%s)", elemFuncName, arg)
+		if !elemTargetIsPtr {
+			call = "*" + call
+		}
+		assignment = fmt.Sprintf("tos[i] = %s", call)
+	} else {
+		assignment = fmt.Sprintf("tos[i] = %s(f)", elemFuncName)
 	}
 
-	buf.WriteString(fmt.Sprintf("\t\t%s\n", conversionExpr))
+	buf.WriteString(fmt.Sprintf("\t\t%s\n", assignment))
 	buf.WriteString("\t}\n")
 
 	if isTargetPtrToSlice {
@@ -184,7 +189,6 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 				targetField = tf
 				break
 			}
-			// Try case-insensitive matching if exact match fails
 			if strings.EqualFold(tf.Name, targetFieldName) {
 				targetField = tf
 				break
@@ -192,28 +196,25 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 		}
 
 		if targetField != nil {
-			// Pass parent info to getConversionExpression
 			conversionExpr, requiredHelpers, newTask := ce.getConversionExpression(sourceInfo, targetInfo, sourceField, targetField, "from")
 			allRequiredHelpers = append(allRequiredHelpers, requiredHelpers...)
 			if newTask != nil {
 				newTasks = append(newTasks, newTask)
 			}
 
-			// Check if this is a complex slice conversion that needs a temporary variable
 			if ce.needsTemporaryVariable(sourceField.Type, targetField.Type) {
 				tempVarName := fmt.Sprintf("temp%s", targetField.Name)
 				preAssignments = append(preAssignments, fmt.Sprintf("\t%s := %s", tempVarName, conversionExpr))
 				conversionExpr = tempVarName
-				if targetField.Type.Kind == model.Pointer && targetField.Type.Underlying != nil && targetField.Type.Underlying.Kind == model.Slice {
+				if targetField.Type.Kind == model.Pointer && getEffectiveTypeInfo(targetField.Type.Underlying).Kind == model.Slice {
 					conversionExpr = fmt.Sprintf("&%s", conversionExpr)
 				}
 			}
-			
+
 			fieldAssignments = append(fieldAssignments, fmt.Sprintf("\t\t%s: %s,", targetField.Name, conversionExpr))
 		}
 	}
 
-	// Output pre-assignments (temporary variables for complex conversions)
 	for _, preAssignment := range preAssignments {
 		buf.WriteString(preAssignment + "\n")
 	}
@@ -231,15 +232,13 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 	return buf.String(), allRequiredHelpers, newTasks, nil
 }
 
-// getEffectiveTypeInfo unwraps named types and pointers to get to the underlying struct or slice.
+// getEffectiveTypeInfo unwraps named types to get to the underlying kind.
 func getEffectiveTypeInfo(info *model.TypeInfo) *model.TypeInfo {
 	if info == nil {
 		return nil
 	}
-	if info.Kind == model.Pointer || info.Kind == model.Named {
-		if info.Underlying != nil {
-			return getEffectiveTypeInfo(info.Underlying)
-		}
+	if info.Kind == model.Named {
+		return getEffectiveTypeInfo(info.Underlying)
 	}
 	return info
 }
@@ -257,64 +256,54 @@ func (ce *ConversionEngine) getConversionExpression(
 		return sourceFieldExpr, nil, nil
 	}
 
-	// Handle direct primitive conversions first.
 	if canUseSimpleTypeConversion(sourceType, targetType) {
 		targetTypeStr := ce.typeFormatter.Format(targetType)
 		return fmt.Sprintf("%s(%s)", targetTypeStr, sourceFieldExpr), nil, nil
 	}
 
-	helperKey, funcName := ce.findHelper(sourceType, targetType)
-	if funcName != "" {
-		slog.Debug("Found helper function", "key", helperKey, "funcName", funcName)
+	if _, funcName := ce.findHelper(sourceType, targetType); funcName != "" {
 		ce.addRequiredImportsForHelper(funcName)
 		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), []string{funcName}, nil
 	}
 
-	// Unwrap named types to check their underlying kind (struct, slice, etc.)
 	effectiveSourceType := getEffectiveTypeInfo(sourceType)
 	effectiveTargetType := getEffectiveTypeInfo(targetType)
-
-	isStructConv := effectiveSourceType.Kind == model.Struct && effectiveTargetType.Kind == model.Struct
-	isSliceConv := effectiveSourceType.Kind == model.Slice && effectiveTargetType.Kind == model.Slice
-
 	var convFuncName string
 	var newTask *model.ConversionTask
 
-	if isStructConv || isSliceConv {
+	// Case 1: Struct Conversion
+	if effectiveSourceType.Kind == model.Struct && effectiveTargetType.Kind == model.Struct {
 		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
-		newTask = &model.ConversionTask{
-			Source: sourceType,
-			Target: targetType,
-		}
-	} else {
-		// This is for primitives, named primitives, etc., that need a stub.
-		convFuncName = ce.nameGenerator.FieldConversionFunctionName(sourceParent, targetParent, sourceField, targetField)
-		stubTask := &model.ConversionTask{
-			Source: sourceType,
-			Target: targetType,
-		}
-		ce.stubsToGenerate[convFuncName] = stubTask
-		// For stubs, we don't create a new task for the main worklist.
-	}
-
-	// Handle pointer/value mismatches for struct-to-struct field conversions.
-	if isStructConv {
+		newTask = &model.ConversionTask{Source: sourceType, Target: targetType}
 		arg := sourceFieldExpr
 		if sourceType.Kind != model.Pointer {
 			arg = fmt.Sprintf("&%s", sourceFieldExpr)
 		}
-
 		expr := fmt.Sprintf("%s(%s)", convFuncName, arg)
-
 		if targetType.Kind != model.Pointer {
 			expr = fmt.Sprintf("*%s", expr)
 		}
 		return expr, nil, newTask
 	}
 
-	// Default behavior for slices and stubs.
-	// Assumes the generated function/stub handles pointer/value logic internally or has a matching signature.
-	return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, newTask
+	// Case 2: Slice Conversion
+	if effectiveSourceType.Kind == model.Slice && effectiveTargetType.Kind == model.Slice {
+		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
+		newTask = &model.ConversionTask{Source: sourceType, Target: targetType}
+		return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, newTask
+	}
+
+	// Case 3: Fallback to Stub with corrected naming logic
+	if sourceType.Kind == model.Named && targetType.Kind == model.Named {
+		// e.g., type Gender int -> type GenderBilateral int. Use a generic name.
+		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
+	} else {
+		// e.g., int -> string for a 'Status' field. Use a field-specific name.
+		convFuncName = ce.nameGenerator.FieldConversionFunctionName(sourceParent, targetParent, sourceField, targetField)
+	}
+	stubTask := &model.ConversionTask{Source: sourceType, Target: targetType}
+	ce.stubsToGenerate[convFuncName] = stubTask
+	return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, nil
 }
 
 func (ce *ConversionEngine) findHelper(source, target *model.TypeInfo) (string, string) {
@@ -345,23 +334,14 @@ func (ce *ConversionEngine) addRequiredImportsForHelper(funcName string) {
 	}
 }
 
-// needsTemporaryVariable determines if a conversion needs a temporary variable
 func (ce *ConversionEngine) needsTemporaryVariable(sourceType, targetType *model.TypeInfo) bool {
-	// We need a temporary variable when converting slice types where the target is a pointer-to-slice
-	// because we can't take the address of a function return value directly in a struct literal
+	effectiveSource := getEffectiveTypeInfo(sourceType)
+	effectiveTarget := getEffectiveTypeInfo(targetType)
 
-	// Check if this is a slice conversion
-	isSliceConversion := (sourceType.Kind == model.Slice && targetType.Kind == model.Slice) ||
-		(sourceType.Kind == model.Pointer && targetType.Kind == model.Pointer &&
-			sourceType.Underlying != nil && sourceType.Underlying.Kind == model.Slice &&
-			targetType.Underlying != nil && targetType.Underlying.Kind == model.Slice)
-
-	if !isSliceConversion {
+	if effectiveSource.Kind != model.Slice || effectiveTarget.Kind != model.Slice {
 		return false
 	}
-
-	// If target is pointer-to-slice, we need a temporary variable
-	return targetType.Kind == model.Pointer && targetType.Underlying != nil && targetType.Underlying.Kind == model.Slice
+	return targetType.Kind == model.Pointer
 }
 
 // GetStubsToGenerate returns the stubs that need to be generated.
@@ -371,51 +351,36 @@ func (ce *ConversionEngine) GetStubsToGenerate() map[string]*model.ConversionTas
 
 // canUseSimpleTypeConversion checks if a simple Go type conversion T(v) is valid.
 func canUseSimpleTypeConversion(source, target *model.TypeInfo) bool {
-	// Get the underlying primitive type for named types
-	sourceBase := source
-	if source.Kind == model.Named && source.Underlying != nil {
-		sourceBase = source.Underlying
-	}
-	targetBase := target
-	if target.Kind == model.Named && target.Underlying != nil {
-		targetBase = target.Underlying
-	}
+	sourceBase := getEffectiveTypeInfo(source)
+	targetBase := getEffectiveTypeInfo(target)
 
-	// Case 1: Numeric <-> Numeric
-	isSourceNumeric := sourceBase.Kind == model.Primitive && isNumeric(sourceBase.Name)
-	isTargetNumeric := targetBase.Kind == model.Primitive && isNumeric(targetBase.Name)
-	if isSourceNumeric && isTargetNumeric {
-		return true
-	}
-
-	// Case 2: string -> []byte or []rune
-	if source.Kind == model.Primitive && source.Name == "string" {
-		if target.Kind == model.Slice && target.Underlying != nil {
-			if target.Underlying.Name == "byte" || target.Underlying.Name == "rune" {
-				return true
-			}
+	if sourceBase.Kind == model.Primitive && targetBase.Kind == model.Primitive {
+		if isNumeric(sourceBase.Name) && isNumeric(targetBase.Name) {
+			return true
 		}
 	}
 
-	// Case 3: []byte or []rune -> string
-	if target.Kind == model.Primitive && target.Name == "string" {
-		if source.Kind == model.Slice && source.Underlying != nil {
-			if source.Underlying.Name == "byte" || source.Underlying.Name == "rune" {
-				return true
-			}
+	if source.Name == "string" && targetBase.Kind == model.Slice {
+		if targetBase.Underlying != nil && (targetBase.Underlying.Name == "byte" || targetBase.Underlying.Name == "rune") {
+			return true
+		}
+	}
+
+	if target.Name == "string" && sourceBase.Kind == model.Slice {
+		if sourceBase.Underlying != nil && (sourceBase.Underlying.Name == "byte" || sourceBase.Underlying.Name == "rune") {
+			return true
 		}
 	}
 
 	return false
 }
 
-// isNumeric checks if a given type name is a numeric type.
 func isNumeric(typeName string) bool {
 	switch typeName {
 	case "int", "int8", "int16", "int32", "int64",
 		"uint", "uint8", "uint16", "uint32", "uint64",
 		"float32", "float64",
-		"byte", "rune": // byte is alias for uint8, rune is alias for int32
+		"byte", "rune":
 		return true
 	default:
 		return false

@@ -23,14 +23,18 @@ import (
 // Expected: standard ent.User ↔ types.User conversion
 // with all basic type mappings and field copying.
 
-func ConvertUserStatusToUserBilateralStatus(status string) int32 {
-	// TODO: implement
-	return 0
+// ConvertUserStatusToUserBilateralStatus is a custom conversion function stub.
+// Please implement this function to complete the conversion.
+func ConvertUserStatusToUserBilateralStatus(from string) int32 {
+	// TODO: Implement this custom conversion
+	panic("stub! not implemented")
 }
 
-func ConvertUserBilateralStatusToUserStatus(status int32) string {
-	// TODO: implement
-	return ""
+// ConvertUserBilateralStatusToUserStatus is a custom conversion function stub.
+// Please implement this function to complete the conversion.
+func ConvertUserBilateralStatusToUserStatus(from int32) string {
+	// TODO: Implement this custom conversion
+	panic("stub! not implemented")
 }
 
 func ConvertGenderToGenderBilateral(gender ent.Gender) types.Gender {
