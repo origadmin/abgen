@@ -35,27 +35,23 @@ func NewCodeGenerator() model.CodeGenerator {
 // initializeComponents configures the generator's components for a specific generation task.
 func (g *CodeGenerator) initializeComponents(cfg *config.Config, typeInfos map[string]*model.TypeInfo) {
 	// Create components in dependency order.
-	// 1. Components with no internal dependencies.
 	g.importManager = components.NewImportManager()
-
-	// Add required imports directly from PackageAliases
 	for alias, path := range cfg.PackageAliases {
 		g.importManager.AddAs(path, alias)
 	}
 	slog.Debug("ImportManager after PackageAliases processing", "imports", g.importManager.GetAllImports())
 
-	g.nameGenerator = components.NewNameGenerator(cfg)
-	// g.typeConverter is already initialized in NewCodeGenerator.
-
-	// 2. AliasManager depends on ImportManager.
-	// We perform a type assertion because we know the concrete type and need it for the next step.
-	aliasManager := components.NewAliasManager(cfg, g.importManager, typeInfos).(*components.AliasManager)
+	// AliasManager depends on ImportManager.
+	aliasManager := components.NewAliasManager(cfg, g.importManager, typeInfos)
 	g.aliasManager = aliasManager
 
-	// 3. TypeFormatter depends on AliasManager and ImportManager.
+	// NameGenerator now depends on AliasManager.
+	g.nameGenerator = components.NewNameGenerator(aliasManager)
+
+	// TypeFormatter depends on AliasManager and ImportManager.
 	g.typeFormatter = components.NewTypeFormatter(g.aliasManager, g.importManager, typeInfos)
 
-	// 4. ConversionEngine depends on several components.
+	// ConversionEngine depends on several components.
 	g.conversionEngine = components.NewConversionEngine(
 		g.typeConverter,
 		g.nameGenerator,
@@ -63,7 +59,7 @@ func (g *CodeGenerator) initializeComponents(cfg *config.Config, typeInfos map[s
 		g.importManager,
 	)
 
-	// 5. CodeEmitter is simplified and only depends on config.
+	// CodeEmitter is simplified and only depends on config.
 	g.codeEmitter = components.NewCodeEmitter(cfg)
 }
 
@@ -102,7 +98,7 @@ func (g *CodeGenerator) Generate(cfg *config.Config, typeInfos map[string]*model
 
 // prepareConfigForSession creates a finalized configuration for a single generation run.
 func (g *CodeGenerator) prepareConfigForSession(originalCfg *config.Config, typeInfos map[string]*model.TypeInfo) (*config.Config, []*config.ConversionRule) {
-	sessionConfig := deepCopyConfig(originalCfg)
+	sessionConfig := originalCfg.Clone()
 	slog.Debug("Preparing session configuration", "initial_rules", len(sessionConfig.ConversionRules))
 
 	var activeRules []*config.ConversionRule
@@ -236,63 +232,7 @@ func (g *CodeGenerator) findSeedRules(typeInfos map[string]*model.TypeInfo, pack
 	return seedRules
 }
 
-func deepCopyConfig(original *config.Config) *config.Config {
-	if original == nil {
-		return nil
-	}
 
-	cpy := &config.Config{
-		NamingRules:         original.NamingRules,
-		GenerationContext:   original.GenerationContext,
-		PackagePairs:        make([]*config.PackagePair, len(original.PackagePairs)),
-		ConversionRules:     make([]*config.ConversionRule, 0, len(original.ConversionRules)),
-		PackageAliases:      make(map[string]string, len(original.PackageAliases)),
-		CustomFunctionRules: make(map[string]string, len(original.CustomFunctionRules)),
-		ExistingAliases:     make(map[string]string, len(original.ExistingAliases)), // Correctly copy ExistingAliases
-	}
-
-	for i, pair := range original.PackagePairs {
-		if pair != nil {
-			pairCopy := *pair
-			cpy.PackagePairs[i] = &pairCopy
-		}
-	}
-
-	for _, rule := range original.ConversionRules {
-		if rule != nil {
-			ruleCopy := &config.ConversionRule{
-				SourceType: rule.SourceType,
-				TargetType: rule.TargetType,
-				Direction:  rule.Direction,
-				FieldRules: config.FieldRuleSet{
-					Ignore: make(map[string]struct{}, len(rule.FieldRules.Ignore)),
-					Remap:  make(map[string]string, len(rule.FieldRules.Remap)),
-				},
-			}
-			for k, v := range rule.FieldRules.Ignore {
-				ruleCopy.FieldRules.Ignore[k] = v
-			}
-			for k, v := range rule.FieldRules.Remap {
-				ruleCopy.FieldRules.Remap[k] = v
-			}
-			cpy.ConversionRules = append(cpy.ConversionRules, ruleCopy)
-		}
-	}
-
-	for k, v := range original.PackageAliases {
-		cpy.PackageAliases[k] = v
-	}
-
-	for k, v := range original.CustomFunctionRules {
-		cpy.CustomFunctionRules[k] = v
-	}
-
-	for k, v := range original.ExistingAliases {
-		cpy.ExistingAliases[k] = v
-	}
-
-	return cpy
-}
 
 func (g *CodeGenerator) generateMainCode(cfg *config.Config, typeInfos map[string]*model.TypeInfo, rules []*config.ConversionRule) ([]byte, error) {
 	finalBuf := new(bytes.Buffer)
@@ -412,29 +352,39 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 	generatedFunctions := make(map[string]bool)
 	worklist := make([]*model.ConversionTask, 0)
 
-	// Initial population of the worklist from the rules
+	// Initial population of the worklist from the rules.
+	// This logic explicitly decomposes bilateral rules into two separate one-way tasks
+	// to ensure clarity and prevent any component from misinterpreting a rule's direction.
 	for _, rule := range rules {
 		sourceInfo := typeInfos[rule.SourceType]
 		targetInfo := typeInfos[rule.TargetType]
-		if sourceInfo != nil && targetInfo != nil {
-			worklist = append(worklist, &model.ConversionTask{Source: sourceInfo, Target: targetInfo, Rule: rule})
-			
-			// Add crucial debug log
-			slog.Debug("Checking rule for bilateral conversion", "source", rule.SourceType, "target", rule.TargetType, "direction", rule.Direction)
+		if sourceInfo == nil || targetInfo == nil {
+			continue
+		}
 
-			if rule.Direction == "both" {
-				slog.Debug("Bilateral rule detected, creating reverse task.", "source", rule.SourceType, "target", rule.TargetType)
-				reverseRule := &config.ConversionRule{
-					SourceType: targetInfo.FQN(),
-					TargetType: sourceInfo.FQN(),
-					Direction:  config.DirectionOneway,
-					FieldRules: config.FieldRuleSet{Ignore: make(map[string]struct{}), Remap: make(map[string]string)},
-				}
-				for from, to := range rule.FieldRules.Remap {
-					reverseRule.FieldRules.Remap[to] = from
-				}
-				worklist = append(worklist, &model.ConversionTask{Source: targetInfo, Target: sourceInfo, Rule: reverseRule})
+		if rule.Direction == config.DirectionBoth {
+			slog.Debug("Decomposing bilateral rule into two one-way tasks.", "source", rule.SourceType, "target", rule.TargetType)
+
+			// Create and add the forward task with a cloned, one-way rule.
+			forwardRule := *rule // Shallow copy is sufficient here
+			forwardRule.Direction = config.DirectionOneway
+			worklist = append(worklist, &model.ConversionTask{Source: sourceInfo, Target: targetInfo, Rule: &forwardRule})
+
+			// Create and add the reverse task with a new, inverted one-way rule.
+			reverseRule := &config.ConversionRule{
+				SourceType: targetInfo.FQN(),
+				TargetType: sourceInfo.FQN(),
+				Direction:  config.DirectionOneway,
+				FieldRules: config.FieldRuleSet{Ignore: make(map[string]struct{}), Remap: make(map[string]string)},
 			}
+			// Invert field remapping for the reverse direction.
+			for from, to := range rule.FieldRules.Remap {
+				reverseRule.FieldRules.Remap[to] = from
+			}
+			worklist = append(worklist, &model.ConversionTask{Source: targetInfo, Target: sourceInfo, Rule: reverseRule})
+		} else {
+			// For one-way rules, just add the task as is.
+			worklist = append(worklist, &model.ConversionTask{Source: sourceInfo, Target: targetInfo, Rule: rule})
 		}
 	}
 

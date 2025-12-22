@@ -88,16 +88,11 @@ type CodeEmitter interface {
 }
 
 // TypeConverter defines the interface for utility functions that inspect TypeInfo objects.
+// Most type checking methods are removed in favor of direct access to info.Kind.
 type TypeConverter interface {
-	IsPointer(info *TypeInfo) bool
-	IsStruct(info *TypeInfo) bool
-	IsSlice(info *TypeInfo) bool
-	IsArray(info *TypeInfo) bool
-	IsMap(info *TypeInfo) bool
-	IsPrimitive(info *TypeInfo) bool
-	IsUltimatelyPrimitive(info *TypeInfo) bool
-	IsPurelyPrimitiveOrCompositeOfPrimitives(info *TypeInfo) bool
 	GetElementType(info *TypeInfo) *TypeInfo
 	GetSliceElementType(info *TypeInfo) *TypeInfo
 	GetKeyType(info *TypeInfo) *TypeInfo
+	IsUltimatelyPrimitive(info *TypeInfo) bool
+	IsPurelyPrimitiveOrCompositeOfPrimitives(info *TypeInfo) bool
 }

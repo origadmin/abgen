@@ -21,14 +21,8 @@ func (c *TypeConverter) resolveConcreteType(info *model.TypeInfo) *model.TypeInf
 	return info
 }
 
-// IsPointer checks if the given TypeInfo represents a pointer type.
-func (c *TypeConverter) IsPointer(info *model.TypeInfo) bool {
-	info = c.resolveConcreteType(info)
-	return info != nil && info.Kind == model.Pointer
-}
-
 // GetElementType returns the element type of pointers, slices, and arrays.
-// It now correctly handles nested pointers and containers.
+// It correctly handles nested pointers and containers.
 func (c *TypeConverter) GetElementType(info *model.TypeInfo) *model.TypeInfo {
 	if info == nil {
 		return nil
@@ -62,36 +56,6 @@ func (c *TypeConverter) GetKeyType(info *model.TypeInfo) *model.TypeInfo {
 		return info.KeyType
 	}
 	return nil
-}
-
-// IsStruct checks if the given TypeInfo represents a struct type.
-func (c *TypeConverter) IsStruct(info *model.TypeInfo) bool {
-	info = c.resolveConcreteType(info)
-	return info != nil && info.Kind == model.Struct
-}
-
-// IsSlice checks if the given TypeInfo represents a slice type.
-func (c *TypeConverter) IsSlice(info *model.TypeInfo) bool {
-	info = c.resolveConcreteType(info)
-	return info != nil && info.Kind == model.Slice
-}
-
-// IsArray checks if the given TypeInfo represents an array type.
-func (c *TypeConverter) IsArray(info *model.TypeInfo) bool {
-	info = c.resolveConcreteType(info)
-	return info != nil && info.Kind == model.Array
-}
-
-// IsMap checks if the given TypeInfo represents a map type.
-func (c *TypeConverter) IsMap(info *model.TypeInfo) bool {
-	info = c.resolveConcreteType(info)
-	return info != nil && info.Kind == model.Map
-}
-
-// IsPrimitive checks if the given TypeInfo represents a primitive type.
-func (c *TypeConverter) IsPrimitive(info *model.TypeInfo) bool {
-	info = c.resolveConcreteType(info)
-	return info != nil && info.Kind == model.Primitive
 }
 
 // IsUltimatelyPrimitive checks if the given TypeInfo or its underlying type is ultimately a primitive type.

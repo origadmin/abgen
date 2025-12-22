@@ -166,3 +166,69 @@ func getPkgPath(fqn string) string {
 	}
 	return fqn[:lastDot]
 }
+
+// Clone creates a deep copy of the Config.
+func (c *Config) Clone() *Config {
+	if c == nil {
+		return nil
+	}
+
+	clone := &Config{
+		GenerationContext:   c.GenerationContext,
+		PackageAliases:      make(map[string]string, len(c.PackageAliases)),
+		LocalAliases:        make(map[string]string, len(c.LocalAliases)),
+		ExistingAliases:     make(map[string]string, len(c.ExistingAliases)),
+		PackagePairs:        make([]*PackagePair, len(c.PackagePairs)),
+		ConversionRules:     make([]*ConversionRule, 0, len(c.ConversionRules)),
+		CustomFunctionRules: make(map[string]string, len(c.CustomFunctionRules)),
+		NamingRules:         c.NamingRules,
+		GlobalBehaviorRules: c.GlobalBehaviorRules,
+	}
+
+	for i, pair := range c.PackagePairs {
+		if pair != nil {
+			pairCopy := *pair
+			clone.PackagePairs[i] = &pairCopy
+		}
+	}
+
+	for _, rule := range c.ConversionRules {
+		if rule != nil {
+			ruleCopy := &ConversionRule{
+				SourceType: rule.SourceType,
+				TargetType: rule.TargetType,
+				Direction:  rule.Direction,
+				CustomFunc: rule.CustomFunc,
+				FieldRules: FieldRuleSet{
+					Ignore: make(map[string]struct{}, len(rule.FieldRules.Ignore)),
+					Remap:  make(map[string]string, len(rule.FieldRules.Remap)),
+				},
+			}
+			for k, v := range rule.FieldRules.Ignore {
+				ruleCopy.FieldRules.Ignore[k] = v
+			}
+			for k, v := range rule.FieldRules.Remap {
+				ruleCopy.FieldRules.Remap[k] = v
+			}
+			clone.ConversionRules = append(clone.ConversionRules, ruleCopy)
+		}
+	}
+
+	for k, v := range c.PackageAliases {
+		clone.PackageAliases[k] = v
+	}
+
+	for k, v := range c.LocalAliases {
+		clone.LocalAliases[k] = v
+	}
+
+	for k, v := range c.ExistingAliases {
+		clone.ExistingAliases[k] = v
+	}
+
+	for k, v := range c.CustomFunctionRules {
+		clone.CustomFunctionRules[k] = v
+	}
+
+	return clone
+}

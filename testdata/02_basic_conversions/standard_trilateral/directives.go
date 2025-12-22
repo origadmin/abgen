@@ -25,14 +25,6 @@ type (
 	ResourceTrilateral = types.Resource
 )
 
-// ConvertGender handles the conversion between ent.Gender (int) and types.Gender (string).
-func ConvertGender(from ent.Gender) types.Gender {
-	if from == ent.GenderMale {
-		return types.GenderMale
-	}
-	return types.GenderFemale
-}
-
 // ConvertGenderTrilateralToGender handles the conversion between types.Gender (string) and ent.Gender (int).
 func ConvertGenderTrilateralToGender(from types.Gender) ent.Gender {
 	if from == types.GenderMale {

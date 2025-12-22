@@ -41,16 +41,16 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 	slog.Debug("ConversionEngine: Received task", "source", sourceInfo.UniqueKey(), "target", targetInfo.UniqueKey())
 
 	// Determine if this is a slice conversion, including pointers to slices.
-	isSliceConversion := ce.typeConverter.IsSlice(sourceInfo) && ce.typeConverter.IsSlice(targetInfo)
+	isSliceConversion := sourceInfo.Kind == model.Slice && targetInfo.Kind == model.Slice
 	slog.Debug("ConversionEngine: Initial slice check", "isSlice", isSliceConversion)
 
 	if !isSliceConversion {
 		// Check for pointer-to-slice case
-		if ce.typeConverter.IsPointer(sourceInfo) && ce.typeConverter.IsPointer(targetInfo) {
+		if sourceInfo.Kind == model.Pointer && targetInfo.Kind == model.Pointer {
 			slog.Debug("ConversionEngine: Detected pointer-to-something types")
 			sourceUnderlying := sourceInfo.Underlying
 			targetUnderlying := targetInfo.Underlying
-			if sourceUnderlying != nil && targetUnderlying != nil && ce.typeConverter.IsSlice(sourceUnderlying) && ce.typeConverter.IsSlice(targetUnderlying) {
+			if sourceUnderlying != nil && targetUnderlying != nil && sourceUnderlying.Kind == model.Slice && targetUnderlying.Kind == model.Slice {
 				slog.Debug("ConversionEngine: Confirmed pointer-to-slice types")
 				isSliceConversion = true
 			} else {
@@ -66,7 +66,7 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 	}
 
 	slog.Debug("ConversionEngine: Dispatching to Struct-to-Struct or skipping")
-	if !ce.typeConverter.IsStruct(sourceInfo) || !ce.typeConverter.IsStruct(targetInfo) {
+	if sourceInfo.Kind != model.Struct || targetInfo.Kind != model.Struct {
 		return nil, nil, nil
 	}
 
@@ -99,8 +99,8 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 ) (*model.GeneratedCode, error) {
 	var buf strings.Builder
 
-	isSourcePtrToSlice := ce.typeConverter.IsPointer(sourceInfo) && ce.typeConverter.IsSlice(sourceInfo.Underlying)
-	isTargetPtrToSlice := ce.typeConverter.IsPointer(targetInfo) && ce.typeConverter.IsSlice(targetInfo.Underlying)
+	isSourcePtrToSlice := sourceInfo.Kind == model.Pointer && sourceInfo.Underlying != nil && sourceInfo.Underlying.Kind == model.Slice
+	isTargetPtrToSlice := targetInfo.Kind == model.Pointer && targetInfo.Underlying != nil && targetInfo.Underlying.Kind == model.Slice
 
 	var actualSourceSlice, actualTargetSlice *model.TypeInfo
 	if isSourcePtrToSlice {
@@ -143,8 +143,8 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 
 	elemFuncName := ce.nameGenerator.ConversionFunctionName(sourceElem, targetElem)
 
-	sourceElemIsPtr := ce.typeConverter.IsPointer(sourceElem)
-	targetElemIsPtr := ce.typeConverter.IsPointer(targetElem)
+	sourceElemIsPtr := sourceElem.Kind == model.Pointer
+	targetElemIsPtr := targetElem.Kind == model.Pointer
 
 	var conversionExpr string
 	if !sourceElemIsPtr && !targetElemIsPtr { // V -> V
@@ -252,10 +252,10 @@ func (ce *ConversionEngine) getConversionExpression(
 	}
 
 	// This is the new logic to handle slice fields correctly
-	isSliceConversion := (ce.typeConverter.IsSlice(sourceType) && ce.typeConverter.IsSlice(targetType)) ||
-		(ce.typeConverter.IsPointer(sourceType) && ce.typeConverter.IsPointer(targetType) &&
-			ce.typeConverter.IsSlice(sourceType.Underlying) &&
-			ce.typeConverter.IsSlice(targetType.Underlying))
+	isSliceConversion := (sourceType.Kind == model.Slice && targetType.Kind == model.Slice) ||
+		(sourceType.Kind == model.Pointer && targetType.Kind == model.Pointer &&
+			sourceType.Underlying != nil && sourceType.Underlying.Kind == model.Slice &&
+			targetType.Underlying != nil && targetType.Underlying.Kind == model.Slice)
 
 	if isSliceConversion {
 		newTask := &model.ConversionTask{
@@ -265,8 +265,8 @@ func (ce *ConversionEngine) getConversionExpression(
 		return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, newTask
 	}
 
-	sourceIsPointer := ce.typeConverter.IsPointer(sourceType)
-	targetIsPointer := ce.typeConverter.IsPointer(targetType)
+	sourceIsPointer := sourceType.Kind == model.Pointer
+	targetIsPointer := targetType.Kind == model.Pointer
 
 	// For primitive conversions, we don't create a new task because abgen doesn't generate bodies for them.
 	// We assume the user will provide the implementation.
