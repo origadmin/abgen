@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"fmt"
+	"go/ast"
 	"go/types"
 	"log/slog"
 	"strings"
@@ -38,34 +39,67 @@ func (a *TypeAnalyzer) Find(fqn string) (*model.TypeInfo, error) {
 
 // Analyze is the main entry point for the analysis phase.
 func (a *TypeAnalyzer) Analyze(cfg *config.Config) (*model.AnalysisResult, error) {
-	packagePaths := a.collectSeedPaths(cfg)
-	fqns := cfg.AllFqns()
-	slog.Debug("Starting analysis", "package_paths_count", len(packagePaths), "fqns_count", len(fqns), "packagePaths", packagePaths, "fqns", fqns)
+	// 1. Analyze external packages for full type information.
+	// This load must succeed without errors.
+	externalPaths := a.collectExternalPaths(cfg)
+	slog.Debug("Starting analysis of external packages", "paths", externalPaths)
+	resolvedTypes, err := a.analyzeExternalPackages(externalPaths, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to analyze external packages: %w", err)
+	}
+	slog.Debug("Finished external package analysis", "resolved_types_count", len(resolvedTypes))
+
+	// 2. Analyze the local/current package to find existing functions and aliases.
+	// This load is more lenient and primarily uses AST walking to tolerate compilation errors.
+	slog.Debug("Starting analysis of local package for existing definitions", "path", cfg.GenerationContext.PackagePath)
+	existingFuncs, existingAliases := a.analyzeLocalPackage(cfg.GenerationContext.PackagePath)
+	slog.Debug("Finished local package analysis", "functions", len(existingFuncs), "aliases", len(existingAliases))
+
+	return &model.AnalysisResult{
+		TypeInfos:         resolvedTypes,
+		ExistingFunctions: existingFuncs,
+		ExistingAliases:   existingAliases,
+	}, nil
+}
+
+// analyzeExternalPackages loads and performs a deep type analysis on the specified external packages.
+func (a *TypeAnalyzer) analyzeExternalPackages(paths []string, cfg *config.Config) (map[string]*model.TypeInfo, error) {
+	if len(paths) == 0 {
+		return make(map[string]*model.TypeInfo), nil
+	}
 
 	loadCfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedModule |
 			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
 		Tests: false,
-		// Use build tags to exclude generated files. This is the standard Go mechanism.
-		// The "!abgen_source" tag is added to all generated files.
-		BuildFlags: []string{"-tags=abgen_source"},
 	}
-	pkgs, err := packages.Load(loadCfg, packagePaths...)
+	pkgs, err := packages.Load(loadCfg, paths...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load package graph: %w", err)
+		return nil, fmt.Errorf("failed to load external package graph: %w", err)
 	}
-	a.pkgs = pkgs
+	a.pkgs = pkgs // Set the loaded packages for the analyzer instance
+
+	// Check for loading errors
+	for _, pkg := range pkgs {
+		if len(pkg.Errors) > 0 {
+			// It's critical that external packages load cleanly.
+			return nil, fmt.Errorf("error loading external package %s: %v", pkg.PkgPath, pkg.Errors)
+		}
+	}
 
 	resolvedTypes := make(map[string]*model.TypeInfo)
-	if len(fqns) == 0 && len(packagePaths) > 0 {
-		slog.Debug("FQNs list is empty, discovering all named struct types in loaded packages for implicit rules.")
-		for _, pkg := range a.pkgs {
-			slog.Debug("Scanning package for named struct types", "pkgPath", pkg.PkgPath)
-			for _, typName := range pkg.TypesInfo.Defs {
-				if typName == nil || typName.Type() == nil {
-					continue
-				}
-				if named, ok := typName.Type().(*types.Named); ok {
+
+	// Always perform implicit discovery first
+	slog.Debug("Discovering all named struct types in loaded packages for implicit rules.")
+	for _, pkg := range a.pkgs {
+		slog.Debug("Scanning package for named struct types", "pkgPath", pkg.PkgPath)
+		for _, name := range pkg.Types.Scope().Names() {
+			obj := pkg.Types.Scope().Lookup(name)
+			if obj == nil {
+				continue
+			}
+			if _, ok := obj.(*types.TypeName); ok {
+				if named, ok := obj.Type().(*types.Named); ok {
 					if _, isStruct := named.Underlying().(*types.Struct); isStruct {
 						fqn := named.Obj().Pkg().Path() + "." + named.Obj().Name()
 						if _, ok := resolvedTypes[fqn]; !ok {
@@ -79,63 +113,75 @@ func (a *TypeAnalyzer) Analyze(cfg *config.Config) (*model.AnalysisResult, error
 				}
 			}
 		}
-	} else {
-		for _, fqn := range fqns {
-			if _, ok := resolvedTypes[fqn]; !ok {
-				info, err := a.find(fqn)
-				if err != nil {
-					slog.Warn("could not resolve source type", "fqn", fqn, "error", err)
-					continue
-				}
-				resolvedTypes[fqn] = info
+	}
+
+	// Then, resolve any explicitly mentioned FQNs that might have been missed
+	// (e.g., non-struct types or types involved in non-implicit rules).
+	for _, fqn := range cfg.AllFqns() {
+		if _, ok := resolvedTypes[fqn]; !ok {
+			info, err := a.find(fqn)
+			if err != nil {
+				slog.Warn("could not resolve explicitly required type", "fqn", fqn, "error", err)
+				continue
 			}
+			resolvedTypes[fqn] = info
 		}
 	}
 
-	slog.Debug("Finished type analysis", "resolved_types_count", len(resolvedTypes))
-
-	existingFuncs, existingAliases := a.analyzePackageContents(cfg.GenerationContext.PackagePath)
-
-	return &model.AnalysisResult{
-		TypeInfos:         resolvedTypes,
-		ExistingFunctions: existingFuncs,
-		ExistingAliases:   existingAliases,
-	}, nil
+	return resolvedTypes, nil
 }
 
-// analyzePackageContents scans the target package for existing functions and type aliases.
-func (a *TypeAnalyzer) analyzePackageContents(pkgPath string) (map[string]bool, map[string]string) {
+// analyzeLocalPackage performs a lightweight, AST-based analysis of the local package
+// to find existing function and type names, tolerating compilation errors.
+func (a *TypeAnalyzer) analyzeLocalPackage(pkgPath string) (map[string]bool, map[string]string) {
 	existingFunctions := make(map[string]bool)
 	existingAliases := make(map[string]string)
 
-	for _, pkg := range a.pkgs {
-		if pkg.PkgPath == pkgPath {
-			scope := pkg.Types.Scope()
-			for _, name := range scope.Names() {
-				obj := scope.Lookup(name)
-				if obj == nil {
-					continue
-				}
+	if pkgPath == "" {
+		return existingFunctions, existingAliases
+	}
 
-				switch o := obj.(type) {
-				case *types.Func:
-					existingFunctions[name] = true
-				case *types.TypeName:
-					if o.IsAlias() {
-						existingAliases[name] = o.Type().String()
+	// Load the package with syntax only, which is more error-tolerant.
+	loadCfg := &packages.Config{
+		Mode:  packages.NeedName | packages.NeedSyntax,
+		Tests: false,
+	}
+	pkgs, err := packages.Load(loadCfg, pkgPath)
+	if err != nil || len(pkgs) == 0 {
+		slog.Warn("Could not load local package for AST analysis", "path", pkgPath, "error", err)
+		return existingFunctions, existingAliases
+	}
+
+	pkg := pkgs[0]
+	for _, file := range pkg.Syntax {
+		for _, decl := range file.Decls {
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Name != nil {
+					existingFunctions[d.Name.Name] = true
+				}
+			case *ast.GenDecl:
+				for _, spec := range d.Specs {
+					if ts, ok := spec.(*ast.TypeSpec); ok && ts.Name != nil {
+						// This detects `type MyAlias = OtherType`
+						if ts.Assign > 0 {
+							existingAliases[ts.Name.Name] = types.ExprString(ts.Type)
+						}
 					}
 				}
 			}
-			break // Found the package, no need to continue
 		}
 	}
+
 	return existingFunctions, existingAliases
 }
 
-func (a *TypeAnalyzer) collectSeedPaths(cfg *config.Config) []string {
+// collectExternalPaths gathers all package paths that need full type analysis.
+func (a *TypeAnalyzer) collectExternalPaths(cfg *config.Config) []string {
 	pathMap := make(map[string]struct{})
-	if cfg.GenerationContext.PackagePath != "" {
-		pathMap[cfg.GenerationContext.PackagePath] = struct{}{}
+
+	for _, path := range cfg.PackageAliases {
+		pathMap[path] = struct{}{}
 	}
 	for _, pair := range cfg.PackagePairs {
 		pathMap[pair.SourcePath] = struct{}{}

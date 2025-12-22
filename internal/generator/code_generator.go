@@ -92,17 +92,19 @@ func (g *CodeGenerator) prepareConfigForSession(originalCfg *config.Config, anal
 	sessionConfig := originalCfg.Clone()
 	slog.Debug("Preparing session configuration", "initial_rules", len(sessionConfig.ConversionRules))
 
-	// Populate config with analysis results
+	// Populate config with analysis results from the local package
 	sessionConfig.ExistingAliases = analysisResult.ExistingAliases
 
-	var activeRules []*config.ConversionRule
-	if len(sessionConfig.ConversionRules) > 0 {
-		activeRules = g.expandRulesByDependencyAnalysis(sessionConfig.ConversionRules, analysisResult.TypeInfos)
-	} else {
-		slog.Debug("No explicit conversion rules found, discovering seed rules from package pairs...")
-		seedRules := g.findSeedRules(analysisResult.TypeInfos, sessionConfig.PackagePairs)
-		activeRules = g.expandRulesByDependencyAnalysis(seedRules, analysisResult.TypeInfos)
-	}
+	// Start with implicitly discovered rules
+	slog.Debug("Discovering seed rules from package pairs...")
+	allRules := g.findSeedRules(analysisResult.TypeInfos, sessionConfig.PackagePairs)
+
+	// Add explicit rules from the config
+	allRules = append(allRules, sessionConfig.ConversionRules...)
+
+	// Expand all rules to find dependencies
+	activeRules := g.expandRulesByDependencyAnalysis(allRules, analysisResult.TypeInfos)
+
 	slog.Debug("Rule expansion finished", "total_active_rules", len(activeRules))
 
 	if sessionConfig.NamingRules.SourcePrefix == "" && sessionConfig.NamingRules.SourceSuffix == "" &&

@@ -88,10 +88,10 @@ func main() {
 	}
 	cfg.GenerationContext.CustomOutputFile = customOutputFile
 
-	// --- 2. Analyze Types ---
-	slog.Debug("Analyzing types...")
+	// --- 2. Analyze Types, Functions, and Aliases ---
+	slog.Debug("Analyzing source code...")
 	typeAnalyzer := analyzer.NewTypeAnalyzer()
-	typeInfos, err := typeAnalyzer.Analyze(cfg)
+	analysisResult, err := typeAnalyzer.Analyze(cfg)
 	if err != nil {
 		slog.Error("Failed to analyze types", "error", err)
 		os.Exit(1)
@@ -99,10 +99,8 @@ func main() {
 
 	// --- 3. Generate Code ---
 	slog.Debug("Generating code...")
-	// Create a new, stateless generator "worker".
 	gen := generator.NewCodeGenerator()
-	// Call Generate with the specific task's configuration and type info.
-	response, err := gen.Generate(cfg, typeInfos)
+	response, err := gen.Generate(cfg, analysisResult)
 	if err != nil {
 		slog.Error("Code generation failed", "error", err)
 		os.Exit(1)
