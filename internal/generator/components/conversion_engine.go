@@ -161,9 +161,9 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	buf.WriteString("\t}\n")
 
 	if isTargetPtrToSlice {
-		buf.WriteString("\treturn &tos\n")
+		buf.WriteString(fmt.Sprintf("\treturn &tos\n"))
 	} else {
-		buf.WriteString("\treturn tos\n")
+		buf.WriteString(fmt.Sprintf("\treturn tos\n"))
 	}
 
 	buf.WriteString("}\n\n")
@@ -177,6 +177,7 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 ) (string, []string, []*model.ConversionTask, error) {
 	var buf strings.Builder
 	var fieldAssignments []string
+	var preAssignments []string
 	var allRequiredHelpers []string
 	var newTasks []*model.ConversionTask
 
@@ -211,8 +212,27 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 			if newTask != nil {
 				newTasks = append(newTasks, newTask)
 			}
+
+			// Check if this is a complex slice conversion that needs a temporary variable
+			if ce.needsTemporaryVariable(sourceField.Type, targetField.Type) {
+				tempVarName := fmt.Sprintf("temp%s", targetField.Name)
+				preAssignments = append(preAssignments, fmt.Sprintf("\t%s := %s", tempVarName, conversionExpr))
+				conversionExpr = tempVarName
+				if targetField.Type.Kind == model.Pointer && targetField.Type.Underlying != nil && targetField.Type.Underlying.Kind == model.Slice {
+					conversionExpr = fmt.Sprintf("&%s", conversionExpr)
+				}
+			}
+			
 			fieldAssignments = append(fieldAssignments, fmt.Sprintf("\t\t%s: %s,", targetField.Name, conversionExpr))
 		}
+	}
+
+	// Output pre-assignments (temporary variables for complex conversions)
+	for _, preAssignment := range preAssignments {
+		buf.WriteString(preAssignment + "\n")
+	}
+	if len(preAssignments) > 0 {
+		buf.WriteString("\n")
 	}
 
 	buf.WriteString(fmt.Sprintf("\tto := &%s{\n", targetTypeStr))
@@ -263,11 +283,30 @@ func (ce *ConversionEngine) getConversionExpression(
 			targetType.Underlying != nil && targetType.Underlying.Kind == model.Slice)
 
 	if isSliceConversion {
-		newTask := &model.ConversionTask{
-			Source: sourceType,
-			Target: targetType,
+		// For pointer-to-slice types, we want to generate conversion functions for the slice types,
+		// not the pointer types. But the field access should remain the same.
+		actualSourceType := sourceType
+		actualTargetType := targetType
+
+		// Adjust the field access expression for pointer-to-slice source fields
+		fieldAccessExpr := sourceFieldExpr
+		if sourceType.Kind == model.Pointer && sourceType.Underlying != nil && sourceType.Underlying.Kind == model.Slice {
+			actualSourceType = sourceType.Underlying
+			fieldAccessExpr = fmt.Sprintf("*%s", sourceFieldExpr) // dereference pointer to slice
 		}
-		return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, newTask
+		if targetType.Kind == model.Pointer && targetType.Underlying != nil && targetType.Underlying.Kind == model.Slice {
+			actualTargetType = targetType.Underlying
+		}
+
+		newTask := &model.ConversionTask{
+			Source: actualSourceType,
+			Target: actualTargetType,
+		}
+
+		// Build the conversion expression
+		conversionExpr := fmt.Sprintf("%s(%s)", convFuncName, fieldAccessExpr)
+
+		return conversionExpr, nil, newTask
 	}
 
 	sourceIsPointer := sourceType.Kind == model.Pointer
@@ -315,4 +354,23 @@ func (ce *ConversionEngine) addRequiredImportsForHelper(funcName string) {
 	if strings.Contains(funcName, "Timestamp") {
 		ce.importManager.Add("google.golang.org/protobuf/types/known/timestamppb")
 	}
+}
+
+// needsTemporaryVariable determines if a conversion needs a temporary variable
+func (ce *ConversionEngine) needsTemporaryVariable(sourceType, targetType *model.TypeInfo) bool {
+	// We need a temporary variable when converting slice types where the target is a pointer-to-slice
+	// because we can't take the address of a function return value directly in a struct literal
+
+	// Check if this is a slice conversion
+	isSliceConversion := (sourceType.Kind == model.Slice && targetType.Kind == model.Slice) ||
+		(sourceType.Kind == model.Pointer && targetType.Kind == model.Pointer &&
+			sourceType.Underlying != nil && sourceType.Underlying.Kind == model.Slice &&
+			targetType.Underlying != nil && targetType.Underlying.Kind == model.Slice)
+
+	if !isSliceConversion {
+		return false
+	}
+
+	// If target is pointer-to-slice, we need a temporary variable
+	return targetType.Kind == model.Pointer && targetType.Underlying != nil && targetType.Underlying.Kind == model.Slice
 }
