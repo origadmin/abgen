@@ -260,6 +260,12 @@ func (ce *ConversionEngine) getConversionExpression(
 		return sourceFieldExpr, nil, nil
 	}
 
+	// Handle direct primitive conversions first.
+	if canUseSimpleTypeConversion(sourceType, targetType) {
+		targetTypeStr := ce.typeFormatter.Format(targetType)
+		return fmt.Sprintf("%s(%s)", targetTypeStr, sourceFieldExpr), nil, nil
+	}
+
 	helperKey, funcName := ce.findHelper(sourceType, targetType)
 	if funcName != "" {
 		slog.Debug("Found helper function", "key", helperKey, "funcName", funcName)
@@ -387,4 +393,57 @@ func (ce *ConversionEngine) needsTemporaryVariable(sourceType, targetType *model
 // GetStubsToGenerate returns the stubs that need to be generated.
 func (ce *ConversionEngine) GetStubsToGenerate() map[string]*model.ConversionTask {
 	return ce.stubsToGenerate
+}
+
+// canUseSimpleTypeConversion checks if a simple Go type conversion T(v) is valid.
+func canUseSimpleTypeConversion(source, target *model.TypeInfo) bool {
+	// Get the underlying primitive type for named types
+	sourceBase := source
+	if source.Kind == model.Named && source.Underlying != nil {
+		sourceBase = source.Underlying
+	}
+	targetBase := target
+	if target.Kind == model.Named && target.Underlying != nil {
+		targetBase = target.Underlying
+	}
+
+	// Case 1: Numeric <-> Numeric
+	isSourceNumeric := sourceBase.Kind == model.Primitive && isNumeric(sourceBase.Name)
+	isTargetNumeric := targetBase.Kind == model.Primitive && isNumeric(targetBase.Name)
+	if isSourceNumeric && isTargetNumeric {
+		return true
+	}
+
+	// Case 2: string -> []byte or []rune
+	if source.Kind == model.Primitive && source.Name == "string" {
+		if target.Kind == model.Slice && target.Underlying != nil {
+			if target.Underlying.Name == "byte" || target.Underlying.Name == "rune" {
+				return true
+			}
+		}
+	}
+
+	// Case 3: []byte or []rune -> string
+	if target.Kind == model.Primitive && target.Name == "string" {
+		if source.Kind == model.Slice && source.Underlying != nil {
+			if source.Underlying.Name == "byte" || source.Underlying.Name == "rune" {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// isNumeric checks if a given type name is a numeric type.
+func isNumeric(typeName string) bool {
+	switch typeName {
+	case "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64",
+		"float32", "float64",
+		"byte", "rune": // byte is alias for uint8, rune is alias for int32
+		return true
+	default:
+		return false
+	}
 }
