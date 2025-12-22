@@ -42,24 +42,11 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 ) (*model.GeneratedCode, []*model.ConversionTask, error) {
 	slog.Debug("ConversionEngine: Received task", "source", sourceInfo.UniqueKey(), "target", targetInfo.UniqueKey())
 
-	// Determine if this is a slice conversion, including pointers to slices.
-	isSliceConversion := sourceInfo.Kind == model.Slice && targetInfo.Kind == model.Slice
-	slog.Debug("ConversionEngine: Initial slice check", "isSlice", isSliceConversion)
+	effectiveSource := getEffectiveTypeInfo(sourceInfo)
+	effectiveTarget := getEffectiveTypeInfo(targetInfo)
 
-	if !isSliceConversion {
-		// Check for pointer-to-slice case
-		if sourceInfo.Kind == model.Pointer && targetInfo.Kind == model.Pointer {
-			slog.Debug("ConversionEngine: Detected pointer-to-something types")
-			sourceUnderlying := sourceInfo.Underlying
-			targetUnderlying := targetInfo.Underlying
-			if sourceUnderlying != nil && targetUnderlying != nil && sourceUnderlying.Kind == model.Slice && targetUnderlying.Kind == model.Slice {
-				slog.Debug("ConversionEngine: Confirmed pointer-to-slice types")
-				isSliceConversion = true
-			} else {
-				slog.Debug("ConversionEngine: Pointer types are not pointing to slices")
-			}
-		}
-	}
+	isSliceConversion := effectiveSource.Kind == model.Slice && effectiveTarget.Kind == model.Slice
+	isStructConversion := effectiveSource.Kind == model.Struct && effectiveTarget.Kind == model.Struct
 
 	if isSliceConversion {
 		slog.Debug("ConversionEngine: Dispatching to GenerateSliceConversion")
@@ -67,8 +54,8 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 		return code, nil, err
 	}
 
-	slog.Debug("ConversionEngine: Dispatching to Struct-to-Struct or skipping")
-	if sourceInfo.Kind != model.Struct || targetInfo.Kind != model.Struct {
+	if !isStructConversion {
+		slog.Warn("ConversionEngine: Task is neither a struct nor a slice conversion, skipping.", "source", sourceInfo.UniqueKey())
 		return nil, nil, nil
 	}
 
@@ -101,19 +88,16 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 ) (*model.GeneratedCode, error) {
 	var buf strings.Builder
 
-	isSourcePtrToSlice := sourceInfo.Kind == model.Pointer && sourceInfo.Underlying != nil && sourceInfo.Underlying.Kind == model.Slice
-	isTargetPtrToSlice := targetInfo.Kind == model.Pointer && targetInfo.Underlying != nil && targetInfo.Underlying.Kind == model.Slice
+	isSourcePtrToSlice := sourceInfo.Kind == model.Pointer && getEffectiveTypeInfo(sourceInfo.Underlying).Kind == model.Slice
+	isTargetPtrToSlice := targetInfo.Kind == model.Pointer && getEffectiveTypeInfo(targetInfo.Underlying).Kind == model.Slice
 
-	var actualSourceSlice, actualTargetSlice *model.TypeInfo
+	actualSourceSlice := getEffectiveTypeInfo(sourceInfo)
 	if isSourcePtrToSlice {
-		actualSourceSlice = sourceInfo.Underlying
-	} else {
-		actualSourceSlice = sourceInfo
+		actualSourceSlice = getEffectiveTypeInfo(sourceInfo.Underlying)
 	}
+	actualTargetSlice := getEffectiveTypeInfo(targetInfo)
 	if isTargetPtrToSlice {
-		actualTargetSlice = targetInfo.Underlying
-	} else {
-		actualTargetSlice = targetInfo
+		actualTargetSlice = getEffectiveTypeInfo(targetInfo.Underlying)
 	}
 
 	sourceElem := ce.typeConverter.GetSliceElementType(actualSourceSlice)
@@ -247,6 +231,19 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 	return buf.String(), allRequiredHelpers, newTasks, nil
 }
 
+// getEffectiveTypeInfo unwraps named types and pointers to get to the underlying struct or slice.
+func getEffectiveTypeInfo(info *model.TypeInfo) *model.TypeInfo {
+	if info == nil {
+		return nil
+	}
+	if info.Kind == model.Pointer || info.Kind == model.Named {
+		if info.Underlying != nil {
+			return getEffectiveTypeInfo(info.Underlying)
+		}
+	}
+	return info
+}
+
 // getConversionExpression determines the Go expression needed to convert a source field to a target field.
 func (ce *ConversionEngine) getConversionExpression(
 	sourceParent, targetParent *model.TypeInfo,
@@ -273,8 +270,12 @@ func (ce *ConversionEngine) getConversionExpression(
 		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), []string{funcName}, nil
 	}
 
-	isStructConv := sourceType.Kind == model.Struct && targetType.Kind == model.Struct
-	isSliceConv := sourceType.Kind == model.Slice && targetType.Kind == model.Slice
+	// Unwrap named types to check their underlying kind (struct, slice, etc.)
+	effectiveSourceType := getEffectiveTypeInfo(sourceType)
+	effectiveTargetType := getEffectiveTypeInfo(targetType)
+
+	isStructConv := effectiveSourceType.Kind == model.Struct && effectiveTargetType.Kind == model.Struct
+	isSliceConv := effectiveSourceType.Kind == model.Slice && effectiveTargetType.Kind == model.Slice
 
 	var convFuncName string
 	var newTask *model.ConversionTask
