@@ -36,17 +36,25 @@ func (n *NameGenerator) FieldConversionFunctionName(sourceParent, targetParent *
 }
 
 // getCleanBaseName recursively finds the base name for a type, suitable for use in a function name.
-// For named types, it defers to the AliasManager to get the correct, role-aware name.
+// It prioritizes looking up a pre-computed alias from the AliasManager.
 func (n *NameGenerator) getCleanBaseName(info *model.TypeInfo) string {
 	if info == nil {
 		return ""
 	}
+
+	// First, check if the AliasManager has a specific name for this exact type.
+	// This is the source of truth for any managed type (including slices of named types).
+	if alias, ok := n.aliasManager.LookupAlias(info.UniqueKey()); ok {
+		return n.capitalize(alias)
+	}
+
+	// If no alias exists, fall back to constructing a name based on the type's structure.
+	// This handles primitives and unmanaged complex types.
 	var baseName string
 	switch info.Kind {
 	case model.Pointer:
-		return n.getCleanBaseName(info.Underlying)
+		return n.getCleanBaseName(info.Underlying) // Pointers don't affect the name
 	case model.Slice:
-		// Suffix 's' is used for slice types as per existing test cases (e.g., User -> Users)
 		baseName = n.getCleanBaseName(info.Underlying) + "s"
 	case model.Array:
 		baseName = n.getCleanBaseName(info.Underlying) + "Array"
@@ -55,12 +63,7 @@ func (n *NameGenerator) getCleanBaseName(info *model.TypeInfo) string {
 		valName := n.getCleanBaseName(info.Underlying)
 		baseName = fmt.Sprintf("%sTo%sMap", keyName, valName)
 	case model.Named, model.Struct:
-		// CRITICAL: Use the alias manager as the source of truth for the type's name.
-		// The alias manager is responsible for applying all naming rules (suffixes, etc.).
-		if alias, ok := n.aliasManager.LookupAlias(info.UniqueKey()); ok {
-			baseName = alias
-		} else if info.Name != "" {
-			// Fallback for types not managed by the alias manager (e.g., time.Time, or primitives).
+		if info.Name != "" {
 			baseName = info.Name
 		} else {
 			baseName = "Struct" // Anonymous struct
@@ -71,7 +74,6 @@ func (n *NameGenerator) getCleanBaseName(info *model.TypeInfo) string {
 		baseName = "Object"
 	}
 
-	// Only capitalize the final computed base name.
 	return n.capitalize(baseName)
 }
 
