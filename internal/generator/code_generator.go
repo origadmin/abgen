@@ -161,6 +161,12 @@ func (g *CodeGenerator) expandRulesByDependencyAnalysis(seedRules []*config.Conv
 					targetField = tf
 					break
 				}
+				if g.isFieldMatch(sourceField.Name, tf.Name) {
+					targetField = tf
+					slog.Debug("Found field match using case-insensitive fallback",
+						"sourceField", sourceField.Name, "targetField", targetField.Name)
+					break
+				}
 			}
 
 			if targetField == nil {
@@ -199,6 +205,20 @@ func (g *CodeGenerator) expandRulesByDependencyAnalysis(seedRules []*config.Conv
 	return finalRules
 }
 
+// isFieldMatch performs case-insensitive matching for common field name patterns.
+// It returns true if the field names match according to common conventions.
+func (g *CodeGenerator) isFieldMatch(sourceName, targetName string) bool {
+	// Common pattern: ID vs Id (case-insensitive match)
+	if strings.EqualFold(sourceName, targetName) {
+		return true
+	}
+
+	// Additional common patterns can be added here
+	// For now, we focus on the ID/Id case which is the most common
+
+	return false
+}
+
 // findSeedRules finds the initial set of conversion rules based on matching type names.
 func (g *CodeGenerator) findSeedRules(typeInfos map[string]*model.TypeInfo, packagePairs []*config.PackagePair) []*config.ConversionRule {
 	var seedRules []*config.ConversionRule
@@ -231,8 +251,6 @@ func (g *CodeGenerator) findSeedRules(typeInfos map[string]*model.TypeInfo, pack
 	}
 	return seedRules
 }
-
-
 
 func (g *CodeGenerator) generateMainCode(cfg *config.Config, typeInfos map[string]*model.TypeInfo, rules []*config.ConversionRule) ([]byte, error) {
 	finalBuf := new(bytes.Buffer)
@@ -345,7 +363,6 @@ func (g *CodeGenerator) reconstructTypeInfoFromKey(key string, typeInfos map[str
 	return nil
 }
 
-
 func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeInfo, rules []*config.ConversionRule) ([]string, map[string]struct{}, error) {
 	var conversionFuncs []string
 	requiredHelpers := make(map[string]struct{})
@@ -422,7 +439,6 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 	sort.Strings(conversionFuncs)
 	return conversionFuncs, requiredHelpers, nil
 }
-
 
 func extractFunctionName(functionBody string) string {
 	lines := strings.Split(functionBody, "\n")

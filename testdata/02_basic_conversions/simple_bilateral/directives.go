@@ -28,7 +28,17 @@ func ConvertUserStatusToUserBilateralStatus(status string) int32 {
 	return 0
 }
 
+func ConvertUserBilateralStatusToUserStatus(status int32) string {
+	// TODO: implement
+	return ""
+}
+
 func ConvertGenderToGenderBilateral(gender ent.Gender) types.Gender {
 	// TODO: implement
 	return types.Gender(0)
+}
+
+func ConvertGenderBilateralToGender(gender types.Gender) ent.Gender {
+	// TODO: implement
+	return ent.Gender(0)
 }
