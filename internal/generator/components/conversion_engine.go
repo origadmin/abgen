@@ -13,11 +13,13 @@ var _ model.ConversionEngine = (*ConversionEngine)(nil)
 
 // ConversionEngine implements the ConversionEngine interface.
 type ConversionEngine struct {
-	typeConverter   model.TypeConverter
-	nameGenerator   model.NameGenerator
-	typeFormatter   *TypeFormatter
-	importManager   model.ImportManager
-	stubsToGenerate map[string]*model.ConversionTask
+	typeConverter     model.TypeConverter
+	nameGenerator     model.NameGenerator
+	typeFormatter     *TypeFormatter
+	importManager     model.ImportManager
+	stubsToGenerate   map[string]*model.ConversionTask
+	helperMap         map[string]model.Helper
+	existingFunctions map[string]bool
 }
 
 // NewConversionEngine creates a new conversion engine.
@@ -26,13 +28,25 @@ func NewConversionEngine(
 	nameGenerator model.NameGenerator,
 	typeFormatter *TypeFormatter,
 	importManager model.ImportManager,
+	existingFunctions map[string]bool,
 ) model.ConversionEngine {
-	return &ConversionEngine{
-		typeConverter:   typeConverter,
-		nameGenerator:   nameGenerator,
-		typeFormatter:   typeFormatter,
-		importManager:   importManager,
-		stubsToGenerate: make(map[string]*model.ConversionTask),
+	ce := &ConversionEngine{
+		typeConverter:     typeConverter,
+		nameGenerator:     nameGenerator,
+		typeFormatter:     typeFormatter,
+		importManager:     importManager,
+		stubsToGenerate:   make(map[string]*model.ConversionTask),
+		helperMap:         make(map[string]model.Helper),
+		existingFunctions: existingFunctions,
+	}
+	ce.initializeHelpers()
+	return ce
+}
+
+func (ce *ConversionEngine) initializeHelpers() {
+	for _, h := range GetBuiltInHelpers() {
+		key := h.SourceType + "->" + h.TargetType
+		ce.helperMap[key] = h
 	}
 }
 
@@ -164,11 +178,11 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 // generateStructToStructConversion handles the field-by-field mapping.
 func (ce *ConversionEngine) generateStructToStructConversion(
 	sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule,
-) (string, []string, []*model.ConversionTask, error) {
+) (string, []model.Helper, []*model.ConversionTask, error) {
 	var buf strings.Builder
 	var fieldAssignments []string
 	var preAssignments []string
-	var allRequiredHelpers []string
+	var allRequiredHelpers []model.Helper
 	var newTasks []*model.ConversionTask
 
 	targetTypeStr := ce.typeFormatter.Format(targetInfo)
@@ -260,7 +274,7 @@ func getEffectiveTypeInfo(info *model.TypeInfo) *model.TypeInfo {
 func (ce *ConversionEngine) getConversionExpression(
 	sourceParent, targetParent *model.TypeInfo,
 	sourceField, targetField *model.FieldInfo, fromVar string,
-) (string, []string, *model.ConversionTask) {
+) (string, []model.Helper, *model.ConversionTask) {
 	sourceType := sourceField.Type
 	targetType := targetField.Type
 	sourceFieldExpr := fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
@@ -274,9 +288,9 @@ func (ce *ConversionEngine) getConversionExpression(
 		return fmt.Sprintf("%s(%s)", targetTypeStr, sourceFieldExpr), nil, nil
 	}
 
-	if _, funcName := ce.findHelper(sourceType, targetType); funcName != "" {
-		ce.addRequiredImportsForHelper(funcName)
-		return fmt.Sprintf("%s(%s)", funcName, sourceFieldExpr), []string{funcName}, nil
+	if helper, found := ce.findHelper(sourceType, targetType); found {
+		ce.addRequiredImportsForHelper(helper)
+		return fmt.Sprintf("%s(%s)", helper.Name, sourceFieldExpr), []model.Helper{helper}, nil
 	}
 
 	concreteSourceType := getConcreteType(sourceType)
@@ -328,36 +342,25 @@ func (ce *ConversionEngine) getConversionExpression(
 		// e.g., int -> string for a 'Status' field. Use a field-specific name.
 		convFuncName = ce.nameGenerator.FieldConversionFunctionName(sourceParent, targetParent, sourceField, targetField)
 	}
-	stubTask := &model.ConversionTask{Source: sourceType, Target: targetType}
-	ce.stubsToGenerate[convFuncName] = stubTask
+
+	// Check if the function already exists before creating a stub.
+	if _, exists := ce.existingFunctions[convFuncName]; !exists {
+		stubTask := &model.ConversionTask{Source: sourceType, Target: targetType}
+		ce.stubsToGenerate[convFuncName] = stubTask
+	}
+
 	return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, nil
 }
 
-func (ce *ConversionEngine) findHelper(source, target *model.TypeInfo) (string, string) {
-	conversionMap := map[string]string{
-		"string->time.Time":                   "ConvertStringToTime",
-		"string->github.com/google/uuid.UUID": "ConvertStringToUUID",
-		"time.Time->string":                   "ConvertTimeToString",
-		"github.com/google/uuid.UUID->string": "ConvertUUIDToString",
-		"time.Time->*google.golang.org/protobuf/types/known/timestamppb.Timestamp": "ConvertTimeToTimestamp",
-		"*google.golang.org/protobuf/types/known/timestamppb.Timestamp->time.Time": "ConvertTimestampToTime",
-	}
+func (ce *ConversionEngine) findHelper(source, target *model.TypeInfo) (model.Helper, bool) {
 	key := source.UniqueKey() + "->" + target.UniqueKey()
-	if name, ok := conversionMap[key]; ok {
-		return key, name
-	}
-	return "", ""
+	helper, found := ce.helperMap[key]
+	return helper, found
 }
 
-func (ce *ConversionEngine) addRequiredImportsForHelper(funcName string) {
-	if strings.Contains(funcName, "Time") {
-		ce.importManager.Add("time")
-	}
-	if strings.Contains(funcName, "UUID") {
-		ce.importManager.Add("github.com/google/uuid")
-	}
-	if strings.Contains(funcName, "Timestamp") {
-		ce.importManager.Add("google.golang.org/protobuf/types/known/timestamppb")
+func (ce *ConversionEngine) addRequiredImportsForHelper(helper model.Helper) {
+	for _, pkg := range helper.Dependencies {
+		ce.importManager.Add(pkg)
 	}
 }
 

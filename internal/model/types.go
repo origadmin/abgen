@@ -27,6 +27,22 @@ const (
 	Named // For any type introduced with the 'type' keyword
 )
 
+// AnalysisResult holds all the information gathered during the analysis phase.
+type AnalysisResult struct {
+	TypeInfos         map[string]*TypeInfo
+	ExistingFunctions map[string]bool
+	ExistingAliases   map[string]string
+}
+
+// Helper represents a built-in conversion function.
+type Helper struct {
+	Name         string
+	SourceType   string
+	TargetType   string
+	Body         string
+	Dependencies []string
+}
+
 // TypeInfo represents the detailed information of a resolved Go type.
 // It serves as the single, authoritative data model for types throughout the application.
 type TypeInfo struct {

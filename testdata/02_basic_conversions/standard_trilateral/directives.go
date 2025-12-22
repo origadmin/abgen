@@ -40,10 +40,16 @@ func ConvertGenderToGenderTrilateral(from ent.Gender) types.Gender {
 	return types.GenderFemale
 }
 
-func ConvertUserTrilateralStatusToUserStatus(from int32) string {
-	return ""
+// ConvertUserStatusToUserTrilateralStatus is a custom conversion function stub.
+// Please implement this function to complete the conversion.
+func ConvertUserStatusToUserTrilateralStatus(from string) int32 {
+	// TODO: Implement this custom conversion
+	panic("stub! not implemented")
 }
 
-func ConvertUserStatusToUserTrilateralStatus(from string) int32 {
-	return 0
+// ConvertUserTrilateralStatusToUserStatus is a custom conversion function stub.
+// Please implement this function to complete the conversion.
+func ConvertUserTrilateralStatusToUserStatus(from int32) string {
+	// TODO: Implement this custom conversion
+	panic("stub! not implemented")
 }

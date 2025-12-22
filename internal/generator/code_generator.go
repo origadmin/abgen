@@ -26,58 +26,49 @@ type CodeGenerator struct {
 
 // NewCodeGenerator creates a new, stateless code generator.
 func NewCodeGenerator() model.CodeGenerator {
-	// TypeConverter is stateless, so it can be created once.
 	return &CodeGenerator{
 		typeConverter: components.NewTypeConverter(),
 	}
 }
 
 // initializeComponents configures the generator's components for a specific generation task.
-func (g *CodeGenerator) initializeComponents(cfg *config.Config, typeInfos map[string]*model.TypeInfo) {
-	// Create components in dependency order.
+func (g *CodeGenerator) initializeComponents(cfg *config.Config, analysisResult *model.AnalysisResult) {
 	g.importManager = components.NewImportManager()
 	for alias, path := range cfg.PackageAliases {
 		g.importManager.AddAs(path, alias)
 	}
 	slog.Debug("ImportManager after PackageAliases processing", "imports", g.importManager.GetAllImports())
 
-	// AliasManager depends on ImportManager.
-	aliasManager := components.NewAliasManager(cfg, g.importManager, typeInfos)
-	g.aliasManager = aliasManager
+	g.aliasManager = components.NewAliasManager(cfg, g.importManager, analysisResult.TypeInfos)
+	g.nameGenerator = components.NewNameGenerator(g.aliasManager)
+	g.typeFormatter = components.NewTypeFormatter(g.aliasManager, g.importManager, analysisResult.TypeInfos)
 
-	// NameGenerator now depends on AliasManager.
-	g.nameGenerator = components.NewNameGenerator(aliasManager)
-
-	// TypeFormatter depends on AliasManager and ImportManager.
-	g.typeFormatter = components.NewTypeFormatter(g.aliasManager, g.importManager, typeInfos)
-
-	// ConversionEngine depends on several components.
 	g.conversionEngine = components.NewConversionEngine(
 		g.typeConverter,
 		g.nameGenerator,
 		g.typeFormatter,
 		g.importManager,
+		analysisResult.ExistingFunctions,
 	)
 
-	// CodeEmitter is simplified and only depends on config.
 	g.codeEmitter = components.NewCodeEmitter(cfg)
 }
 
 // Generate executes a complete code generation task.
-func (g *CodeGenerator) Generate(cfg *config.Config, typeInfos map[string]*model.TypeInfo) (*model.GenerationResponse, error) {
-	finalConfig, activeRules := g.prepareConfigForSession(cfg, typeInfos)
-	g.initializeComponents(finalConfig, typeInfos)
+func (g *CodeGenerator) Generate(cfg *config.Config, analysisResult *model.AnalysisResult) (*model.GenerationResponse, error) {
+	finalConfig, activeRules := g.prepareConfigForSession(cfg, analysisResult.TypeInfos)
+	g.initializeComponents(finalConfig, analysisResult)
 
 	slog.Debug("Components initialized with final configuration.")
 
 	g.aliasManager.PopulateAliases()
 
-	generatedCode, err := g.generateMainCode(finalConfig, typeInfos, activeRules)
+	generatedCode, err := g.generateMainCode(finalConfig, analysisResult.TypeInfos, activeRules)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate main code: %w", err)
 	}
 
-	customStubs, err := g.generateCustomStubs(finalConfig, typeInfos)
+	customStubs, err := g.generateCustomStubs(finalConfig, analysisResult.TypeInfos)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate custom stubs: %w", err)
 	}
@@ -275,7 +266,22 @@ func (g *CodeGenerator) generateMainCode(cfg *config.Config, typeInfos map[strin
 	if err := g.codeEmitter.EmitConversions(finalBuf, conversionFuncs); err != nil {
 		return nil, err
 	}
-	if err := g.codeEmitter.EmitHelpers(finalBuf, requiredHelpers); err != nil {
+
+	// Collect all helper bodies that need to be emitted.
+	var helpersToEmit []model.Helper
+	allHelpers := components.GetBuiltInHelpers()
+	helperMap := make(map[string]model.Helper)
+	for _, h := range allHelpers {
+		helperMap[h.Name] = h
+	}
+
+	for helperName := range requiredHelpers {
+		if h, ok := helperMap[helperName]; ok {
+			helpersToEmit = append(helpersToEmit, h)
+		}
+	}
+
+	if err := g.codeEmitter.EmitHelpers(finalBuf, helpersToEmit); err != nil {
 		return nil, err
 	}
 
@@ -424,7 +430,7 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 			conversionFuncs = append(conversionFuncs, generated.FunctionBody)
 			generatedFunctions[funcName] = true
 			for _, helper := range generated.RequiredHelpers {
-				requiredHelpers[helper] = struct{}{}
+				requiredHelpers[helper.Name] = struct{}{}
 			}
 			// Add newly discovered tasks to the worklist
 			for _, newTask := range newTasks {

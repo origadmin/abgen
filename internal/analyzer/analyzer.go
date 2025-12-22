@@ -37,7 +37,7 @@ func (a *TypeAnalyzer) Find(fqn string) (*model.TypeInfo, error) {
 }
 
 // Analyze is the main entry point for the analysis phase.
-func (a *TypeAnalyzer) Analyze(cfg *config.Config) (map[string]*model.TypeInfo, error) {
+func (a *TypeAnalyzer) Analyze(cfg *config.Config) (*model.AnalysisResult, error) {
 	packagePaths := a.collectSeedPaths(cfg)
 	fqns := cfg.AllFqns()
 	slog.Debug("Starting analysis", "package_paths_count", len(packagePaths), "fqns_count", len(fqns), "packagePaths", packagePaths, "fqns", fqns)
@@ -92,8 +92,44 @@ func (a *TypeAnalyzer) Analyze(cfg *config.Config) (map[string]*model.TypeInfo, 
 		}
 	}
 
-	slog.Debug("Finished analysis", "resolved_types_count", len(resolvedTypes))
-	return resolvedTypes, nil
+	slog.Debug("Finished type analysis", "resolved_types_count", len(resolvedTypes))
+
+	existingFuncs, existingAliases := a.analyzePackageContents(cfg.GenerationContext.PackagePath)
+
+	return &model.AnalysisResult{
+		TypeInfos:         resolvedTypes,
+		ExistingFunctions: existingFuncs,
+		ExistingAliases:   existingAliases,
+	}, nil
+}
+
+// analyzePackageContents scans the target package for existing functions and type aliases.
+func (a *TypeAnalyzer) analyzePackageContents(pkgPath string) (map[string]bool, map[string]string) {
+	existingFunctions := make(map[string]bool)
+	existingAliases := make(map[string]string)
+
+	for _, pkg := range a.pkgs {
+		if pkg.PkgPath == pkgPath {
+			scope := pkg.Types.Scope()
+			for _, name := range scope.Names() {
+				obj := scope.Lookup(name)
+				if obj == nil {
+					continue
+				}
+
+				switch o := obj.(type) {
+				case *types.Func:
+					existingFunctions[name] = true
+				case *types.TypeName:
+					if o.IsAlias() {
+						existingAliases[name] = o.Type().String()
+					}
+				}
+			}
+			break // Found the package, no need to continue
+		}
+	}
+	return existingFunctions, existingAliases
 }
 
 func (a *TypeAnalyzer) collectSeedPaths(cfg *config.Config) []string {

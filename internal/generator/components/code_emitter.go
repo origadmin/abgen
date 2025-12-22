@@ -90,23 +90,18 @@ func (ce *CodeEmitter) EmitConversions(buf *bytes.Buffer, conversions []string) 
 }
 
 // EmitHelpers emits the helper functions.
-func (ce *CodeEmitter) EmitHelpers(buf *bytes.Buffer, requiredHelpers map[string]struct{}) error {
-	if len(requiredHelpers) == 0 {
+func (ce *CodeEmitter) EmitHelpers(buf *bytes.Buffer, helpers []model.Helper) error {
+	if len(helpers) == 0 {
 		return nil
 	}
 
-	allHelpers := GetHelperFunctionBodies()
-	helperNames := make([]string, 0, len(requiredHelpers))
-	for name := range requiredHelpers {
-		helperNames = append(helperNames, name)
-	}
-	sort.Strings(helperNames)
+	sort.Slice(helpers, func(i, j int) bool {
+		return helpers[i].Name < helpers[j].Name
+	})
 
 	buf.WriteString("\n// --- Helper Functions ---\n")
-	for _, name := range helperNames {
-		if body, ok := allHelpers[name]; ok {
-			buf.WriteString(body)
-		}
+	for _, h := range helpers {
+		buf.WriteString(h.Body)
 	}
 
 	return nil

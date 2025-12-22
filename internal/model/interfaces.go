@@ -19,12 +19,11 @@ type GenerationResponse struct {
 // GeneratedCode holds information about a generated code snippet.
 type GeneratedCode struct {
 	FunctionBody    string
-	RequiredHelpers []string
+	RequiredHelpers []Helper
 }
 
 // AliasRenderInfo holds information for rendering a type alias.
 type AliasRenderInfo struct {
-
 	AliasName        string
 	OriginalTypeName string
 }
@@ -33,7 +32,12 @@ type AliasRenderInfo struct {
 
 // CodeGenerator defines the top-level interface for the code generation orchestrator.
 type CodeGenerator interface {
-	Generate(cfg *config.Config, typeInfos map[string]*TypeInfo) (*GenerationResponse, error)
+	Generate(cfg *config.Config, analysisResult *AnalysisResult) (*GenerationResponse, error)
+}
+
+// TypeAnalyzer defines the interface for the type analysis component.
+type TypeAnalyzer interface {
+	Analyze(cfg *config.Config) (*AnalysisResult, error)
 }
 
 // ImportManager defines the interface for managing and generating import statements.
@@ -86,7 +90,7 @@ type CodeEmitter interface {
 	EmitImports(buf *bytes.Buffer, imports map[string]string) error
 	EmitAliases(buf *bytes.Buffer, aliases []*AliasRenderInfo) error
 	EmitConversions(buf *bytes.Buffer, funcs []string) error
-	EmitHelpers(buf *bytes.Buffer, helpers map[string]struct{}) error
+	EmitHelpers(buf *bytes.Buffer, helpers []Helper) error
 }
 
 // TypeConverter defines the interface for utility functions that inspect TypeInfo objects.
