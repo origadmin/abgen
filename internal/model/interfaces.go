@@ -32,12 +32,12 @@ type AliasRenderInfo struct {
 
 // CodeGenerator defines the top-level interface for the code generation orchestrator.
 type CodeGenerator interface {
-	Generate(cfg *config.Config, analysisResult *AnalysisResult) (*GenerationResponse, error)
+	Generate(analysisResult *AnalysisResult) (*GenerationResponse, error)
 }
 
 // TypeAnalyzer defines the interface for the type analysis component.
 type TypeAnalyzer interface {
-	Analyze(cfg *config.Config) (*AnalysisResult, error)
+	Analyze(sourceDir string) (*AnalysisResult, error)
 }
 
 // ImportManager defines the interface for managing and generating import statements.
@@ -104,4 +104,9 @@ type TypeConverter interface {
 	GetKeyType(info *TypeInfo) *TypeInfo
 	IsUltimatelyPrimitive(info *TypeInfo) bool
 	IsPurelyPrimitiveOrCompositeOfPrimitives(info *TypeInfo) bool
+}
+
+type TypeFormatter interface {
+	Format(info *TypeInfo) string
+	FormatWithoutAlias(info *TypeInfo) string
 }

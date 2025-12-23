@@ -20,7 +20,7 @@ func TestTypeAnalyzer_Analyze_CoreParsing(t *testing.T) {
 	}
 
 	analyzer := NewTypeAnalyzer()
-	cfg, _, err := analyzer.Analyze(testDir)
+	analysisResult, err := analyzer.Analyze(testDir)
 
 	// --- Assertions ---
 	if err != nil {
@@ -28,9 +28,14 @@ func TestTypeAnalyzer_Analyze_CoreParsing(t *testing.T) {
 		// The key is that the config parsing part should still succeed.
 		t.Logf("Analyze() returned an expected error because dummy packages don't exist: %v", err)
 	}
-	if cfg == nil {
-		t.Fatal("Analyze() returned a nil config despite non-existent packages")
+	if analysisResult == nil {
+		t.Fatal("Analyze() returned a nil result")
 	}
+	if analysisResult.Config == nil {
+		t.Fatal("Analyze() returned a result with a nil config")
+	}
+
+	cfg := analysisResult.Config
 
 	// 1. Verify the Config object based on source.go
 	// Check package aliases - 'ent' should be overwritten by the last directive

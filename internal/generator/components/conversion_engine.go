@@ -15,7 +15,7 @@ var _ model.ConversionEngine = (*ConversionEngine)(nil)
 type ConversionEngine struct {
 	typeConverter     model.TypeConverter
 	nameGenerator     model.NameGenerator
-	typeFormatter     *TypeFormatter
+	typeFormatter     model.TypeFormatter
 	importManager     model.ImportManager
 	stubsToGenerate   map[string]*model.ConversionTask
 	helperMap         map[string]model.Helper
@@ -26,7 +26,7 @@ type ConversionEngine struct {
 func NewConversionEngine(
 	typeConverter model.TypeConverter,
 	nameGenerator model.NameGenerator,
-	typeFormatter *TypeFormatter,
+	typeFormatter model.TypeFormatter,
 	importManager model.ImportManager,
 	existingFunctions map[string]bool,
 ) model.ConversionEngine {

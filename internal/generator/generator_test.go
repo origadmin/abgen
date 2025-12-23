@@ -221,14 +221,12 @@ var testCases = []struct {
 			assertContainsPattern(t, generatedStr, `func ConvertUserPPsSourceToUserPPsTarget\(froms UserPPsSource\) UserPPsTarget`)
 			assertContainsPattern(t, generatedStr, `tos\[i\] = ConvertUserPPSourceToUserPPTarget\(f\)`)
 			assertContainsPattern(t, generatedStr, `func ConvertContainerPVSourceToContainerPVTarget\(from \*ContainerPVSource\) \*ContainerPVTarget`)
-			// Updated pattern to match temp variable assignment for PV case
 			assertContainsPattern(t, generatedStr, `tempUsers := ConvertUserPVsSourceToUserPVsTarget\(.*from.Users\)`)
 			assertContainsPattern(t, generatedStr, `Users: &tempUsers,`)
 			assertContainsPattern(t, generatedStr, `func ConvertUserPVsSourceToUserPVsTarget\(froms UserPVsSource\) UserPVsTarget`)
 			assertContainsPattern(t, generatedStr, `for i, f := range from`)
 			assertContainsPattern(t, generatedStr, `return tos`)
 			assertContainsPattern(t, generatedStr, `func ConvertContainerPPPSourceToContainerPPPTarget\(from \*ContainerPPPSource\) \*ContainerPPPTarget`)
-			// Updated pattern to match temp variable assignment for PPP case
 			assertContainsPattern(t, generatedStr, `tempUsers := ConvertUserPPPsSourceToUserPPPsTarget\(.*from.Users\)`)
 			assertContainsPattern(t, generatedStr, `Users: &tempUsers,`)
 			assertContainsPattern(t, generatedStr, `func ConvertUserPPPsSourceToUserPPPsTarget\(froms UserPPPsSource\) UserPPPsTarget`)
@@ -415,20 +413,17 @@ func TestCodeGenerator_Generate(t *testing.T) {
 			t.Logf("Running test: %s (Priority: %s, Category: %s)", tc.name, tc.priority, tc.category)
 			cleanTestFiles(t, tc.directivePath)
 
-			// Corrected analysis step
 			typeAnalyzer := analyzer.NewTypeAnalyzer()
-			cfg, analysisResult, err := typeAnalyzer.Analyze(tc.directivePath)
+			analysisResult, err := typeAnalyzer.Analyze(tc.directivePath)
 			if err != nil {
-				// For many tests, dummy packages won't exist, leading to analysis errors.
-				// We log this but proceed if cfg is not nil, as config parsing is the first step.
 				t.Logf("analyzer.TypeAnalyzer.Analyze() returned an error (may be expected): %v", err)
-				if cfg == nil {
-					t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed and returned a nil config: %v", err)
+				if analysisResult == nil {
+					t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed and returned a nil result: %v", err)
 				}
 			}
 
 			orchestrator := NewCodeGenerator()
-			response, err := orchestrator.Generate(cfg, analysisResult)
+			response, err := orchestrator.Generate(analysisResult)
 			if err != nil {
 				t.Fatalf("Generate() failed for test case %s: %v", tc.name, err)
 			}
@@ -440,21 +435,17 @@ func TestCodeGenerator_Generate(t *testing.T) {
 			generatedCodeStr = strings.ReplaceAll(generatedCodeStr, `\`, `/`)
 			generatedCode = []byte(generatedCodeStr)
 
-			// Always save the actual generated code for inspection, regardless of assertFunc
 			actualOutputFile := filepath.Join(tc.directivePath, "actual.gen.go")
 			actualOutputFile, _ = filepath.Abs(actualOutputFile)
 			t.Logf("Attempting to save generated code to: %s", actualOutputFile)
 			if err := os.WriteFile(actualOutputFile, generatedCode, 0644); err != nil {
 				t.Logf("Failed to save actual output to %s: %v", actualOutputFile, err)
-				// Try to get more detailed error information
 				if _, statErr := os.Stat(tc.directivePath); statErr != nil {
 					t.Logf("Directory %s does not exist or is not accessible: %v", tc.directivePath, statErr)
 				}
 			} else {
-				// Verify the file was actually created
 				if _, err := os.Stat(actualOutputFile); err == nil {
 					t.Logf("Generated output successfully saved to %s for inspection", actualOutputFile)
-					t.Logf("File size: %d bytes", len(generatedCode))
 				} else {
 					t.Logf("File save reported success but file not found at %s: %v", actualOutputFile, err)
 				}
@@ -468,7 +459,6 @@ func TestCodeGenerator_Generate(t *testing.T) {
 				} else {
 					if _, err := os.Stat(actualStubFile); err == nil {
 						t.Logf("Stub output saved to %s for inspection", actualStubFile)
-						t.Logf("Stub file size: %d bytes", len(stubCode))
 					} else {
 						t.Logf("Stub file save reported success but file not found at %s: %v", actualStubFile, err)
 					}
@@ -477,10 +467,8 @@ func TestCodeGenerator_Generate(t *testing.T) {
 
 			if tc.assertFunc != nil {
 				tc.assertFunc(t, generatedCode, stubCode)
-
 				if t.Failed() {
-					t.Logf("Assertion failed for '%s'. Generated output is available at %s", tc.name,
-						actualOutputFile)
+					t.Logf("Assertion failed for '%s'. Generated output is available at %s", tc.name, actualOutputFile)
 				}
 			}
 
@@ -504,16 +492,16 @@ func TestDefaultDirectionBehavior(t *testing.T) {
 	testPath := "../../testdata/02_basic_conversions/simple_struct"
 	slog.Debug("Testing directory", "path", testPath)
 
-	// Corrected analysis step
 	typeAnalyzer := analyzer.NewTypeAnalyzer()
-	cfg, _, err := typeAnalyzer.Analyze(testPath)
+	analysisResult, err := typeAnalyzer.Analyze(testPath)
 	if err != nil {
 		t.Logf("analyzer.TypeAnalyzer.Analyze() returned an error (may be expected): %v", err)
-		if cfg == nil {
-			t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed and returned a nil config: %v", err)
+		if analysisResult == nil {
+			t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed and returned a nil result: %v", err)
 		}
 	}
 
+	cfg := analysisResult.Config
 	slog.Debug("Parsed configuration", "rules_count", len(cfg.ConversionRules))
 	if len(cfg.ConversionRules) == 0 {
 		t.Fatal("Expected at least one conversion rule, got none")
@@ -568,13 +556,12 @@ func assertNotContainsPattern(t *testing.T, code string, pattern string) {
 func TestOrchestratorBasicFunctionality(t *testing.T) {
 	testPath := "../../testdata/02_basic_conversions/simple_struct"
 
-	// Corrected analysis step
 	typeAnalyzer := analyzer.NewTypeAnalyzer()
-	cfg, analysisResult, err := typeAnalyzer.Analyze(testPath)
+	analysisResult, err := typeAnalyzer.Analyze(testPath)
 	if err != nil {
 		t.Logf("analyzer.TypeAnalyzer.Analyze() returned an error (may be expected): %v", err)
-		if cfg == nil {
-			t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed and returned a nil config: %v", err)
+		if analysisResult == nil {
+			t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed and returned a nil result: %v", err)
 		}
 	}
 
@@ -587,7 +574,7 @@ func TestOrchestratorBasicFunctionality(t *testing.T) {
 
 	t.Run("Generate_Code", func(t *testing.T) {
 		orchestrator := NewCodeGenerator()
-		response, err := orchestrator.Generate(cfg, analysisResult)
+		response, err := orchestrator.Generate(analysisResult)
 		if err != nil {
 			t.Fatalf("Generation failed: %v", err)
 		}
@@ -614,13 +601,12 @@ func TestNewArchitectureComponents(t *testing.T) {
 
 	testPath := "../../testdata/02_basic_conversions/simple_struct"
 
-	// Corrected analysis step
 	typeAnalyzer := analyzer.NewTypeAnalyzer()
-	cfg, analysisResult, err := typeAnalyzer.Analyze(testPath)
+	analysisResult, err := typeAnalyzer.Analyze(testPath)
 	if err != nil {
 		t.Logf("analyzer.TypeAnalyzer.Analyze() returned an error (may be expected): %v", err)
-		if cfg == nil {
-			t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed and returned a nil config: %v", err)
+		if analysisResult == nil {
+			t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed and returned a nil result: %v", err)
 		}
 	}
 
@@ -637,7 +623,7 @@ func TestNewArchitectureComponents(t *testing.T) {
 		if !ok {
 			t.Fatalf("Orchestrator is not a CodeGenerator")
 		}
-		response, err := gen.Generate(cfg, analysisResult)
+		response, err := gen.Generate(analysisResult)
 		if err != nil {
 			t.Fatalf("Generation failed: %v", err)
 		}

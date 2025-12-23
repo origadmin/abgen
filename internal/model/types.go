@@ -29,6 +29,7 @@ const (
 
 // AnalysisResult holds all the information gathered during the analysis phase.
 type AnalysisResult struct {
+	Config            *config.Config
 	TypeInfos         map[string]*TypeInfo
 	ExistingFunctions map[string]bool
 	ExistingAliases   map[string]string

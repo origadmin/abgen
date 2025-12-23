@@ -22,7 +22,7 @@ type CodeGenerator struct {
 	conversionEngine model.ConversionEngine
 	codeEmitter      model.CodeEmitter
 	typeConverter    model.TypeConverter
-	typeFormatter    *components.TypeFormatter
+	typeFormatter    model.TypeFormatter
 }
 
 // NewCodeGenerator creates a new, stateless code generator.
@@ -33,14 +33,15 @@ func NewCodeGenerator() model.CodeGenerator {
 }
 
 // initializeComponents configures the generator's components for a specific generation task.
-func (g *CodeGenerator) initializeComponents(cfg *config.Config, analysisResult *model.AnalysisResult) {
+func (g *CodeGenerator) initializeComponents(analysisResult *model.AnalysisResult) {
+	cfg := analysisResult.Config
 	g.importManager = components.NewImportManager()
 	for alias, path := range cfg.PackageAliases {
 		g.importManager.AddAs(path, alias)
 	}
 	slog.Debug("ImportManager after PackageAliases processing", "imports", g.importManager.GetAllImports())
 
-	g.aliasManager = components.NewAliasManager(cfg, g.importManager, analysisResult.TypeInfos)
+	g.aliasManager = components.NewAliasManager(cfg, g.importManager, analysisResult.TypeInfos, analysisResult.ExistingAliases)
 	g.nameGenerator = components.NewNameGenerator(g.aliasManager)
 	g.typeFormatter = components.NewTypeFormatter(g.aliasManager, g.importManager, analysisResult.TypeInfos)
 
@@ -56,20 +57,21 @@ func (g *CodeGenerator) initializeComponents(cfg *config.Config, analysisResult 
 }
 
 // Generate executes a complete code generation task.
-func (g *CodeGenerator) Generate(cfg *config.Config, analysisResult *model.AnalysisResult) (*model.GenerationResponse, error) {
-	finalConfig, activeRules := g.prepareConfigForSession(cfg, analysisResult)
-	g.initializeComponents(finalConfig, analysisResult)
+func (g *CodeGenerator) Generate(analysisResult *model.AnalysisResult) (*model.GenerationResponse, error) {
+	finalConfig, activeRules := g.prepareConfigForSession(analysisResult)
+	analysisResult.Config = finalConfig // Update the result with the finalized config
+	g.initializeComponents(analysisResult)
 
 	slog.Debug("Components initialized with final configuration.")
 
 	g.aliasManager.PopulateAliases()
 
-	generatedCode, err := g.generateMainCode(finalConfig, analysisResult.TypeInfos, activeRules)
+	generatedCode, err := g.generateMainCode(analysisResult, activeRules)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate main code: %w", err)
 	}
 
-	customStubs, err := g.generateCustomStubs(finalConfig, analysisResult.TypeInfos)
+	customStubs, err := g.generateCustomStubs(analysisResult)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate custom stubs: %w", err)
 	}
@@ -89,12 +91,9 @@ func (g *CodeGenerator) Generate(cfg *config.Config, analysisResult *model.Analy
 }
 
 // prepareConfigForSession creates a finalized configuration for a single generation run.
-func (g *CodeGenerator) prepareConfigForSession(originalCfg *config.Config, analysisResult *model.AnalysisResult) (*config.Config, []*config.ConversionRule) {
-	sessionConfig := originalCfg.Clone()
+func (g *CodeGenerator) prepareConfigForSession(analysisResult *model.AnalysisResult) (*config.Config, []*config.ConversionRule) {
+	sessionConfig := analysisResult.Config.Clone()
 	slog.Debug("Preparing session configuration", "initial_rules", len(sessionConfig.ConversionRules))
-
-	// Populate config with analysis results from the local package
-	sessionConfig.ExistingAliases = analysisResult.ExistingAliases
 
 	// Start with implicitly discovered rules
 	slog.Debug("Discovering seed rules from package pairs...")
@@ -203,16 +202,10 @@ func (g *CodeGenerator) expandRulesByDependencyAnalysis(seedRules []*config.Conv
 }
 
 // isFieldMatch performs case-insensitive matching for common field name patterns.
-// It returns true if the field names match according to common conventions.
 func (g *CodeGenerator) isFieldMatch(sourceName, targetName string) bool {
-	// Common pattern: ID vs Id (case-insensitive match)
 	if strings.EqualFold(sourceName, targetName) {
 		return true
 	}
-
-	// Additional common patterns can be added here
-	// For now, we focus on the ID/Id case which is the most common
-
 	return false
 }
 
@@ -249,16 +242,15 @@ func (g *CodeGenerator) findSeedRules(typeInfos map[string]*model.TypeInfo, pack
 	return seedRules
 }
 
-func (g *CodeGenerator) generateMainCode(cfg *config.Config, typeInfos map[string]*model.TypeInfo, rules []*config.ConversionRule) ([]byte, error) {
+func (g *CodeGenerator) generateMainCode(analysisResult *model.AnalysisResult, rules []*config.ConversionRule) ([]byte, error) {
 	finalBuf := new(bytes.Buffer)
 
-	conversionFuncs, requiredHelpers, err := g.generateConversionCode(typeInfos, rules)
+	conversionFuncs, requiredHelpers, err := g.generateConversionCode(analysisResult.TypeInfos, rules)
 	if err != nil {
 		return nil, err
 	}
 
-	// Prepare the alias information for rendering.
-	aliasesToRender := g.prepareAliasesForRender(cfg, typeInfos)
+	aliasesToRender := g.prepareAliasesForRender(analysisResult)
 
 	if err := g.codeEmitter.EmitHeader(finalBuf); err != nil {
 		return nil, err
@@ -273,7 +265,6 @@ func (g *CodeGenerator) generateMainCode(cfg *config.Config, typeInfos map[strin
 		return nil, err
 	}
 
-	// Collect all helper bodies that need to be emitted.
 	var helpersToEmit []model.Helper
 	allHelpers := components.GetBuiltInHelpers()
 	helperMap := make(map[string]model.Helper)
@@ -302,33 +293,23 @@ func (g *CodeGenerator) generateMainCode(cfg *config.Config, typeInfos map[strin
 	return process, nil
 }
 
-// prepareAliasesForRender creates the list of aliases to be rendered in the final code.
-// This is the gatekeeper that prevents regenerating user-defined aliases.
-func (g *CodeGenerator) prepareAliasesForRender(cfg *config.Config, typeInfos map[string]*model.TypeInfo) []*model.AliasRenderInfo {
+func (g *CodeGenerator) prepareAliasesForRender(analysisResult *model.AnalysisResult) []*model.AliasRenderInfo {
 	var renderInfos []*model.AliasRenderInfo
-
-	// Get the map of types that the AliasManager thinks we need to generate aliases for.
 	typesToAlias := g.aliasManager.GetAliasedTypes()
 
 	for uniqueKey, typeInfo := range typesToAlias {
-		// Get the alias name that was decided for this type.
 		aliasName, ok := g.aliasManager.LookupAlias(uniqueKey)
 		if !ok {
 			continue
 		}
 
-		// --- THE CRITICAL FILTER ---
-		// Check if the alias NAME already exists in the user-defined aliases.
-		// This is the most direct way to check for user overrides.
-		if _, exists := cfg.ExistingAliases[aliasName]; exists {
+		if _, exists := analysisResult.ExistingAliases[aliasName]; exists {
 			slog.Debug("Skipping alias rendering, name already defined by user", "alias", aliasName)
 			continue
 		}
 
 		originalTypeName := g.typeFormatter.FormatWithoutAlias(typeInfo)
 
-		// --- ADDITIONAL FILTER FOR SELF-REFERENCING ALIASES ---
-		// Skip self-referencing aliases like "Gender = Gender"
 		if aliasName == originalTypeName {
 			slog.Debug("Skipping self-referencing alias", "alias", aliasName, "original", originalTypeName)
 			continue
@@ -347,58 +328,12 @@ func (g *CodeGenerator) prepareAliasesForRender(cfg *config.Config, typeInfos ma
 	return renderInfos
 }
 
-// reconstructTypeInfoFromKey attempts to build a temporary TypeInfo from a unique key string.
-func (g *CodeGenerator) reconstructTypeInfoFromKey(key string, typeInfos map[string]*model.TypeInfo) *model.TypeInfo {
-	if info, ok := typeInfos[key]; ok {
-		return info
-	}
-
-	if strings.HasPrefix(key, "[]") {
-		underlying := g.reconstructTypeInfoFromKey(key[2:], typeInfos)
-		if underlying != nil {
-			return &model.TypeInfo{Kind: model.Slice, Underlying: underlying}
-		}
-	} else if strings.HasPrefix(key, "*") {
-		underlying := g.reconstructTypeInfoFromKey(key[1:], typeInfos)
-		if underlying != nil {
-			return &model.TypeInfo{Kind: model.Pointer, Underlying: underlying}
-		}
-	}
-
-	// It's a named type that wasn't in the original map.
-	// Create a partial TypeInfo for it.
-	lastDot := strings.LastIndex(key, ".")
-	if lastDot != -1 {
-		pkgPath := key[:lastDot]
-		typeName := key[lastDot+1:]
-		return &model.TypeInfo{
-			Name:       typeName,
-			ImportPath: pkgPath,
-			Kind:       model.Named, // Assume it's a named type
-		}
-	}
-
-	// It's a primitive type
-	if !strings.Contains(key, ".") {
-		return &model.TypeInfo{
-			Name: key,
-			Kind: model.Primitive,
-		}
-	}
-
-	slog.Warn("reconstructTypeInfoFromKey: could not fully reconstruct type", "key", key)
-	return nil
-}
-
 func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeInfo, rules []*config.ConversionRule) ([]string, map[string]struct{}, error) {
 	var conversionFuncs []string
 	requiredHelpers := make(map[string]struct{})
 	generatedFunctions := make(map[string]bool)
 	worklist := make([]*model.ConversionTask, 0)
 
-	// Initial population of the worklist from the rules.
-	// This logic explicitly decomposes bilateral rules into two separate one-way tasks
-	// to ensure clarity and prevent any component from misinterpreting a rule's direction.
 	for _, rule := range rules {
 		sourceInfo := typeInfos[rule.SourceType]
 		targetInfo := typeInfos[rule.TargetType]
@@ -409,25 +344,21 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 		if rule.Direction == config.DirectionBoth {
 			slog.Debug("Decomposing bilateral rule into two one-way tasks.", "source", rule.SourceType, "target", rule.TargetType)
 
-			// Create and add the forward task with a cloned, one-way rule.
-			forwardRule := *rule // Shallow copy is sufficient here
+			forwardRule := *rule
 			forwardRule.Direction = config.DirectionOneway
 			worklist = append(worklist, &model.ConversionTask{Source: sourceInfo, Target: targetInfo, Rule: &forwardRule})
 
-			// Create and add the reverse task with a new, inverted one-way rule.
 			reverseRule := &config.ConversionRule{
 				SourceType: targetInfo.FQN(),
 				TargetType: sourceInfo.FQN(),
 				Direction:  config.DirectionOneway,
 				FieldRules: config.FieldRuleSet{Ignore: make(map[string]struct{}), Remap: make(map[string]string)},
 			}
-			// Invert field remapping for the reverse direction.
 			for from, to := range rule.FieldRules.Remap {
 				reverseRule.FieldRules.Remap[to] = from
 			}
 			worklist = append(worklist, &model.ConversionTask{Source: targetInfo, Target: sourceInfo, Rule: reverseRule})
 		} else {
-			// For one-way rules, just add the task as is.
 			worklist = append(worklist, &model.ConversionTask{Source: sourceInfo, Target: targetInfo, Rule: rule})
 		}
 	}
@@ -453,7 +384,6 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 			for _, helper := range generated.RequiredHelpers {
 				requiredHelpers[helper.Name] = struct{}{}
 			}
-			// Add newly discovered tasks to the worklist
 			for _, newTask := range newTasks {
 				newFuncName := g.nameGenerator.ConversionFunctionName(newTask.Source, newTask.Target)
 				if !generatedFunctions[newFuncName] {
@@ -467,19 +397,14 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 	return conversionFuncs, requiredHelpers, nil
 }
 
-func (g *CodeGenerator) generateCustomStubs(cfg *config.Config, typeInfos map[string]*model.TypeInfo) ([]byte, error) {
+func (g *CodeGenerator) generateCustomStubs(analysisResult *model.AnalysisResult) ([]byte, error) {
 	stubs := g.conversionEngine.GetStubsToGenerate()
 	if len(stubs) == 0 {
 		return nil, nil
 	}
 
-	// Create a dedicated ImportManager for the stubs file.
 	stubImportManager := components.NewImportManager()
-
-	// Create a dedicated TypeFormatter that uses the stubImportManager.
-	// We reuse g.aliasManager because type aliases should be consistent,
-	// but we need to ensure that if an alias is used, the corresponding import is added to stubImportManager.
-	stubTypeFormatter := components.NewTypeFormatter(g.aliasManager, stubImportManager, typeInfos)
+	stubTypeFormatter := components.NewTypeFormatter(g.aliasManager, stubImportManager, analysisResult.TypeInfos)
 
 	var stubFunctions []string
 	var stubNames []string
@@ -490,8 +415,6 @@ func (g *CodeGenerator) generateCustomStubs(cfg *config.Config, typeInfos map[st
 
 	for _, name := range stubNames {
 		task := stubs[name]
-		// Format types using the stub-specific formatter.
-		// This will register necessary imports in stubImportManager.
 		sourceTypeStr := stubTypeFormatter.Format(task.Source)
 		targetTypeStr := stubTypeFormatter.Format(task.Target)
 
@@ -505,21 +428,13 @@ func (g *CodeGenerator) generateCustomStubs(cfg *config.Config, typeInfos map[st
 		stubFunctions = append(stubFunctions, sb.String())
 	}
 
-	// Use CodeEmitter to generate the file content
 	var finalBuf bytes.Buffer
-
-	// 1. Header
 	if err := g.codeEmitter.EmitStubHeader(&finalBuf); err != nil {
 		return nil, fmt.Errorf("failed to emit header for stubs: %w", err)
 	}
-
-	// 2. Imports
-	// Note: We use the stubImportManager's imports, not the main one's.
 	if err := g.codeEmitter.EmitImports(&finalBuf, stubImportManager.GetAllImports()); err != nil {
 		return nil, fmt.Errorf("failed to emit imports for stubs: %w", err)
 	}
-
-	// 3. Conversions (Stubs)
 	if err := g.codeEmitter.EmitConversions(&finalBuf, stubFunctions); err != nil {
 		return nil, fmt.Errorf("failed to emit stubs: %w", err)
 	}

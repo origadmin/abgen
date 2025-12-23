@@ -39,10 +39,11 @@ func NewAliasManager(
 	config *config.Config,
 	importManager model.ImportManager,
 	typeInfos map[string]*model.TypeInfo,
+	existingAliases map[string]string,
 ) model.AliasManager {
 	// Create the reverse map from FQN to existing alias name
-	fqnToAlias := make(map[string]string, len(config.ExistingAliases))
-	for alias, fqn := range config.ExistingAliases {
+	fqnToAlias := make(map[string]string, len(existingAliases))
+	for alias, fqn := range existingAliases {
 		fqnToAlias[fqn] = alias
 	}
 

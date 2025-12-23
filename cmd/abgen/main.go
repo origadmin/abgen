@@ -67,14 +67,15 @@ func main() {
 	// --- 1. Analyze Source Code and Parse Directives ---
 	slog.Debug("Analyzing source code and parsing directives...")
 	typeAnalyzer := analyzer.NewTypeAnalyzer()
-	cfg, analysisResult, err := typeAnalyzer.Analyze(sourceDir)
+	analysisResult, err := typeAnalyzer.Analyze(sourceDir)
 	if err != nil {
 		slog.Error("Failed to analyze source code", "error", err)
 		os.Exit(1)
 	}
-	cfg.Version = version
+	analysisResult.Config.Version = version
 
 	// --- 2. Resolve Output File Paths ---
+	cfg := analysisResult.Config
 	mainOutputFile := *output
 	if mainOutputFile == "" {
 		mainOutputFile = filepath.Join(sourceDir, strings.ToLower(cfg.GenerationContext.PackageName)+".gen.go")
@@ -92,7 +93,7 @@ func main() {
 	// --- 3. Generate Code ---
 	slog.Debug("Generating code...")
 	gen := generator.NewCodeGenerator()
-	response, err := gen.Generate(cfg, analysisResult)
+	response, err := gen.Generate(analysisResult)
 	if err != nil {
 		slog.Error("Code generation failed", "error", err)
 		os.Exit(1)

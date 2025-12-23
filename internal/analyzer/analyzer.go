@@ -30,14 +30,14 @@ func NewTypeAnalyzer() *TypeAnalyzer {
 
 // Analyze is the main entry point for the analysis phase. It orchestrates
 // the loading of the initial package, parsing of directives, and deep analysis of all related types.
-func (a *TypeAnalyzer) Analyze(sourceDir string) (*config.Config, *model.AnalysisResult, error) {
+func (a *TypeAnalyzer) Analyze(sourceDir string) (*model.AnalysisResult, error) {
 	// 1. Load the initial package to find directives and get context.
 	initialPkg, err := a.loadInitialPackage(sourceDir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load initial package: %w", err)
+		return nil, fmt.Errorf("failed to load initial package: %w", err)
 	}
 	if initialPkg == nil {
-		return nil, nil, fmt.Errorf("no initial package found at %s", sourceDir)
+		return nil, fmt.Errorf("no initial package found at %s", sourceDir)
 	}
 
 	// 2. Extract directives from the initial package's syntax files.
@@ -47,28 +47,27 @@ func (a *TypeAnalyzer) Analyze(sourceDir string) (*config.Config, *model.Analysi
 	cfgParser := config.NewParser()
 	cfg, err := cfgParser.ParseDirectives(directives, initialPkg.Name, initialPkg.ID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse directives: %w", err)
+		return nil, fmt.Errorf("failed to parse directives: %w", err)
 	}
 	cfg.GenerationContext.DirectivePath = sourceDir
 
 	// 4. Analyze all required external packages based on the configuration.
 	resolvedTypes, err := a.analyzeExternalPackages(cfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to analyze external packages: %w", err)
+		return nil, fmt.Errorf("failed to analyze external packages: %w", err)
 	}
 
 	// 5. Discover existing definitions (aliases, functions) in the initial package.
-	// This is still useful for checking what's already present before generation.
 	existingFuncs, existingAliases := a.discoverExistingDefinitions(initialPkg)
-	cfg.ExistingAliases = existingAliases // Update config with discovered aliases.
 
 	analysisResult := &model.AnalysisResult{
+		Config:            cfg, // Embed config into the result
 		TypeInfos:         resolvedTypes,
 		ExistingFunctions: existingFuncs,
 		ExistingAliases:   existingAliases,
 	}
 
-	return cfg, analysisResult, nil
+	return analysisResult, nil
 }
 
 // loadInitialPackage loads the package at the given source directory.
@@ -164,7 +163,7 @@ func (a *TypeAnalyzer) analyzeExternalPackages(cfg *config.Config) (map[string]*
 	}
 
 	// Resolve any explicitly mentioned FQNs that might have been missed.
-	for _, fqn := range cfg.AllFqns() {
+	for _, fqn := range a.collectAllFqns(cfg) {
 		if _, ok := resolvedTypes[fqn]; !ok {
 			info, err := a.find(fqn)
 			if err != nil {
@@ -213,35 +212,25 @@ func (a *TypeAnalyzer) discoverExistingDefinitions(pkg *packages.Package) (map[s
 
 // resolveAliasTargetFQN converts an alias's target type expression to a fully qualified name.
 func (a *TypeAnalyzer) resolveAliasTargetFQN(expr ast.Expr, pkg *packages.Package) string {
-	// The types.ExprString provides a string representation of the type expression.
 	typeStr := types.ExprString(expr)
 
-	// Check if it's a selector expression like `pkg.Type`.
 	if selExpr, ok := expr.(*ast.SelectorExpr); ok {
-		// selExpr.X is the package identifier.
 		if pkgIdent, ok := selExpr.X.(*ast.Ident); ok {
 			pkgAlias := pkgIdent.Name
 			typeName := selExpr.Sel.Name
 
-			// Now, iterate through the *loaded* package's imports to find the full path.
-			// pkg.Imports is a map of import path to a *packages.Package struct.
 			for importPath, importedPkg := range pkg.Imports {
-				// importedPkg.Name is the name used in the source file (the alias or package name).
 				if importedPkg.Name == pkgAlias {
-					// We found the matching import. Construct the FQN.
 					return importPath + "." + typeName
 				}
 			}
 		}
 	}
 
-	// If it's not a selector expression (e.g., a local type `MyType`),
-	// or if we couldn't resolve the import alias, prepend the current package's path.
 	if !strings.Contains(typeStr, ".") {
 		return pkg.ID + "." + typeStr
 	}
 
-	// Fallback: return the string representation if it already looks like a FQN.
 	return typeStr
 }
 
@@ -281,6 +270,37 @@ func (a *TypeAnalyzer) collectExternalPaths(cfg *config.Config) []string {
 		paths = append(paths, path)
 	}
 	return paths
+}
+
+// collectAllFqns gathers all unique fully-qualified type names (FQNs).
+func (a *TypeAnalyzer) collectAllFqns(cfg *config.Config) []string {
+	fqnMap := make(map[string]struct{})
+
+	for _, rule := range cfg.ConversionRules {
+		if rule.SourceType != "" {
+			fqnMap[rule.SourceType] = struct{}{}
+		}
+		if rule.TargetType != "" {
+			fqnMap[rule.TargetType] = struct{}{}
+		}
+	}
+	for key := range cfg.CustomFunctionRules {
+		parts := strings.Split(key, "->")
+		if len(parts) == 2 {
+			if parts[0] != "" {
+				fqnMap[parts[0]] = struct{}{}
+			}
+			if parts[1] != "" {
+				fqnMap[parts[1]] = struct{}{}
+			}
+		}
+	}
+
+	fqns := make([]string, 0, len(fqnMap))
+	for fqn := range fqnMap {
+		fqns = append(fqns, fqn)
+	}
+	return fqns
 }
 
 func getPkgPath(fqn string) string {
@@ -394,7 +414,6 @@ func (a *TypeAnalyzer) parseFields(s *types.Struct) []*model.FieldInfo {
 		if f.Embedded() {
 			embeddedTypeInfo := a.resolveType(f.Type())
 			if embeddedTypeInfo != nil && (embeddedTypeInfo.Kind == model.Struct || (embeddedTypeInfo.Kind == model.Named && embeddedTypeInfo.Underlying.Kind == model.Struct)) {
-				// Use the fields from the underlying struct if it's a named type
 				var embeddedFields []*model.FieldInfo
 				if embeddedTypeInfo.Kind == model.Struct {
 					embeddedFields = embeddedTypeInfo.Fields
