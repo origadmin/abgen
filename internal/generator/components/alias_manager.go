@@ -77,9 +77,23 @@ func (am *AliasManager) LookupAlias(uniqueKey string) (string, bool) {
 }
 
 func (am *AliasManager) PopulateAliases() {
+	// Correctly populate managed packages by inspecting the TypeInfo of the rule types.
 	for _, rule := range am.cfg.ConversionRules {
-		am.addManagedPackage(getPkgPath(rule.SourceType))
-		am.addManagedPackage(getPkgPath(rule.TargetType))
+		sourceInfo := am.typeInfos[rule.SourceType]
+		targetInfo := am.typeInfos[rule.TargetType]
+
+		if sourceInfo != nil {
+			elem := model.GetElementType(sourceInfo)
+			if elem != nil {
+				am.addManagedPackage(elem.ImportPath)
+			}
+		}
+		if targetInfo != nil {
+			elem := model.GetElementType(targetInfo)
+			if elem != nil {
+				am.addManagedPackage(elem.ImportPath)
+			}
+		}
 	}
 	slog.Debug("AliasManager: collected managed packages for aliasing", "paths", am.managedPackagePaths)
 
@@ -116,14 +130,11 @@ func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSou
 	}
 	am.visited[uniqueKey] = true
 
-	// --- The Corrected Logic ---
-	// For pointers, we only recurse. We NEVER create an alias for the pointer type itself.
 	if typeInfo.Kind == model.Pointer {
 		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
-		return // Explicitly return after recursion for pointers.
+		return
 	}
 
-	// For other composite types, recurse first.
 	switch typeInfo.Kind {
 	case model.Struct:
 		for _, field := range typeInfo.Fields {
@@ -136,7 +147,6 @@ func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSou
 		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
 	}
 
-	// After recursion, process the current (non-pointer) type.
 	if !am.isManagedType(typeInfo) {
 		return
 	}
@@ -154,13 +164,10 @@ func (am *AliasManager) isManagedType(info *model.TypeInfo) bool {
 	if info == nil {
 		return false
 	}
-	// Recurse to find the base element type.
 	elem := model.GetElementType(info)
 	if elem == nil {
 		return false
 	}
-	// A type is managed if its base element is a Named or Struct type
-	// that belongs to one of the managed packages.
 	switch elem.Kind {
 	case model.Named, model.Struct:
 		_, isManaged := am.managedPackagePaths[elem.ImportPath]
@@ -176,7 +183,6 @@ func (am *AliasManager) getRecursiveBaseName(info *model.TypeInfo) string {
 	}
 	switch info.Kind {
 	case model.Pointer:
-		// Pointers do not contribute to the base name.
 		return am.getRecursiveBaseName(info.Underlying)
 	case model.Slice:
 		elementBaseName := am.getRecursiveBaseName(info.Underlying)

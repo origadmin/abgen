@@ -75,7 +75,8 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 	sourceTypeStr := ce.typeFormatter.Format(sourceInfo)
 	targetTypeStr := ce.typeFormatter.Format(targetInfo)
 
-	buf.WriteString(fmt.Sprintf("// %s converts %s to %s\n", funcName, sourceInfo.Name, targetInfo.Name))
+	// Corrected: Use formatted type strings for a descriptive comment.
+	buf.WriteString(fmt.Sprintf("// %s converts %s to %s.\n", funcName, sourceTypeStr, targetTypeStr))
 	buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, sourceTypeStr, targetTypeStr))
 	buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n\n")
 
@@ -122,9 +123,10 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 
 	funcName := ce.nameGenerator.ConversionFunctionName(sourceInfo, targetInfo)
 
-	slog.Debug("Generating slice conversion", "funcName", funcName, "source", sourceSliceStr, "target", targetSliceStr)
-
-	buf.WriteString(fmt.Sprintf("// %s converts a slice of %s to a slice of %s.\n", funcName, actualSourceSlice.Name, actualTargetSlice.Name))
+	// Corrected: Use formatted element type strings for a descriptive comment.
+	sourceElemStr := ce.typeFormatter.Format(sourceElem)
+	targetElemStr := ce.typeFormatter.Format(targetElem)
+	buf.WriteString(fmt.Sprintf("// %s converts a slice of %s to a slice of %s.\n", funcName, sourceElemStr, targetElemStr))
 	buf.WriteString(fmt.Sprintf("func %s(froms %s) %s {\n", funcName, sourceSliceStr, targetSliceStr))
 	buf.WriteString("\tif froms == nil {\n\t\treturn nil\t}\n")
 
@@ -274,7 +276,6 @@ func (ce *ConversionEngine) getConversionExpression(
 		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
 		newTask = &model.ConversionTask{Source: sourceType, Target: targetType}
 		
-		// For struct conversions, handle pointer wrapping/unwrapping at the call site
 		if concreteSourceType.Kind == model.Struct {
 			arg := sourceFieldExpr
 			if sourceType.Kind != model.Pointer {
@@ -286,7 +287,6 @@ func (ce *ConversionEngine) getConversionExpression(
 			}
 			return expr, nil, newTask, nil
 		}
-		// For slice conversions, the generated function handles pointers, so just call it.
 		return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, newTask, nil
 	}
 
@@ -340,7 +340,6 @@ func (ce *ConversionEngine) addRequiredImportsForHelper(helper model.Helper) {
 }
 
 func (ce *ConversionEngine) needsTemporaryVariable(sourceType, targetType *model.TypeInfo) bool {
-	// This logic is now handled by the pre-assignments in getConversionExpression
 	return false
 }
 

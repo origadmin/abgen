@@ -24,7 +24,6 @@ func TestAliasManager_PointerVsValue_NoCollision(t *testing.T) {
 		},
 	}
 	cfg := analysisResult.ExecutionPlan.FinalConfig
-	// This rule is enough to trigger processing for source/ent.Department
 	cfg.ConversionRules = append(cfg.ConversionRules, &config.ConversionRule{
 		SourceType: "source/ent.Department",
 		TargetType: "target/dto.Department",
@@ -34,7 +33,6 @@ func TestAliasManager_PointerVsValue_NoCollision(t *testing.T) {
 	im := &mockImportManager{aliases: make(map[string]string)}
 	am := NewAliasManager(analysisResult, im)
 
-	// Call the public API. This should process all types reachable from the conversion rules.
 	am.PopulateAliases()
 
 	// --- Assertions ---
@@ -99,13 +97,18 @@ func TestAliasManager_ThirdPartyTypes_NotAliased(t *testing.T) {
 // TestAliasManager_PluralizationWithSuffix ensures that pluralization ('s') is applied
 // to the base name BEFORE a suffix is added.
 func TestAliasManager_PluralizationWithSuffix(t *testing.T) {
-	userType := newStruct("User", "source/ent", nil)
-	userSliceType := newSlice(userType)
+	// --- Test Data Setup ---
+	sourceUserType := newStruct("User", "source/ent", nil)
+	sourceUserSliceType := newSlice(sourceUserType)
+	targetUserType := newStruct("User", "target/dto", nil)
+	targetUserSliceType := newSlice(targetUserType)
 
 	analysisResult := &model.AnalysisResult{
 		TypeInfos: map[string]*model.TypeInfo{
-			"source/ent.User":   userType,
-			"[]source/ent.User": userSliceType,
+			"source/ent.User":   sourceUserType,
+			"[]source/ent.User": sourceUserSliceType,
+			"target/dto.User":   targetUserType,
+			"[]target/dto.User": targetUserSliceType,
 		},
 		ExistingAliases: make(map[string]string),
 		ExecutionPlan: &model.ExecutionPlan{
@@ -113,28 +116,25 @@ func TestAliasManager_PluralizationWithSuffix(t *testing.T) {
 		},
 	}
 	cfg := analysisResult.ExecutionPlan.FinalConfig
-	// Add rules for both singular and plural types to ensure they are processed.
-	cfg.ConversionRules = append(cfg.ConversionRules, &config.ConversionRule{
-		SourceType: "source/ent.User",
-		TargetType: "target/dto.User",
-	})
+	// Add a rule that will cause both singular and plural types to be processed.
 	cfg.ConversionRules = append(cfg.ConversionRules, &config.ConversionRule{
 		SourceType: "[]source/ent.User",
 		TargetType: "[]target/dto.User",
 	})
 	cfg.NamingRules.TargetSuffix = "PB"
 
+	// --- Test Execution ---
 	im := &mockImportManager{aliases: make(map[string]string)}
 	am := NewAliasManager(analysisResult, im)
-
-	am.PopulateAliases()
+	am.PopulateAliases() // Use the public API
 
 	// --- Assertions ---
-	userAlias, _ := am.LookupAlias("source/ent.User")
-	sliceAlias, _ := am.LookupAlias("[]source/ent.User")
+	// We are testing the TargetSuffix, so we must check the aliases of the TARGET types.
+	userAlias, _ := am.LookupAlias("target/dto.User")
+	sliceAlias, _ := am.LookupAlias("[]target/dto.User")
 
 	expectedUserAlias := "UserPB"
-	expectedSliceAlias := "UsersPB" // Not "UserPBs"
+	expectedSliceAlias := "UsersPB" // Correct: pluralize base name, then add suffix. Not "UserPBs".
 
 	if userAlias != expectedUserAlias {
 		t.Errorf("Expected singular alias to be '%s', got '%s'", expectedUserAlias, userAlias)
