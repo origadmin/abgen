@@ -3,6 +3,7 @@ package config
 import (
 	"go/ast"
 	"reflect"
+	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
@@ -64,6 +65,9 @@ func TestParser_Comprehensive(t *testing.T) {
 					SourceSuffix: "Entity",
 					TargetPrefix: "Proto",
 				},
+				GlobalBehaviorRules: BehaviorRules{
+					DefaultDirection: DirectionBoth,
+				},
 			},
 		},
 		{
@@ -89,6 +93,9 @@ func TestParser_Comprehensive(t *testing.T) {
 							Remap:  make(map[string]string),
 						},
 					},
+				},
+				GlobalBehaviorRules: BehaviorRules{
+					DefaultDirection: DirectionBoth,
 				},
 			},
 		},
@@ -118,6 +125,9 @@ func TestParser_Comprehensive(t *testing.T) {
 						},
 					},
 				},
+				GlobalBehaviorRules: BehaviorRules{
+					DefaultDirection: DirectionBoth,
+				},
 			},
 		},
 		{
@@ -135,6 +145,9 @@ func TestParser_Comprehensive(t *testing.T) {
 				},
 				PackagePairs: []*PackagePair{
 					{SourcePath: "github.com/my/source", TargetPath: "github.com/my/target"},
+				},
+				GlobalBehaviorRules: BehaviorRules{
+					DefaultDirection: DirectionBoth,
 				},
 			},
 		},
@@ -164,6 +177,9 @@ func TestParser_Comprehensive(t *testing.T) {
 						},
 					},
 				},
+				GlobalBehaviorRules: BehaviorRules{
+					DefaultDirection: DirectionBoth,
+				},
 			},
 		},
 		{
@@ -192,6 +208,9 @@ func TestParser_Comprehensive(t *testing.T) {
 						},
 					},
 				},
+				GlobalBehaviorRules: BehaviorRules{
+					DefaultDirection: DirectionBoth,
+				},
 			},
 		},
 	}
@@ -203,13 +222,28 @@ func TestParser_Comprehensive(t *testing.T) {
 				tc.setupFunc(p)
 			}
 
+			// First pass: Parse global configuration directives (including package:path)
 			for _, d := range tc.directives {
-				if err := p.parseRuleDirective(d); err != nil {
-					t.Fatalf("parseSingleDirective failed: %v", err)
+				if strings.Contains(d, "package:path") || strings.Contains(d, "pair:packages") || 
+				   strings.Contains(d, "convert:source:suffix") || strings.Contains(d, "convert:target:suffix") ||
+				   strings.Contains(d, "convert:source:prefix") || strings.Contains(d, "convert:target:prefix") ||
+				   strings.Contains(d, "convert:alias:generate") || strings.Contains(d, "convert:direction") {
+					if err := p.parseGlobalDirective(d); err != nil {
+						t.Fatalf("parseGlobalDirective failed: %v", err)
+					}
 				}
 			}
 
-			// *** FIX ***: Manually call the merge step, as the test bypasses parseDirectives.
+			// Second pass: Parse rule directives
+			for _, d := range tc.directives {
+				if strings.Contains(d, "convert=") || strings.Contains(d, "convert:rule=") {
+					if err := p.parseRuleDirective(d); err != nil {
+						t.Fatalf("parseRuleDirective failed: %v", err)
+					}
+				}
+			}
+
+			// Finally, merge custom function rules
 			p.mergeCustomFuncRules()
 
 			cfg := p.config
@@ -229,7 +263,7 @@ func TestParser_Comprehensive(t *testing.T) {
 			}
 
 			// Check that all expected aliases from directives are present.
-			// This avoids test brittleness if default aliases are added to NewParser.
+			// This avoids test britleness if default aliases are added to NewParser.
 			for alias, path := range tc.expectedConfig.PackageAliases {
 				if gotPath, ok := cfg.PackageAliases[alias]; !ok || gotPath != path {
 					t.Errorf("PackageAliases mismatch for alias '%s': got '%s', want '%s'", alias, gotPath, path)
