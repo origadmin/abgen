@@ -1,8 +1,12 @@
 package ent
 
-import "time"
+import (
+	"time"
 
-type Gender int
+	"github.com/origadmin/abgen/testdata/fixtures/ent/user"
+)
+
+type Gender user.Gender
 
 type Permission struct {
 	ID int

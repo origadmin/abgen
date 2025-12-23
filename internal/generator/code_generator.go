@@ -291,7 +291,9 @@ func (g *CodeGenerator) generateMainCode(cfg *config.Config, typeInfos map[strin
 		return nil, err
 	}
 	process, err := imports.Process("", finalBuf.Bytes(), &imports.Options{
+		Fragment:   true,
 		FormatOnly: true,
+		Comments:   true,
 	})
 	if err != nil {
 		return nil, err
@@ -457,19 +459,6 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 	return conversionFuncs, requiredHelpers, nil
 }
 
-func extractFunctionName(functionBody string) string {
-	lines := strings.Split(functionBody, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "func ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 && strings.HasPrefix(parts[1], "Convert") {
-				return parts[1]
-			}
-		}
-	}
-	return ""
-}
-
 func (g *CodeGenerator) generateCustomStubs(cfg *config.Config, typeInfos map[string]*model.TypeInfo) ([]byte, error) {
 	stubs := g.conversionEngine.GetStubsToGenerate()
 	if len(stubs) == 0 {
@@ -528,7 +517,9 @@ func (g *CodeGenerator) generateCustomStubs(cfg *config.Config, typeInfos map[st
 	}
 
 	process, err := imports.Process("", finalBuf.Bytes(), &imports.Options{
+		Fragment:   true,
 		FormatOnly: true,
+		Comments:   true,
 	})
 	if err != nil {
 		return nil, err
