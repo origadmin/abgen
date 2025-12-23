@@ -204,7 +204,7 @@ func TestParser_Comprehensive(t *testing.T) {
 			}
 
 			for _, d := range tc.directives {
-				if err := p.parseSingleDirective(d); err != nil {
+				if err := p.parseRuleDirective(d); err != nil {
 					t.Fatalf("parseSingleDirective failed: %v", err)
 				}
 			}

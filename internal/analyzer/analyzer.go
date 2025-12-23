@@ -480,17 +480,21 @@ func (a *TypeAnalyzer) parseFields(s *types.Struct) []*model.FieldInfo {
 // resolveTypeToFQN converts a type expression string to a fully qualified name
 // by resolving package aliases using the import information.
 func (a *TypeAnalyzer) resolveTypeToFQN(typeStr string, pkg *packages.Package) string {
+	slog.Debug("resolveTypeToFQN", "typeStr", typeStr, "pkgPath", pkg.PkgPath)
+
 	// If it already contains a dot, it might already be a package-qualified type
 	if strings.Contains(typeStr, ".") {
 		// Split into potential package alias and type name
 		parts := strings.SplitN(typeStr, ".", 2)
 		if len(parts) == 2 {
 			alias, typeName := parts[0], parts[1]
-			
-			// Look for the import that matches this alias
+
+			slog.Debug("resolveTypeToFQN: checking imports", "alias", alias, "typeName", typeName, "importCount", len(pkg.Imports))
 			for importPath, imp := range pkg.Imports {
+				slog.Debug("resolveTypeToFQN: import entry", "importPath", importPath, "imp.Name", imp.Name)
 				if imp.Name == alias {
 					// Found the import, return the fully qualified name
+					slog.Debug("resolveTypeToFQN: found match", "alias", alias, "resolved", importPath+"."+typeName)
 					return importPath + "." + typeName
 				}
 			}
@@ -500,7 +504,7 @@ func (a *TypeAnalyzer) resolveTypeToFQN(typeStr string, pkg *packages.Package) s
 			return typeStr
 		}
 	}
-	
+
 	// For built-in types or unqualified types, return as-is
 	// This includes types like "string", "int", "time.Time", etc.
 	return typeStr

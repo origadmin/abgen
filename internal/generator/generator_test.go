@@ -500,7 +500,6 @@ func TestCodeGenerator_Generate(t *testing.T) {
 }
 
 func TestLegacyGenerator_Generate(t *testing.T) {
-	// Discarded function
 	t.Skip()
 
 	sort.Slice(testCases, func(i, j int) bool {

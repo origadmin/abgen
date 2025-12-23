@@ -157,14 +157,14 @@ func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSou
 	if existingAlias, ok := am.fqnToExistingAlias[uniqueKey]; ok {
 		// User-defined alias exists. Use it for lookups, but do NOT add it to aliasedTypes for generation.
 		am.aliasMap[uniqueKey] = existingAlias
-		slog.Debug("AliasManager: using existing user-defined alias", "type", typeInfo.String(), "alias", existingAlias)
+		slog.Debug("AliasManager: using existing user-defined alias", "type", typeInfo.String(), "alias", existingAlias, "uniqueKey", uniqueKey)
 	} else {
 		// No user-defined alias. Generate a new one.
 		alias := am.generateAlias(typeInfo, isSource)
 		am.aliasMap[uniqueKey] = alias
 		// Add it to aliasedTypes so it will be rendered in the generated file.
 		am.aliasedTypes[uniqueKey] = typeInfo
-		slog.Debug("AliasManager: created new alias", "type", typeInfo.String(), "alias", alias)
+		slog.Debug("AliasManager: created new alias", "type", typeInfo.String(), "alias", alias, "uniqueKey", uniqueKey, "isManaged", am.isManagedType(typeInfo), "importPath", typeInfo.ImportPath)
 	}
 }
 

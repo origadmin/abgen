@@ -327,6 +327,13 @@ func (g *CodeGenerator) prepareAliasesForRender(cfg *config.Config, typeInfos ma
 
 		originalTypeName := g.typeFormatter.FormatWithoutAlias(typeInfo)
 
+		// --- ADDITIONAL FILTER FOR SELF-REFERENCING ALIASES ---
+		// Skip self-referencing aliases like "Gender = Gender"
+		if aliasName == originalTypeName {
+			slog.Debug("Skipping self-referencing alias", "alias", aliasName, "original", originalTypeName)
+			continue
+		}
+
 		renderInfos = append(renderInfos, &model.AliasRenderInfo{
 			AliasName:        aliasName,
 			OriginalTypeName: originalTypeName,
