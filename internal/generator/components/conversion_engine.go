@@ -61,8 +61,7 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 
 	if isSliceConversion {
 		slog.Debug("ConversionEngine: Dispatching to GenerateSliceConversion")
-		code, err := ce.GenerateSliceConversion(sourceInfo, targetInfo)
-		return code, nil, err
+		return ce.GenerateSliceConversion(sourceInfo, targetInfo)
 	}
 
 	if !isStructConversion {
@@ -75,7 +74,6 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 	sourceTypeStr := ce.typeFormatter.Format(sourceInfo)
 	targetTypeStr := ce.typeFormatter.Format(targetInfo)
 
-	// Corrected: Use formatted type strings for a descriptive comment.
 	buf.WriteString(fmt.Sprintf("// %s converts %s to %s.\n", funcName, sourceTypeStr, targetTypeStr))
 	buf.WriteString(fmt.Sprintf("func %s(from *%s) *%s {\n", funcName, sourceTypeStr, targetTypeStr))
 	buf.WriteString("\tif from == nil {\n\t\treturn nil\n\t}\n\n")
@@ -96,8 +94,9 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 
 func (ce *ConversionEngine) GenerateSliceConversion(
 	sourceInfo, targetInfo *model.TypeInfo,
-) (*model.GeneratedCode, error) {
+) (*model.GeneratedCode, []*model.ConversionTask, error) {
 	var buf strings.Builder
+	var newTasks []*model.ConversionTask
 
 	isSourcePtr := sourceInfo.Kind == model.Pointer
 	isTargetPtr := targetInfo.Kind == model.Pointer
@@ -109,7 +108,7 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	targetElem := ce.typeConverter.GetSliceElementType(actualTargetSlice)
 
 	if sourceElem == nil || targetElem == nil {
-		return nil, fmt.Errorf("could not determine element types for slice conversion from %s to %s", sourceInfo.UniqueKey(), targetInfo.UniqueKey())
+		return nil, nil, fmt.Errorf("could not determine element types for slice conversion from %s to %s", sourceInfo.UniqueKey(), targetInfo.UniqueKey())
 	}
 
 	sourceSliceStr := ce.typeFormatter.Format(sourceInfo)
@@ -123,7 +122,6 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 
 	funcName := ce.nameGenerator.ConversionFunctionName(sourceInfo, targetInfo)
 
-	// Corrected: Use formatted element type strings for a descriptive comment.
 	sourceElemStr := ce.typeFormatter.Format(sourceElem)
 	targetElemStr := ce.typeFormatter.Format(targetElem)
 	buf.WriteString(fmt.Sprintf("// %s converts a slice of %s to a slice of %s.\n", funcName, sourceElemStr, targetElemStr))
@@ -138,20 +136,28 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	buf.WriteString(fmt.Sprintf("\ttos := make(%s, len(%s))\n", targetSliceAllocStr, loopVar))
 	buf.WriteString(fmt.Sprintf("\tfor i, f := range %s {\n", loopVar))
 
-	elemFuncName := ce.nameGenerator.ConversionFunctionName(sourceElem, targetElem)
+	var assignment string
+	if sourceElem.UniqueKey() == targetElem.UniqueKey() {
+		assignment = "tos[i] = f"
+	} else {
+		elemFuncName := ce.nameGenerator.ConversionFunctionName(sourceElem, targetElem)
+		if _, exists := ce.existingFunctions[elemFuncName]; !exists {
+			elementTask := &model.ConversionTask{Source: sourceElem, Target: targetElem}
+			newTasks = append(newTasks, elementTask)
+		}
 
-	arg := "f"
-	if getConcreteType(sourceElem).Kind == model.Struct && sourceElem.Kind != model.Pointer {
-		arg = "&f"
+		arg := "f"
+		if getConcreteType(sourceElem).Kind == model.Struct && sourceElem.Kind != model.Pointer {
+			arg = "&f"
+		}
+
+		call := fmt.Sprintf("%s(%s)", elemFuncName, arg)
+
+		if getConcreteType(targetElem).Kind == model.Struct && targetElem.Kind != model.Pointer {
+			call = "*" + call
+		}
+		assignment = fmt.Sprintf("tos[i] = %s", call)
 	}
-
-	call := fmt.Sprintf("%s(%s)", elemFuncName, arg)
-
-	if getConcreteType(targetElem).Kind == model.Struct && targetElem.Kind != model.Pointer {
-		call = "*" + call
-	}
-
-	assignment := fmt.Sprintf("tos[i] = %s", call)
 
 	buf.WriteString(fmt.Sprintf("\t\t%s\n", assignment))
 	buf.WriteString("\t}\n")
@@ -164,7 +170,19 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 
 	buf.WriteString("}\n\n")
 
-	return &model.GeneratedCode{FunctionBody: buf.String()}, nil
+	return &model.GeneratedCode{FunctionBody: buf.String()}, newTasks, nil
+}
+
+func findField(typeInfo *model.TypeInfo, fieldName string) *model.FieldInfo {
+	if typeInfo == nil {
+		return nil
+	}
+	for _, f := range typeInfo.Fields {
+		if f.Name == fieldName || strings.EqualFold(f.Name, fieldName) {
+			return f
+		}
+	}
+	return nil
 }
 
 func (ce *ConversionEngine) generateStructToStructConversion(
@@ -177,26 +195,40 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 	var newTasks []*model.ConversionTask
 
 	targetTypeStr := ce.typeFormatter.Format(targetInfo)
+	sourceEdgesField := findField(sourceInfo, "Edges")
 
-	for _, sourceField := range sourceInfo.Fields {
-		if _, shouldIgnore := rule.FieldRules.Ignore[sourceField.Name]; shouldIgnore {
+	for _, targetField := range targetInfo.Fields {
+		if _, shouldIgnore := rule.FieldRules.Ignore[targetField.Name]; shouldIgnore {
 			continue
 		}
-		targetFieldName := sourceField.Name
-		if remappedName, ok := rule.FieldRules.Remap[sourceField.Name]; ok {
-			targetFieldName = remappedName
+
+		sourceFieldName := targetField.Name
+		if remappedName, ok := rule.FieldRules.Remap[targetField.Name]; ok {
+			sourceFieldName = remappedName
 		}
 
-		var targetField *model.FieldInfo
-		for _, tf := range targetInfo.Fields {
-			if tf.Name == targetFieldName || strings.EqualFold(tf.Name, targetFieldName) {
-				targetField = tf
-				break
+		var sourceField *model.FieldInfo
+		var sourceFieldExpr string
+
+		// Strategy 1: Find a direct field match in the source struct.
+		sourceField = findField(sourceInfo, sourceFieldName)
+		if sourceField != nil {
+			sourceFieldExpr = fmt.Sprintf("from.%s", sourceField.Name)
+		} else if sourceEdgesField != nil {
+			// Strategy 2: If no direct match, look inside the 'Edges' field.
+			edgeField := findField(sourceEdgesField.Type, sourceFieldName)
+			if edgeField != nil {
+				sourceField = edgeField
+				sourceFieldExpr = fmt.Sprintf("from.Edges.%s", edgeField.Name)
 			}
 		}
 
-		if targetField != nil {
-			conversionExpr, requiredHelpers, newTask, preAssignmentsForField := ce.getConversionExpression(sourceInfo, targetInfo, sourceField, targetField, "from")
+		if sourceField != nil {
+			conversionExpr, requiredHelpers, newTask, preAssignmentsForField := ce.getConversionExpression(
+				sourceField.Type,
+				targetField.Type,
+				sourceFieldExpr,
+			)
 			allRequiredHelpers = append(allRequiredHelpers, requiredHelpers...)
 			if newTask != nil {
 				newTasks = append(newTasks, newTask)
@@ -225,13 +257,9 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 }
 
 func (ce *ConversionEngine) getConversionExpression(
-	sourceParent, targetParent *model.TypeInfo,
-	sourceField, targetField *model.FieldInfo, fromVar string,
+	sourceType, targetType *model.TypeInfo,
+	sourceFieldExpr string,
 ) (string, []model.Helper, *model.ConversionTask, []string) {
-	sourceType := sourceField.Type
-	targetType := targetField.Type
-	sourceFieldExpr := fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
-
 	if sourceType.UniqueKey() == targetType.UniqueKey() {
 		return sourceFieldExpr, nil, nil, nil
 	}
@@ -249,7 +277,7 @@ func (ce *ConversionEngine) getConversionExpression(
 			return "&" + sourceFieldExpr, nil, nil, nil
 		}
 		if isSourcePtr && !isTargetPtr {
-			tempVarName := fmt.Sprintf("temp%s", targetField.Name)
+			tempVarName := fmt.Sprintf("temp%s", strings.ReplaceAll(sourceFieldExpr, ".", ""))
 			targetTypeStr := ce.typeFormatter.Format(targetType)
 			preAssignment := fmt.Sprintf("\tvar %s %s\n\tif %s != nil {\n\t\t%s = *%s\n\t}", tempVarName, targetTypeStr, sourceFieldExpr, tempVarName, sourceFieldExpr)
 			return tempVarName, nil, nil, []string{preAssignment}
@@ -275,7 +303,7 @@ func (ce *ConversionEngine) getConversionExpression(
 		(concreteSourceType.Kind == model.Slice && concreteTargetType.Kind == model.Slice) {
 		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
 		newTask = &model.ConversionTask{Source: sourceType, Target: targetType}
-		
+
 		if concreteSourceType.Kind == model.Struct {
 			arg := sourceFieldExpr
 			if sourceType.Kind != model.Pointer {
@@ -290,12 +318,8 @@ func (ce *ConversionEngine) getConversionExpression(
 		return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, newTask, nil
 	}
 
-	if sourceType.Kind == model.Named && targetType.Kind == model.Named {
-		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
-	} else {
-		convFuncName = ce.nameGenerator.FieldConversionFunctionName(sourceParent, targetParent, sourceField, targetField)
-	}
-
+	// Fallback for other types, though less common for complex conversions.
+	convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
 	if _, exists := ce.existingFunctions[convFuncName]; !exists {
 		stubTask := &model.ConversionTask{Source: sourceType, Target: targetType}
 		ce.stubsToGenerate[convFuncName] = stubTask
@@ -337,10 +361,6 @@ func (ce *ConversionEngine) addRequiredImportsForHelper(helper model.Helper) {
 	for _, pkg := range helper.Dependencies {
 		ce.importManager.Add(pkg)
 	}
-}
-
-func (ce *ConversionEngine) needsTemporaryVariable(sourceType, targetType *model.TypeInfo) bool {
-	return false
 }
 
 func (ce *ConversionEngine) GetStubsToGenerate() map[string]*model.ConversionTask {

@@ -76,7 +76,7 @@ type AliasManager interface {
 // of conversion functions.
 type ConversionEngine interface {
 	GenerateConversionFunction(source, target *TypeInfo, rule *config.ConversionRule) (*GeneratedCode, []*ConversionTask, error)
-	GenerateSliceConversion(source, target *TypeInfo) (*GeneratedCode, error)
+	GenerateSliceConversion(source, target *TypeInfo) (*GeneratedCode, []*ConversionTask, error)
 	GetStubsToGenerate() map[string]*ConversionTask
 }
 
