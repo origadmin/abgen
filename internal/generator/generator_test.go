@@ -176,8 +176,7 @@ func TestCodeGenerator_Generate(t *testing.T) {
 				}
 			}
 
-			orchestrator := NewCodeGenerator()
-			response, err := orchestrator.Generate(analysisResult)
+			response, err := Generate(analysisResult)
 			if err != nil {
 				t.Fatalf("Generate() failed for test case %s: %v", tc.name, err)
 			}

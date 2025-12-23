@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	version      = "0.0.1"
+	version      = config.Version
 	commit       = ""
 	treeState    = ""
 	date         = ""
@@ -91,8 +91,7 @@ func main() {
 
 	// --- 3. Generate Code ---
 	slog.Debug("Generating code...")
-	gen := generator.NewCodeGenerator()
-	response, err := gen.Generate(analysisResult)
+	response, err := generator.Generate(analysisResult)
 	if err != nil {
 		slog.Error("Code generation failed", "error", err)
 		os.Exit(1)

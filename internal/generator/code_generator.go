@@ -14,79 +14,95 @@ import (
 	"github.com/origadmin/abgen/internal/model"
 )
 
-// CodeGenerator orchestrates the entire code generation process based on a definitive execution plan.
-type CodeGenerator struct {
+// generationSession holds all the necessary components and state for a single code generation task.
+type generationSession struct {
+	analysisResult *model.AnalysisResult
+	plan           *model.ExecutionPlan
+	cfg            *config.Config
+
 	importManager    model.ImportManager
-	nameGenerator    model.NameGenerator
 	aliasManager     model.AliasManager
+	nameGenerator    model.NameGenerator
+	typeFormatter    model.TypeFormatter
+	typeConverter    model.TypeConverter
 	conversionEngine model.ConversionEngine
 	codeEmitter      model.CodeEmitter
-	typeConverter    model.TypeConverter
-	typeFormatter    model.TypeFormatter
 }
 
-// NewCodeGenerator creates a new, stateless code generator.
-func NewCodeGenerator() model.CodeGenerator {
-	return &CodeGenerator{
-		typeConverter: components.NewTypeConverter(),
-	}
-}
-
-// initializeComponents configures the generator's components for a specific generation task
-// based on the final execution plan.
-func (g *CodeGenerator) initializeComponents(analysisResult *model.AnalysisResult) {
-	plan := analysisResult.ExecutionPlan
-	cfg := plan.FinalConfig
-
-	g.importManager = components.NewImportManager()
-	for alias, path := range cfg.PackageAliases {
-		g.importManager.AddAs(path, alias)
-	}
-	slog.Debug("Generator: ImportManager initialized", "imports", g.importManager.GetAllImports())
-
-	g.aliasManager = components.NewAliasManager(cfg, g.importManager, analysisResult.TypeInfos, analysisResult.ExistingAliases)
-	g.nameGenerator = components.NewNameGenerator(g.aliasManager)
-	g.typeFormatter = components.NewTypeFormatter(g.aliasManager, g.importManager, analysisResult.TypeInfos)
-
-	g.conversionEngine = components.NewConversionEngine(
-		g.typeConverter,
-		g.nameGenerator,
-		g.typeFormatter,
-		g.importManager,
-		analysisResult.ExistingFunctions,
-	)
-
-	g.codeEmitter = components.NewCodeEmitter(cfg)
-}
-
-// Generate executes a complete code generation task based on the provided analysis result.
-func (g *CodeGenerator) Generate(analysisResult *model.AnalysisResult) (*model.GenerationResponse, error) {
+// Generate is the single public entry point for the generator package.
+func Generate(analysisResult *model.AnalysisResult) (*model.GenerationResponse, error) {
 	if analysisResult == nil || analysisResult.ExecutionPlan == nil {
 		return nil, fmt.Errorf("cannot generate code without a valid analysis result and execution plan")
 	}
 
-	g.initializeComponents(analysisResult)
-	slog.Debug("Generator: Components initialized with final execution plan.")
+	session, err := newGenerationSession(analysisResult)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create generation session: %w", err)
+	}
 
-	g.aliasManager.PopulateAliases()
+	return session.run()
+}
 
-	generatedCode, err := g.generateMainCode(analysisResult)
+// newGenerationSession creates and initializes a new session with all its components.
+func newGenerationSession(analysisResult *model.AnalysisResult) (*generationSession, error) {
+	// Create components in dependency order, passing the analysisResult as the single source of truth.
+	typeConverter := components.NewTypeConverter()
+	importManager := components.NewImportManager()
+	for alias, path := range analysisResult.ExecutionPlan.FinalConfig.PackageAliases {
+		importManager.AddAs(path, alias)
+	}
+
+	aliasManager := components.NewAliasManager(analysisResult, importManager)
+	nameGenerator := components.NewNameGenerator(aliasManager)
+	typeFormatter := components.NewTypeFormatter(analysisResult, aliasManager, importManager)
+	codeEmitter := components.NewCodeEmitter(analysisResult)
+
+	conversionEngine := components.NewConversionEngine(
+		analysisResult,
+		typeConverter,
+		nameGenerator,
+		typeFormatter,
+		importManager,
+	)
+
+	return &generationSession{
+		analysisResult:   analysisResult,
+		plan:             analysisResult.ExecutionPlan,
+		cfg:              analysisResult.ExecutionPlan.FinalConfig,
+		typeConverter:    typeConverter,
+		importManager:    importManager,
+		aliasManager:     aliasManager,
+		nameGenerator:    nameGenerator,
+		typeFormatter:    typeFormatter,
+		conversionEngine: conversionEngine,
+		codeEmitter:      codeEmitter,
+	}, nil
+}
+
+// run executes the main generation logic for the session.
+func (s *generationSession) run() (*model.GenerationResponse, error) {
+	slog.Debug("Generator session: Running...")
+
+	s.aliasManager.PopulateAliases()
+
+	generatedCode, err := s.generateMainCode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate main code: %w", err)
 	}
 
-	customStubs, err := g.generateCustomStubs(analysisResult)
+	customStubs, err := s.generateCustomStubs()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate custom stubs: %w", err)
 	}
 
-	importMap := g.importManager.GetAllImports()
+	importMap := s.importManager.GetAllImports()
 	requiredPackages := make([]string, 0, len(importMap))
 	for pkgPath := range importMap {
 		requiredPackages = append(requiredPackages, pkgPath)
 	}
 	sort.Strings(requiredPackages)
 
+	slog.Debug("Generator session: Finished.")
 	return &model.GenerationResponse{
 		GeneratedCode:    generatedCode,
 		CustomStubs:      customStubs,
@@ -94,27 +110,27 @@ func (g *CodeGenerator) Generate(analysisResult *model.AnalysisResult) (*model.G
 	}, nil
 }
 
-func (g *CodeGenerator) generateMainCode(analysisResult *model.AnalysisResult) ([]byte, error) {
+// generateMainCode produces the primary generated file content.
+func (s *generationSession) generateMainCode() ([]byte, error) {
 	finalBuf := new(bytes.Buffer)
-	plan := analysisResult.ExecutionPlan
 
-	conversionFuncs, requiredHelpers, err := g.generateConversionCode(analysisResult.TypeInfos, plan.ActiveRules)
+	conversionFuncs, requiredHelpers, err := s.generateConversionCode()
 	if err != nil {
 		return nil, err
 	}
 
-	aliasesToRender := g.prepareAliasesForRender(analysisResult)
+	aliasesToRender := s.prepareAliasesForRender()
 
-	if err := g.codeEmitter.EmitHeader(finalBuf); err != nil {
+	if err := s.codeEmitter.EmitHeader(finalBuf); err != nil {
 		return nil, err
 	}
-	if err := g.codeEmitter.EmitImports(finalBuf, g.importManager.GetAllImports()); err != nil {
+	if err := s.codeEmitter.EmitImports(finalBuf, s.importManager.GetAllImports()); err != nil {
 		return nil, err
 	}
-	if err := g.codeEmitter.EmitAliases(finalBuf, aliasesToRender); err != nil {
+	if err := s.codeEmitter.EmitAliases(finalBuf, aliasesToRender); err != nil {
 		return nil, err
 	}
-	if err := g.codeEmitter.EmitConversions(finalBuf, conversionFuncs); err != nil {
+	if err := s.codeEmitter.EmitConversions(finalBuf, conversionFuncs); err != nil {
 		return nil, err
 	}
 
@@ -131,37 +147,35 @@ func (g *CodeGenerator) generateMainCode(analysisResult *model.AnalysisResult) (
 		}
 	}
 
-	if err := g.codeEmitter.EmitHelpers(finalBuf, helpersToEmit); err != nil {
+	if err := s.codeEmitter.EmitHelpers(finalBuf, helpersToEmit); err != nil {
 		return nil, err
 	}
-	process, err := imports.Process("", finalBuf.Bytes(), &imports.Options{
+
+	return imports.Process("", finalBuf.Bytes(), &imports.Options{
 		Fragment:  true,
 		Comments:  true,
 		TabWidth:  8,
 		TabIndent: true,
 	})
-	if err != nil {
-		return nil, err
-	}
-	return process, nil
 }
 
-func (g *CodeGenerator) prepareAliasesForRender(analysisResult *model.AnalysisResult) []*model.AliasRenderInfo {
+// prepareAliasesForRender creates the list of aliases to be rendered in the final code.
+func (s *generationSession) prepareAliasesForRender() []*model.AliasRenderInfo {
 	var renderInfos []*model.AliasRenderInfo
-	typesToAlias := g.aliasManager.GetAliasedTypes()
+	typesToAlias := s.aliasManager.GetAliasedTypes()
 
 	for uniqueKey, typeInfo := range typesToAlias {
-		aliasName, ok := g.aliasManager.LookupAlias(uniqueKey)
+		aliasName, ok := s.aliasManager.LookupAlias(uniqueKey)
 		if !ok {
 			continue
 		}
 
-		if _, exists := analysisResult.ExistingAliases[aliasName]; exists {
+		if _, exists := s.analysisResult.ExistingAliases[aliasName]; exists {
 			slog.Debug("Skipping alias rendering, name already defined by user", "alias", aliasName)
 			continue
 		}
 
-		originalTypeName := g.typeFormatter.FormatWithoutAlias(typeInfo)
+		originalTypeName := s.typeFormatter.FormatWithoutAlias(typeInfo)
 
 		if aliasName == originalTypeName {
 			slog.Debug("Skipping self-referencing alias", "alias", aliasName, "original", originalTypeName)
@@ -181,22 +195,21 @@ func (g *CodeGenerator) prepareAliasesForRender(analysisResult *model.AnalysisRe
 	return renderInfos
 }
 
-func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeInfo, rules []*config.ConversionRule) ([]string, map[string]struct{}, error) {
+// generateConversionCode generates all necessary conversion functions.
+func (s *generationSession) generateConversionCode() ([]string, map[string]struct{}, error) {
 	var conversionFuncs []string
 	requiredHelpers := make(map[string]struct{})
 	generatedFunctions := make(map[string]bool)
 	worklist := make([]*model.ConversionTask, 0)
 
-	for _, rule := range rules {
-		sourceInfo := typeInfos[rule.SourceType]
-		targetInfo := typeInfos[rule.TargetType]
+	for _, rule := range s.plan.ActiveRules {
+		sourceInfo := s.analysisResult.TypeInfos[rule.SourceType]
+		targetInfo := s.analysisResult.TypeInfos[rule.TargetType]
 		if sourceInfo == nil || targetInfo == nil {
 			continue
 		}
 
 		if rule.Direction == config.DirectionBoth {
-			slog.Debug("Decomposing bilateral rule into two one-way tasks.", "source", rule.SourceType, "target", rule.TargetType)
-
 			forwardRule := *rule
 			forwardRule.Direction = config.DirectionOneway
 			worklist = append(worklist, &model.ConversionTask{Source: sourceInfo, Target: targetInfo, Rule: &forwardRule})
@@ -220,12 +233,12 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 		task := worklist[0]
 		worklist = worklist[1:]
 
-		funcName := g.nameGenerator.ConversionFunctionName(task.Source, task.Target)
+		funcName := s.nameGenerator.ConversionFunctionName(task.Source, task.Target)
 		if generatedFunctions[funcName] {
 			continue
 		}
 
-		generated, newTasks, err := g.conversionEngine.GenerateConversionFunction(task.Source, task.Target, task.Rule)
+		generated, newTasks, err := s.conversionEngine.GenerateConversionFunction(task.Source, task.Target, task.Rule)
 		if err != nil {
 			slog.Warn("Error generating conversion function", "source", task.Source.FQN(), "target", task.Target.FQN(), "error", err)
 			continue
@@ -238,7 +251,7 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 				requiredHelpers[helper.Name] = struct{}{}
 			}
 			for _, newTask := range newTasks {
-				newFuncName := g.nameGenerator.ConversionFunctionName(newTask.Source, newTask.Target)
+				newFuncName := s.nameGenerator.ConversionFunctionName(newTask.Source, newTask.Target)
 				if !generatedFunctions[newFuncName] {
 					worklist = append(worklist, newTask)
 				}
@@ -250,14 +263,15 @@ func (g *CodeGenerator) generateConversionCode(typeInfos map[string]*model.TypeI
 	return conversionFuncs, requiredHelpers, nil
 }
 
-func (g *CodeGenerator) generateCustomStubs(analysisResult *model.AnalysisResult) ([]byte, error) {
-	stubs := g.conversionEngine.GetStubsToGenerate()
+// generateCustomStubs produces a file with function stubs for custom conversions.
+func (s *generationSession) generateCustomStubs() ([]byte, error) {
+	stubs := s.conversionEngine.GetStubsToGenerate()
 	if len(stubs) == 0 {
 		return nil, nil
 	}
 
 	stubImportManager := components.NewImportManager()
-	stubTypeFormatter := components.NewTypeFormatter(g.aliasManager, stubImportManager, analysisResult.TypeInfos)
+	stubTypeFormatter := components.NewTypeFormatter(s.analysisResult, s.aliasManager, stubImportManager)
 
 	var stubFunctions []string
 	var stubNames []string
@@ -282,24 +296,20 @@ func (g *CodeGenerator) generateCustomStubs(analysisResult *model.AnalysisResult
 	}
 
 	var finalBuf bytes.Buffer
-	if err := g.codeEmitter.EmitStubHeader(&finalBuf); err != nil {
+	if err := s.codeEmitter.EmitStubHeader(&finalBuf); err != nil {
 		return nil, fmt.Errorf("failed to emit header for stubs: %w", err)
 	}
-	if err := g.codeEmitter.EmitImports(&finalBuf, stubImportManager.GetAllImports()); err != nil {
+	if err := s.codeEmitter.EmitImports(&finalBuf, stubImportManager.GetAllImports()); err != nil {
 		return nil, fmt.Errorf("failed to emit imports for stubs: %w", err)
 	}
-	if err := g.codeEmitter.EmitConversions(&finalBuf, stubFunctions); err != nil {
+	if err := s.codeEmitter.EmitConversions(&finalBuf, stubFunctions); err != nil {
 		return nil, fmt.Errorf("failed to emit stubs: %w", err)
 	}
 
-	process, err := imports.Process("", finalBuf.Bytes(), &imports.Options{
+	return imports.Process("", finalBuf.Bytes(), &imports.Options{
 		Fragment:  true,
 		Comments:  true,
 		TabWidth:  8,
 		TabIndent: true,
 	})
-	if err != nil {
-		return nil, err
-	}
-	return process, nil
 }

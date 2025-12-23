@@ -35,11 +35,6 @@ type Planner interface {
 	Plan(initialConfig *config.Config, typeInfos map[string]*TypeInfo) *ExecutionPlan
 }
 
-// CodeGenerator defines the top-level interface for the code generation orchestrator.
-type CodeGenerator interface {
-	Generate(analysisResult *AnalysisResult) (*GenerationResponse, error)
-}
-
 // TypeAnalyzer defines the interface for the type analysis component.
 type TypeAnalyzer interface {
 	Analyze(sourceDir string) (*AnalysisResult, error)
@@ -77,14 +72,16 @@ type AliasManager interface {
 	GetTargetPath() string
 }
 
-// ConversionEngine defines the interface for the component that generates the body of conversion functions.
+// ConversionEngine defines the interface for the component that generates the body
+// of conversion functions.
 type ConversionEngine interface {
 	GenerateConversionFunction(source, target *TypeInfo, rule *config.ConversionRule) (*GeneratedCode, []*ConversionTask, error)
 	GenerateSliceConversion(source, target *TypeInfo) (*GeneratedCode, error)
 	GetStubsToGenerate() map[string]*ConversionTask
 }
 
-// CodeEmitter defines the interface for writing the various sections of the final generated Go file.
+// CodeEmitter defines the interface for writing the various sections of the final
+// generated Go file.
 type CodeEmitter interface {
 	EmitHeader(buf *bytes.Buffer) error
 	EmitStubHeader(buf *bytes.Buffer) error

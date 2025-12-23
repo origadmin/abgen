@@ -3,6 +3,7 @@ package config
 
 // Global constants for the application.
 const (
+	Version     = "0.0.1"
 	Application = "abgen"
 	Description = "Alias Binding Generator is a tool for generating code for conversion between two types"
 	WebSite     = "https://github.com/origadmin/abgen"

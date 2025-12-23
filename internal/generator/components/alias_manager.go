@@ -19,7 +19,7 @@ var nonManagedPackages = map[string]struct{}{
 }
 
 type AliasManager struct {
-	config              *config.Config
+	cfg                 *config.Config
 	importManager       model.ImportManager
 	aliasMap            map[string]string
 	typeInfos           map[string]*model.TypeInfo
@@ -31,22 +31,21 @@ type AliasManager struct {
 
 var camelCaseRegexp = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
+// NewAliasManager creates a new alias manager. It derives its state from the analysis result.
 func NewAliasManager(
-	config *config.Config,
+	analysisResult *model.AnalysisResult,
 	importManager model.ImportManager,
-	typeInfos map[string]*model.TypeInfo,
-	existingAliases map[string]string,
 ) model.AliasManager {
-	fqnToAlias := make(map[string]string, len(existingAliases))
-	for alias, fqn := range existingAliases {
+	fqnToAlias := make(map[string]string, len(analysisResult.ExistingAliases))
+	for alias, fqn := range analysisResult.ExistingAliases {
 		fqnToAlias[fqn] = alias
 	}
 
 	return &AliasManager{
-		config:              config,
+		cfg:                 analysisResult.ExecutionPlan.FinalConfig,
 		importManager:       importManager,
 		aliasMap:            make(map[string]string),
-		typeInfos:           typeInfos,
+		typeInfos:           analysisResult.TypeInfos,
 		aliasedTypes:        make(map[string]*model.TypeInfo),
 		managedPackagePaths: make(map[string]struct{}),
 		fqnToExistingAlias:  fqnToAlias,
@@ -79,13 +78,13 @@ func (am *AliasManager) LookupAlias(uniqueKey string) (string, bool) {
 }
 
 func (am *AliasManager) PopulateAliases() {
-	for _, rule := range am.config.ConversionRules {
+	for _, rule := range am.cfg.ConversionRules {
 		am.addManagedPackage(getPkgPath(rule.SourceType))
 		am.addManagedPackage(getPkgPath(rule.TargetType))
 	}
 	slog.Debug("AliasManager: collected managed packages for aliasing", "paths", am.managedPackagePaths)
 
-	for _, rule := range am.config.ConversionRules {
+	for _, rule := range am.cfg.ConversionRules {
 		sourceInfo := am.typeInfos[rule.SourceType]
 		targetInfo := am.typeInfos[rule.TargetType]
 		if sourceInfo != nil {
@@ -169,7 +168,6 @@ func (am *AliasManager) isManagedType(info *model.TypeInfo) bool {
 	}
 }
 
-// getRecursiveBaseName constructs a pure base name for a type, handling pluralization for slices.
 func (am *AliasManager) getRecursiveBaseName(info *model.TypeInfo) string {
 	if info == nil {
 		return ""
@@ -199,7 +197,6 @@ func (am *AliasManager) getRecursiveBaseName(info *model.TypeInfo) string {
 	}
 }
 
-// generateAlias creates a new alias by applying prefixes/suffixes to a recursive base name.
 func (am *AliasManager) generateAlias(info *model.TypeInfo, isSource bool) string {
 	baseName := am.getRecursiveBaseName(info)
 	prefix, suffix := am.getPrefixAndSuffix(isSource)
@@ -209,9 +206,9 @@ func (am *AliasManager) generateAlias(info *model.TypeInfo, isSource bool) strin
 
 func (am *AliasManager) getPrefixAndSuffix(isSource bool) (string, string) {
 	if isSource {
-		return am.config.NamingRules.SourcePrefix, am.config.NamingRules.SourceSuffix
+		return am.cfg.NamingRules.SourcePrefix, am.cfg.NamingRules.SourceSuffix
 	}
-	return am.config.NamingRules.TargetPrefix, am.config.NamingRules.TargetSuffix
+	return am.cfg.NamingRules.TargetPrefix, am.cfg.NamingRules.TargetSuffix
 }
 
 func (am *AliasManager) toCamelCase(s string) string {
@@ -232,14 +229,14 @@ func (am *AliasManager) toCamelCase(s string) string {
 
 func (am *AliasManager) GetAllAliases() map[string]string { return am.aliasMap }
 func (am *AliasManager) GetSourcePath() string {
-	if len(am.config.PackagePairs) > 0 {
-		return am.config.PackagePairs[0].SourcePath
+	if len(am.cfg.PackagePairs) > 0 {
+		return am.cfg.PackagePairs[0].SourcePath
 	}
 	return ""
 }
 func (am *AliasManager) GetTargetPath() string {
-	if len(am.config.PackagePairs) > 0 {
-		return am.config.PackagePairs[0].TargetPath
+	if len(am.cfg.PackagePairs) > 0 {
+		return am.cfg.PackagePairs[0].TargetPath
 	}
 	return ""
 }

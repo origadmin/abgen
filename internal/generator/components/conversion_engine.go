@@ -24,11 +24,11 @@ type ConversionEngine struct {
 
 // NewConversionEngine creates a new conversion engine.
 func NewConversionEngine(
+	analysisResult *model.AnalysisResult,
 	typeConverter model.TypeConverter,
 	nameGenerator model.NameGenerator,
 	typeFormatter model.TypeFormatter,
 	importManager model.ImportManager,
-	existingFunctions map[string]bool,
 ) model.ConversionEngine {
 	ce := &ConversionEngine{
 		typeConverter:     typeConverter,
@@ -37,7 +37,7 @@ func NewConversionEngine(
 		importManager:     importManager,
 		stubsToGenerate:   make(map[string]*model.ConversionTask),
 		helperMap:         make(map[string]model.Helper),
-		existingFunctions: existingFunctions,
+		existingFunctions: analysisResult.ExistingFunctions,
 	}
 	ce.initializeHelpers()
 	return ce

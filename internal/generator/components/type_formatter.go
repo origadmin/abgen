@@ -8,31 +8,31 @@ import (
 )
 
 // TypeFormatter is responsible for converting a types.Type into its string representation.
-// It consults an AliasManager to determine if an alias should be used for a type
-// and uses an ImportManager to handle package qualification.
 type TypeFormatter struct {
 	aliasManager  model.AliasManager
 	importManager model.ImportManager
-	typeInfos     map[string]*model.TypeInfo // Added to resolve TypeInfo from types.Type
+	typeInfos     map[string]*model.TypeInfo
 }
 
 // NewTypeFormatter creates a new TypeFormatter.
-func NewTypeFormatter(aliasManager model.AliasManager, importManager model.ImportManager, typeInfos map[string]*model.TypeInfo) *TypeFormatter {
+func NewTypeFormatter(
+	analysisResult *model.AnalysisResult,
+	aliasManager model.AliasManager,
+	importManager model.ImportManager,
+) model.TypeFormatter {
 	return &TypeFormatter{
 		aliasManager:  aliasManager,
 		importManager: importManager,
-		typeInfos:     typeInfos,
+		typeInfos:     analysisResult.TypeInfos,
 	}
 }
 
 // Format converts the given Go type into its string representation.
-// It's a sophisticated version of types.TypeString that is aware of the generator's aliasing and import context.
 func (f *TypeFormatter) Format(info *model.TypeInfo) string {
 	return f.formatTypeInfo(info, true) // Check for aliases
 }
 
 // FormatWithoutAlias converts the given Go type into its string representation without using aliases.
-// This is used when we need the original type name for alias generation.
 func (f *TypeFormatter) FormatWithoutAlias(info *model.TypeInfo) string {
 	return f.formatTypeInfo(info, false) // Do not check for aliases
 }
@@ -77,7 +77,6 @@ func (f *TypeFormatter) formatTypeInfo(info *model.TypeInfo, checkAlias bool) st
 		}
 		return "struct{}"
 	default:
-		// Fallback for types not explicitly handled (e.g., Chan, Func, etc.)
 		if info.Original != nil {
 			return types.TypeString(info.Original.Type(), f.qualifier)
 		}
@@ -87,46 +86,17 @@ func (f *TypeFormatter) formatTypeInfo(info *model.TypeInfo, checkAlias bool) st
 
 func (f *TypeFormatter) qualifiedNameFromInfo(info *model.TypeInfo) string {
 	if info.ImportPath == "" {
-		return info.Name // Built-in type
+		return info.Name
 	}
 
-	// Find the package from the import manager to get the correct alias
 	pkgAlias, found := f.importManager.GetAlias(info.ImportPath)
 	if !found {
-		// This should not happen if all types are analyzed correctly
 		return info.Name
 	}
 
 	return fmt.Sprintf("%s.%s", pkgAlias, info.Name)
 }
 
-// qualifier is a helper for the fallback types.TypeString function.
 func (f *TypeFormatter) qualifier(pkg *types.Package) string {
 	return f.importManager.PackageName(pkg)
-}
-
-// getTypeInfoFromGoType attempts to find a model.TypeInfo for a given Go types.Type.
-// This is crucial for alias lookup for composite types.
-func (f *TypeFormatter) getTypeInfoFromGoType(goType types.Type) *model.TypeInfo {
-	// For named types, we can directly construct the unique key
-	if named, ok := goType.(*types.Named); ok {
-		if named.Obj().Pkg() != nil {
-			uniqueKey := named.Obj().Pkg().Path() + "." + named.Obj().Name()
-			if info, exists := f.typeInfos[uniqueKey]; exists {
-				return info
-			}
-		}
-	}
-
-	// For composite types, we need to construct a unique key that represents their structure.
-	// This is a simplified approach and might need to be more robust for complex scenarios.
-	// The TypeInfo for composite types should ideally be pre-populated during analysis.
-	// For now, we'll try to match based on string representation if not a named type.
-	// This part might need further refinement in the TypeAnalyzer.
-	uniqueKey := model.GenerateUniqueKeyFromGoType(goType)
-	if info, exists := f.typeInfos[uniqueKey]; exists {
-		return info
-	}
-
-	return nil
 }
