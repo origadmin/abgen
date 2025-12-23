@@ -11,7 +11,6 @@ import (
 
 var _ model.ConversionEngine = (*ConversionEngine)(nil)
 
-// ConversionEngine implements the ConversionEngine interface.
 type ConversionEngine struct {
 	typeConverter     model.TypeConverter
 	nameGenerator     model.NameGenerator
@@ -22,7 +21,6 @@ type ConversionEngine struct {
 	existingFunctions map[string]bool
 }
 
-// NewConversionEngine creates a new conversion engine.
 func NewConversionEngine(
 	analysisResult *model.AnalysisResult,
 	typeConverter model.TypeConverter,
@@ -50,7 +48,6 @@ func (ce *ConversionEngine) initializeHelpers() {
 	}
 }
 
-// GenerateConversionFunction generates a conversion function for structs or delegates to slice conversion.
 func (ce *ConversionEngine) GenerateConversionFunction(
 	sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule,
 ) (*model.GeneratedCode, []*model.ConversionTask, error) {
@@ -96,7 +93,6 @@ func (ce *ConversionEngine) GenerateConversionFunction(
 	}, newTasks, nil
 }
 
-// GenerateSliceConversion generates a function to convert a slice of one type to a slice of another.
 func (ce *ConversionEngine) GenerateSliceConversion(
 	sourceInfo, targetInfo *model.TypeInfo,
 ) (*model.GeneratedCode, error) {
@@ -169,7 +165,6 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	return &model.GeneratedCode{FunctionBody: buf.String()}, nil
 }
 
-// generateStructToStructConversion handles the field-by-field mapping.
 func (ce *ConversionEngine) generateStructToStructConversion(
 	sourceInfo, targetInfo *model.TypeInfo, rule *config.ConversionRule,
 ) (string, []model.Helper, []*model.ConversionTask, error) {
@@ -192,31 +187,19 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 
 		var targetField *model.FieldInfo
 		for _, tf := range targetInfo.Fields {
-			if tf.Name == targetFieldName {
-				targetField = tf
-				break
-			}
-			if strings.EqualFold(tf.Name, targetFieldName) {
+			if tf.Name == targetFieldName || strings.EqualFold(tf.Name, targetFieldName) {
 				targetField = tf
 				break
 			}
 		}
 
 		if targetField != nil {
-			conversionExpr, requiredHelpers, newTask := ce.getConversionExpression(sourceInfo, targetInfo, sourceField, targetField, "from")
+			conversionExpr, requiredHelpers, newTask, preAssignmentsForField := ce.getConversionExpression(sourceInfo, targetInfo, sourceField, targetField, "from")
 			allRequiredHelpers = append(allRequiredHelpers, requiredHelpers...)
 			if newTask != nil {
 				newTasks = append(newTasks, newTask)
 			}
-
-			if ce.needsTemporaryVariable(sourceField.Type, targetField.Type) {
-				tempVarName := fmt.Sprintf("temp%s", targetField.Name)
-				preAssignments = append(preAssignments, fmt.Sprintf("\t%s := %s", tempVarName, conversionExpr))
-				conversionExpr = tempVarName
-				if targetField.Type.Kind == model.Pointer && getConcreteType(targetField.Type.Underlying).Kind == model.Slice {
-					conversionExpr = fmt.Sprintf("&%s", conversionExpr)
-				}
-			}
+			preAssignments = append(preAssignments, preAssignmentsForField...)
 
 			fieldAssignments = append(fieldAssignments, fmt.Sprintf("\t\t%s: %s,", targetField.Name, conversionExpr))
 		}
@@ -237,6 +220,88 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 	buf.WriteString("\treturn to\n")
 
 	return buf.String(), allRequiredHelpers, newTasks, nil
+}
+
+func (ce *ConversionEngine) getConversionExpression(
+	sourceParent, targetParent *model.TypeInfo,
+	sourceField, targetField *model.FieldInfo, fromVar string,
+) (string, []model.Helper, *model.ConversionTask, []string) {
+	sourceType := sourceField.Type
+	targetType := targetField.Type
+	sourceFieldExpr := fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
+
+	if sourceType.UniqueKey() == targetType.UniqueKey() {
+		return sourceFieldExpr, nil, nil, nil
+	}
+
+	isSourcePtr := sourceType.Kind == model.Pointer
+	isTargetPtr := targetType.Kind == model.Pointer
+	sourceElem := ce.typeConverter.GetElementType(sourceType)
+	targetElem := ce.typeConverter.GetElementType(targetType)
+
+	isSimplePointerSwap := sourceElem.UniqueKey() == targetElem.UniqueKey() &&
+		sourceElem.Kind != model.Slice && sourceElem.Kind != model.Map && sourceElem.Kind != model.Struct
+
+	if isSimplePointerSwap {
+		if !isSourcePtr && isTargetPtr {
+			return "&" + sourceFieldExpr, nil, nil, nil
+		}
+		if isSourcePtr && !isTargetPtr {
+			tempVarName := fmt.Sprintf("temp%s", targetField.Name)
+			targetTypeStr := ce.typeFormatter.Format(targetType)
+			preAssignment := fmt.Sprintf("\tvar %s %s\n\tif %s != nil {\n\t\t%s = *%s\n\t}", tempVarName, targetTypeStr, sourceFieldExpr, tempVarName, sourceFieldExpr)
+			return tempVarName, nil, nil, []string{preAssignment}
+		}
+	}
+
+	if canUseSimpleTypeConversion(sourceType, targetType) {
+		targetTypeStr := ce.typeFormatter.Format(targetType)
+		return fmt.Sprintf("%s(%s)", targetTypeStr, sourceFieldExpr), nil, nil, nil
+	}
+
+	if helper, found := ce.findHelper(sourceType, targetType); found {
+		ce.addRequiredImportsForHelper(helper)
+		return fmt.Sprintf("%s(%s)", helper.Name, sourceFieldExpr), []model.Helper{helper}, nil, nil
+	}
+
+	concreteSourceType := getConcreteType(sourceType)
+	concreteTargetType := getConcreteType(targetType)
+	var convFuncName string
+	var newTask *model.ConversionTask
+
+	if (concreteSourceType.Kind == model.Struct && concreteTargetType.Kind == model.Struct) ||
+		(concreteSourceType.Kind == model.Slice && concreteTargetType.Kind == model.Slice) {
+		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
+		newTask = &model.ConversionTask{Source: sourceType, Target: targetType}
+		
+		// For struct conversions, handle pointer wrapping/unwrapping at the call site
+		if concreteSourceType.Kind == model.Struct {
+			arg := sourceFieldExpr
+			if sourceType.Kind != model.Pointer {
+				arg = "&" + sourceFieldExpr
+			}
+			expr := fmt.Sprintf("%s(%s)", convFuncName, arg)
+			if targetType.Kind != model.Pointer {
+				expr = "*" + expr
+			}
+			return expr, nil, newTask, nil
+		}
+		// For slice conversions, the generated function handles pointers, so just call it.
+		return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, newTask, nil
+	}
+
+	if sourceType.Kind == model.Named && targetType.Kind == model.Named {
+		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
+	} else {
+		convFuncName = ce.nameGenerator.FieldConversionFunctionName(sourceParent, targetParent, sourceField, targetField)
+	}
+
+	if _, exists := ce.existingFunctions[convFuncName]; !exists {
+		stubTask := &model.ConversionTask{Source: sourceType, Target: targetType}
+		ce.stubsToGenerate[convFuncName] = stubTask
+	}
+
+	return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, nil, nil
 }
 
 func getConcreteType(info *model.TypeInfo) *model.TypeInfo {
@@ -262,80 +327,6 @@ func getEffectiveTypeInfo(info *model.TypeInfo) *model.TypeInfo {
 	return info
 }
 
-func (ce *ConversionEngine) getConversionExpression(
-	sourceParent, targetParent *model.TypeInfo,
-	sourceField, targetField *model.FieldInfo, fromVar string,
-) (string, []model.Helper, *model.ConversionTask) {
-	sourceType := sourceField.Type
-	targetType := targetField.Type
-	sourceFieldExpr := fmt.Sprintf("%s.%s", fromVar, sourceField.Name)
-
-	if sourceType.UniqueKey() == targetType.UniqueKey() {
-		return sourceFieldExpr, nil, nil
-	}
-
-	if canUseSimpleTypeConversion(sourceType, targetType) {
-		targetTypeStr := ce.typeFormatter.Format(targetType)
-		return fmt.Sprintf("%s(%s)", targetTypeStr, sourceFieldExpr), nil, nil
-	}
-
-	if helper, found := ce.findHelper(sourceType, targetType); found {
-		ce.addRequiredImportsForHelper(helper)
-		return fmt.Sprintf("%s(%s)", helper.Name, sourceFieldExpr), []model.Helper{helper}, nil
-	}
-
-	concreteSourceType := getConcreteType(sourceType)
-	concreteTargetType := getConcreteType(targetType)
-	var convFuncName string
-	var newTask *model.ConversionTask
-
-	if concreteSourceType.Kind == model.Struct && concreteTargetType.Kind == model.Struct {
-		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
-		newTask = &model.ConversionTask{Source: sourceType, Target: targetType}
-		arg := sourceFieldExpr
-		if sourceType.Kind != model.Pointer {
-			arg = fmt.Sprintf("&%s", sourceFieldExpr)
-		}
-		expr := fmt.Sprintf("%s(%s)", convFuncName, arg)
-		if targetType.Kind != model.Pointer {
-			expr = fmt.Sprintf("*%s", expr)
-		}
-		return expr, nil, newTask
-	}
-
-	if concreteSourceType.Kind == model.Slice && concreteTargetType.Kind == model.Slice {
-		isSourcePtr := sourceType.Kind == model.Pointer
-		isTargetPtr := targetType.Kind == model.Pointer
-
-		actualSourceType := sourceType
-		actualTargetType := targetType
-		arg := sourceFieldExpr
-
-		if isSourcePtr && isTargetPtr {
-			actualSourceType = sourceType.Underlying
-			actualTargetType = targetType.Underlying
-			arg = "*" + arg
-		}
-
-		convFuncName = ce.nameGenerator.ConversionFunctionName(actualSourceType, actualTargetType)
-		newTask = &model.ConversionTask{Source: actualSourceType, Target: actualTargetType}
-		return fmt.Sprintf("%s(%s)", convFuncName, arg), nil, newTask
-	}
-
-	if sourceType.Kind == model.Named && targetType.Kind == model.Named {
-		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
-	} else {
-		convFuncName = ce.nameGenerator.FieldConversionFunctionName(sourceParent, targetParent, sourceField, targetField)
-	}
-
-	if _, exists := ce.existingFunctions[convFuncName]; !exists {
-		stubTask := &model.ConversionTask{Source: sourceType, Target: targetType}
-		ce.stubsToGenerate[convFuncName] = stubTask
-	}
-
-	return fmt.Sprintf("%s(%s)", convFuncName, sourceFieldExpr), nil, nil
-}
-
 func (ce *ConversionEngine) findHelper(source, target *model.TypeInfo) (model.Helper, bool) {
 	key := source.UniqueKey() + "->" + target.UniqueKey()
 	helper, found := ce.helperMap[key]
@@ -349,13 +340,8 @@ func (ce *ConversionEngine) addRequiredImportsForHelper(helper model.Helper) {
 }
 
 func (ce *ConversionEngine) needsTemporaryVariable(sourceType, targetType *model.TypeInfo) bool {
-	concreteSource := getConcreteType(sourceType)
-	concreteTarget := getConcreteType(targetType)
-
-	if concreteSource.Kind != model.Slice || concreteTarget.Kind != model.Slice {
-		return false
-	}
-	return targetType.Kind == model.Pointer
+	// This logic is now handled by the pre-assignments in getConversionExpression
+	return false
 }
 
 func (ce *ConversionEngine) GetStubsToGenerate() map[string]*model.ConversionTask {

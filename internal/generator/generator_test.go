@@ -161,9 +161,10 @@ var testCases = []struct {
 		category:      "regression",
 		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
 			generatedStr := string(generatedCode)
-			assertContainsPattern(t, generatedStr, `type MenuPB = pb.Menu`)
-			assertContainsPattern(t, generatedStr, `func ConvertMenuToMenuPB\(from \*ent.Menu\) \*pb.Menu`)
-			assertContainsPattern(t, generatedStr, `func ConvertMenuPBToMenu\(from \*pb.Menu\) \*ent.Menu`)
+			assertContainsPattern(t, generatedStr, `Menu   = ent.Menu`)
+			assertContainsPattern(t, generatedStr, `MenuPB = pb.Menu`)
+			assertContainsPattern(t, generatedStr, `func ConvertMenuToMenuPB\(from \*Menu\) \*MenuPB`)
+			assertContainsPattern(t, generatedStr, `func ConvertMenuPBToMenu\(from \*MenuPB\) \*Menu`)
 		},
 	},
 }
