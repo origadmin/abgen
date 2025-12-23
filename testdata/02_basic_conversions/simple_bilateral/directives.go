@@ -36,13 +36,3 @@ func ConvertUserBilateralStatusToUserStatus(from int32) string {
 	// TODO: Implement this custom conversion
 	panic("stub! not implemented")
 }
-
-func ConvertGenderToGenderBilateral(gender ent.Gender) types.Gender {
-	// TODO: implement
-	return types.Gender(0)
-}
-
-func ConvertGenderBilateralToGender(gender types.Gender) ent.Gender {
-	// TODO: implement
-	return ent.Gender(0)
-}

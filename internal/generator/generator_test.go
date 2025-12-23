@@ -80,6 +80,19 @@ var testCases = []struct {
 		},
 	},
 	{
+		name:          "simple_bilateral",
+		directivePath: "../../testdata/02_basic_conversions/simple_bilateral",
+		priority:      "P0",
+		category:      "basic_conversions",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			generatedStr := string(generatedCode)
+			assertContainsPattern(t, generatedStr, `func ConvertUserToUserBilateral\(from \*User\) \*UserBilateral`)
+			assertContainsPattern(t, generatedStr, `Id:\s+from.ID,`)
+			assertContainsPattern(t, generatedStr, `func ConvertUserBilateralToUser\(from \*UserBilateral\) \*User`)
+			assertContainsPattern(t, generatedStr, `ID:\s+from.Id,`)
+		},
+	},
+	{
 		name:           "field_ignore_remap",
 		directivePath:  "../../testdata/02_basic_conversions/field_ignore_remap",
 		goldenFileName: "expected.gen.go",
@@ -140,6 +153,18 @@ var testCases = []struct {
 		directivePath: "../../testdata/06_regression/map_string_to_string_fix",
 		priority:      "P0",
 		category:      "regression",
+	},
+	{
+		name:          "menu_pb_fix",
+		directivePath: "../../testdata/06_regression/menu_pb_fix",
+		priority:      "P0",
+		category:      "regression",
+		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
+			generatedStr := string(generatedCode)
+			assertContainsPattern(t, generatedStr, `type MenuPB = pb.Menu`)
+			assertContainsPattern(t, generatedStr, `func ConvertMenuToMenuPB\(from \*ent.Menu\) \*pb.Menu`)
+			assertContainsPattern(t, generatedStr, `func ConvertMenuPBToMenu\(from \*pb.Menu\) \*ent.Menu`)
+		},
 	},
 }
 

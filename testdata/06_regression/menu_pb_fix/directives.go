@@ -20,8 +20,8 @@ type ListMenusRequest struct {
 	Size int32
 }
 
-//go:abgen:package:path=github.com/origadmin/ent,alias=ent
-//go:abgen:package:path=github.com/origadmin/pb,alias=pb
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/06_regression/menu_pb_fix/ent,alias=ent
+//go:abgen:package:path=github.com/origadmin/abgen/testdata/06_regression/menu_pb_fix/pb,alias=pb
 //go:abgen:pair:packages="ent,pb"
 //go:abgen:convert:target:suffix="PB"
 
