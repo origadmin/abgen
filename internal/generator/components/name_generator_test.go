@@ -3,7 +3,7 @@ package components
 import (
 	"testing"
 
-	"github.comcom/origadmin/abgen/internal/model"
+	"github.com/origadmin/abgen/internal/model"
 )
 
 // mockAliasManager is a mock implementation of the model.AliasManager for testing.
@@ -34,17 +34,23 @@ func TestNameGenerator_ConversionFunctionName(t *testing.T) {
 	userStruct := newStruct("User", "a/b", nil)
 	userDTOStruct := newStruct("UserDTO", "c/d", nil)
 
-	// Slices
+	// Slices of structs
 	userSlice := newSlice(userStruct)
 	userDTOSlice := newSlice(userDTOStruct)
 
-	// Mock alias manager
+	// Slices of pointers to structs
+	pointerUserSlice := newSlice(newPointer(userStruct))
+	pointerUserDTOSlice := newSlice(newPointer(userDTOStruct))
+
+	// Mock alias manager with correct pluralization provided by AliasManager
 	mockAM := &mockAliasManager{
 		aliasMap: map[string]string{
-			"a/b.User":      "UserSource",
-			"c/d.UserDTO":   "UserTarget",
-			"[]a/b.User":    "UserSourceSlice",
-			"[]c/d.UserDTO": "UserTargetSlice",
+			"a/b.User":          "UserSource",
+			"c/d.UserDTO":       "UserTarget",
+			"[]a/b.User":        "UsersSource", // Correct pluralization
+			"[]c/d.UserDTO":     "UsersTarget", // Correct pluralization
+			"[]*a/b.User":       "UsersSource", // Slices of pointers should have the same alias
+			"[]*c/d.UserDTO":    "UsersTarget",
 		},
 	}
 
@@ -58,9 +64,9 @@ func TestNameGenerator_ConversionFunctionName(t *testing.T) {
 	}{
 		{"Primitives", intType, stringType, "ConvertIntToString"},
 		{"Structs with Alias", userStruct, userDTOStruct, "ConvertUserSourceToUserTarget"},
-		{"Slices with Alias", userSlice, userDTOSlice, "ConvertUserSourceSliceToUserTargetSlice"},
+		{"Slices of Structs with Alias", userSlice, userDTOSlice, "ConvertUsersSourceToUsersTarget"},
+		{"Slices of Pointers with Alias", pointerUserSlice, pointerUserDTOSlice, "ConvertUsersSourceToUsersTarget"},
 		{"Pointer to Struct", newPointer(userStruct), userDTOStruct, "ConvertUserSourceToUserTarget"},
-		{"Slice of Pointers", newSlice(newPointer(userStruct)), newSlice(userDTOStruct), "ConvertUserSourcesToUserTargets"},
 	}
 
 	for _, tt := range testCases {

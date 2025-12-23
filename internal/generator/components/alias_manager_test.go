@@ -1,7 +1,8 @@
 package components
 
 import (
-	"reflect"
+	"go/types"
+	"strings"
 	"testing"
 
 	"github.com/origadmin/abgen/internal/config"
@@ -27,14 +28,16 @@ func (m *mockImportManager) GetAlias(pkgPath string) (string, bool) {
 	return alias, ok
 }
 func (m *mockImportManager) GetAllImports() map[string]string { return m.aliases }
-func (m *mockImportManager) PackageName(pkg *model.TypeInfo) string {
+
+// Corrected method signature to match the model.ImportManager interface.
+func (m *mockImportManager) PackageName(pkg *types.Package) string {
 	if pkg == nil {
 		return ""
 	}
-	if alias, ok := m.aliases[pkg.ImportPath]; ok {
+	if alias, ok := m.aliases[pkg.Path()]; ok {
 		return alias
 	}
-	return pkg.PackageName()
+	return pkg.Name()
 }
 
 func TestAliasManager_PopulateAliases(t *testing.T) {
@@ -64,17 +67,19 @@ func TestAliasManager_PopulateAliases(t *testing.T) {
 		SourceType: "source/ent.User",
 		TargetType: "target/dto.User",
 	})
-	// Add a user-defined alias
-	cfg.ExistingAliases = map[string]string{
-		"UserProfileDTO": "target/dto.Profile",
-	}
-	// Add naming rules
+	// Naming rules
 	cfg.NamingRules.SourceSuffix = "Source"
 	cfg.NamingRules.TargetSuffix = "DTO"
 
+	// User-defined aliases are now a separate map
+	existingAliases := map[string]string{
+		"UserProfileDTO": "target/dto.Profile",
+	}
+
 	// --- Test Execution ---
 	im := &mockImportManager{aliases: make(map[string]string)}
-	am := NewAliasManager(cfg, im, typeInfos, cfg.ExistingAliases)
+	// Correctly pass existingAliases as a separate argument
+	am := NewAliasManager(cfg, im, typeInfos, existingAliases)
 	am.PopulateAliases()
 
 	// --- Assertions ---

@@ -43,19 +43,21 @@ func (n *NameGenerator) getCleanBaseName(info *model.TypeInfo) string {
 	}
 
 	// First, check if the AliasManager has a specific name for this exact type.
-	// This is the source of truth for any managed type (including slices of named types).
+	// This is the source of truth for any managed type.
 	if alias, ok := n.aliasManager.LookupAlias(info.UniqueKey()); ok {
 		return n.capitalize(alias)
 	}
 
-	// If no alias exists, fall back to constructing a name based on the type's structure.
-	// This handles primitives and unmanaged complex types.
+	// If no alias exists, it means it's an unmanaged type (e.g., primitive, or from a package not in the config).
+	// In this case, we construct a name based on the type's structure.
 	var baseName string
 	switch info.Kind {
 	case model.Pointer:
 		return n.getCleanBaseName(info.Underlying) // Pointers don't affect the name
 	case model.Slice:
-		baseName = n.getCleanBaseName(info.Underlying) + "s"
+		// For unmanaged slices (e.g. []int), we just pluralize the element name.
+		elemName := n.getCleanBaseName(info.Underlying)
+		baseName = elemName + "s"
 	case model.Array:
 		baseName = n.getCleanBaseName(info.Underlying) + "Array"
 	case model.Map:
@@ -81,10 +83,6 @@ func (n *NameGenerator) getCleanBaseName(info *model.TypeInfo) string {
 func (n *NameGenerator) capitalize(s string) string {
 	if s == "" {
 		return ""
-	}
-	// This logic is safe for already capitalized strings.
-	if r := rune(s[0]); unicode.IsUpper(r) {
-		return s
 	}
 	runes := []rune(s)
 	runes[0] = unicode.ToUpper(runes[0])
