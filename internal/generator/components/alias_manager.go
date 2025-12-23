@@ -13,9 +13,12 @@ import (
 var _ model.AliasManager = (*AliasManager)(nil)
 
 var nonManagedPackages = map[string]struct{}{
-	"time":                   {},
-	"encoding/json":          {},
-	"github.com/google/uuid": {},
+	"time":                            {},
+	"encoding/json":                   {},
+	"github.com/google/uuid":          {},
+	"google.golang.org/protobuf/types/known/timestamppb": {},
+	"google.golang.org/protobuf/types/known/durationpb":  {},
+	"google.golang.org/protobuf/types/known/structpb":    {},
 }
 
 type AliasManager struct {
@@ -31,7 +34,6 @@ type AliasManager struct {
 
 var camelCaseRegexp = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
-// NewAliasManager creates a new alias manager. It derives its state from the analysis result.
 func NewAliasManager(
 	analysisResult *model.AnalysisResult,
 	importManager model.ImportManager,
@@ -64,9 +66,6 @@ func (am *AliasManager) GetAliasedTypes() map[string]*model.TypeInfo {
 
 func (am *AliasManager) GetAlias(info *model.TypeInfo) (string, bool) {
 	if info == nil {
-		return "", false
-	}
-	if info.Kind == model.Primitive || info.Kind == model.Pointer {
 		return "", false
 	}
 	return am.LookupAlias(info.UniqueKey())
@@ -117,6 +116,14 @@ func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSou
 	}
 	am.visited[uniqueKey] = true
 
+	// --- The Corrected Logic ---
+	// For pointers, we only recurse. We NEVER create an alias for the pointer type itself.
+	if typeInfo.Kind == model.Pointer {
+		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
+		return // Explicitly return after recursion for pointers.
+	}
+
+	// For other composite types, recurse first.
 	switch typeInfo.Kind {
 	case model.Struct:
 		for _, field := range typeInfo.Fields {
@@ -127,22 +134,19 @@ func (am *AliasManager) ensureAliasesRecursively(typeInfo *model.TypeInfo, isSou
 	case model.Map:
 		am.ensureAliasesRecursively(typeInfo.KeyType, isSource)
 		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
-	case model.Pointer:
-		am.ensureAliasesRecursively(typeInfo.Underlying, isSource)
 	}
 
-	if !am.isManagedType(typeInfo) || typeInfo.Kind == model.Pointer {
+	// After recursion, process the current (non-pointer) type.
+	if !am.isManagedType(typeInfo) {
 		return
 	}
 
 	if existingAlias, ok := am.fqnToExistingAlias[uniqueKey]; ok {
 		am.aliasMap[uniqueKey] = existingAlias
-		slog.Debug("AliasManager: using existing user-defined alias", "type", typeInfo.String(), "alias", existingAlias)
 	} else {
 		alias := am.generateAlias(typeInfo, isSource)
 		am.aliasMap[uniqueKey] = alias
 		am.aliasedTypes[uniqueKey] = typeInfo
-		slog.Debug("AliasManager: created new alias", "type", typeInfo.String(), "alias", alias)
 	}
 }
 
@@ -150,19 +154,17 @@ func (am *AliasManager) isManagedType(info *model.TypeInfo) bool {
 	if info == nil {
 		return false
 	}
-
-	switch info.Kind {
-	case model.Primitive:
+	// Recurse to find the base element type.
+	elem := model.GetElementType(info)
+	if elem == nil {
 		return false
-	case model.Pointer:
-		return am.isManagedType(info.Underlying)
+	}
+	// A type is managed if its base element is a Named or Struct type
+	// that belongs to one of the managed packages.
+	switch elem.Kind {
 	case model.Named, model.Struct:
-		_, isManaged := am.managedPackagePaths[info.ImportPath]
+		_, isManaged := am.managedPackagePaths[elem.ImportPath]
 		return isManaged
-	case model.Slice, model.Array:
-		return am.isManagedType(info.Underlying)
-	case model.Map:
-		return am.isManagedType(info.KeyType) || am.isManagedType(info.Underlying)
 	default:
 		return false
 	}
@@ -172,9 +174,9 @@ func (am *AliasManager) getRecursiveBaseName(info *model.TypeInfo) string {
 	if info == nil {
 		return ""
 	}
-
 	switch info.Kind {
 	case model.Pointer:
+		// Pointers do not contribute to the base name.
 		return am.getRecursiveBaseName(info.Underlying)
 	case model.Slice:
 		elementBaseName := am.getRecursiveBaseName(info.Underlying)
@@ -200,8 +202,7 @@ func (am *AliasManager) getRecursiveBaseName(info *model.TypeInfo) string {
 func (am *AliasManager) generateAlias(info *model.TypeInfo, isSource bool) string {
 	baseName := am.getRecursiveBaseName(info)
 	prefix, suffix := am.getPrefixAndSuffix(isSource)
-	finalAlias := am.toCamelCase(prefix) + baseName + am.toCamelCase(suffix)
-	return finalAlias
+	return am.toCamelCase(prefix) + baseName + am.toCamelCase(suffix)
 }
 
 func (am *AliasManager) getPrefixAndSuffix(isSource bool) (string, string) {

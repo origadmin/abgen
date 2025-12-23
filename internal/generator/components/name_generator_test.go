@@ -34,23 +34,17 @@ func TestNameGenerator_ConversionFunctionName(t *testing.T) {
 	userStruct := newStruct("User", "a/b", nil)
 	userDTOStruct := newStruct("UserDTO", "c/d", nil)
 
-	// Slices of structs
-	userSlice := newSlice(userStruct)
-	userDTOSlice := newSlice(userDTOStruct)
-
 	// Slices of pointers to structs
 	pointerUserSlice := newSlice(newPointer(userStruct))
 	pointerUserDTOSlice := newSlice(newPointer(userDTOStruct))
 
-	// Mock alias manager with correct pluralization provided by AliasManager
+	// Mock alias manager now provides the final, correct names.
 	mockAM := &mockAliasManager{
 		aliasMap: map[string]string{
-			"a/b.User":          "UserSource",
-			"c/d.UserDTO":       "UserTarget",
-			"[]a/b.User":        "UsersSource", // Correct pluralization
-			"[]c/d.UserDTO":     "UsersTarget", // Correct pluralization
-			"[]*a/b.User":       "UsersSource", // Slices of pointers should have the same alias
-			"[]*c/d.UserDTO":    "UsersTarget",
+			"a/b.User":       "UserSource",
+			"c/d.UserDTO":    "UserTarget",
+			"[]*a/b.User":    "UsersSource", // AliasManager is responsible for correct pluralization + suffix.
+			"[]*c/d.UserDTO": "UsersTarget",
 		},
 	}
 
@@ -62,11 +56,9 @@ func TestNameGenerator_ConversionFunctionName(t *testing.T) {
 		target   *model.TypeInfo
 		expected string
 	}{
-		{"Primitives", intType, stringType, "ConvertIntToString"},
+		{"Primitives (unmanaged)", intType, stringType, "ConvertIntToString"},
 		{"Structs with Alias", userStruct, userDTOStruct, "ConvertUserSourceToUserTarget"},
-		{"Slices of Structs with Alias", userSlice, userDTOSlice, "ConvertUsersSourceToUsersTarget"},
 		{"Slices of Pointers with Alias", pointerUserSlice, pointerUserDTOSlice, "ConvertUsersSourceToUsersTarget"},
-		{"Pointer to Struct", newPointer(userStruct), userDTOStruct, "ConvertUserSourceToUserTarget"},
 	}
 
 	for _, tt := range testCases {

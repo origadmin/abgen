@@ -50,7 +50,6 @@ func TestAliasManager_PopulateAliases(t *testing.T) {
 	})
 	timeType := newStruct("Time", "time", nil)
 
-	// Build the AnalysisResult that will be the single source of truth
 	analysisResult := &model.AnalysisResult{
 		TypeInfos: map[string]*model.TypeInfo{
 			"source/ent.User":    sourceUserType,
@@ -74,12 +73,10 @@ func TestAliasManager_PopulateAliases(t *testing.T) {
 	cfg.NamingRules.SourceSuffix = "Source"
 	cfg.NamingRules.TargetSuffix = "DTO"
 
-	// --- Test Execution ---
 	im := &mockImportManager{aliases: make(map[string]string)}
 	am := NewAliasManager(analysisResult, im)
 	am.PopulateAliases()
 
-	// --- Assertions ---
 	expectedAliases := map[string]string{
 		"source/ent.User":    "UserSource",
 		"source/ent.Profile": "ProfileSource",

@@ -30,13 +30,10 @@ const (
 // AnalysisResult holds all the information gathered during the analysis phase
 // and the final execution plan for the generator.
 type AnalysisResult struct {
-	// Initial analysis data
 	TypeInfos         map[string]*TypeInfo
 	ExistingFunctions map[string]bool
 	ExistingAliases   map[string]string
-
-	// The final plan for execution
-	ExecutionPlan *ExecutionPlan
+	ExecutionPlan     *ExecutionPlan
 }
 
 // ExecutionPlan contains the finalized configuration and rules for generation.
@@ -55,7 +52,6 @@ type Helper struct {
 }
 
 // TypeInfo represents the detailed information of a resolved Go type.
-// It serves as the single, authoritative data model for types throughout the application.
 type TypeInfo struct {
 	Name       string
 	ImportPath string
@@ -74,6 +70,21 @@ type ConversionTask struct {
 	Source *TypeInfo
 	Target *TypeInfo
 	Rule   *config.ConversionRule
+}
+
+// GetElementType returns the ultimate element type of pointers, slices, and arrays.
+func GetElementType(info *TypeInfo) *TypeInfo {
+	if info == nil {
+		return nil
+	}
+	for {
+		switch info.Kind {
+		case Pointer, Slice, Array:
+			info = info.Underlying
+		default:
+			return info
+		}
+	}
 }
 
 // PackageName returns the package name of the type.

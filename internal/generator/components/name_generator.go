@@ -8,7 +8,6 @@ import (
 )
 
 // NameGenerator implements the model.NameGenerator interface.
-// It relies on an AliasManager to get the definitive, role-based name for a type.
 type NameGenerator struct {
 	aliasManager model.AliasManager
 }
@@ -35,27 +34,25 @@ func (n *NameGenerator) FieldConversionFunctionName(sourceParent, targetParent *
 	return fmt.Sprintf("Convert%s%sTo%s%s", sourceParentName, fieldName, targetParentName, fieldName)
 }
 
-// getCleanBaseName recursively finds the base name for a type, suitable for use in a function name.
+// getCleanBaseName finds the authoritative name for a type.
 // It prioritizes looking up a pre-computed alias from the AliasManager.
+// If no alias is found, it constructs a name from the type's structure.
 func (n *NameGenerator) getCleanBaseName(info *model.TypeInfo) string {
 	if info == nil {
 		return ""
 	}
 
-	// First, check if the AliasManager has a specific name for this exact type.
-	// This is the source of truth for any managed type.
+	// The AliasManager is the source of truth for all managed types.
 	if alias, ok := n.aliasManager.LookupAlias(info.UniqueKey()); ok {
 		return n.capitalize(alias)
 	}
 
-	// If no alias exists, it means it's an unmanaged type (e.g., primitive, or from a package not in the config).
-	// In this case, we construct a name based on the type's structure.
+	// Fallback for unmanaged types (e.g., primitives, time.Time, etc.)
 	var baseName string
 	switch info.Kind {
 	case model.Pointer:
-		return n.getCleanBaseName(info.Underlying) // Pointers don't affect the name
+		return n.getCleanBaseName(info.Underlying)
 	case model.Slice:
-		// For unmanaged slices (e.g. []int), we just pluralize the element name.
 		elemName := n.getCleanBaseName(info.Underlying)
 		baseName = elemName + "s"
 	case model.Array:
@@ -65,11 +62,7 @@ func (n *NameGenerator) getCleanBaseName(info *model.TypeInfo) string {
 		valName := n.getCleanBaseName(info.Underlying)
 		baseName = fmt.Sprintf("%sTo%sMap", keyName, valName)
 	case model.Named, model.Struct:
-		if info.Name != "" {
-			baseName = info.Name
-		} else {
-			baseName = "Struct" // Anonymous struct
-		}
+		baseName = info.Name
 	case model.Primitive:
 		baseName = info.Name
 	default:
@@ -79,7 +72,6 @@ func (n *NameGenerator) getCleanBaseName(info *model.TypeInfo) string {
 	return n.capitalize(baseName)
 }
 
-// capitalize capitalizes the first letter of a string.
 func (n *NameGenerator) capitalize(s string) string {
 	if s == "" {
 		return ""
