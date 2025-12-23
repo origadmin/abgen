@@ -141,9 +141,9 @@ func (a *TypeAnalyzer) analyzeLocalPackage(pkgPath string) (map[string]bool, map
 		return existingFunctions, existingAliases
 	}
 
-	// Load the package with syntax only, which is more error-tolerant.
+	// Load the package with syntax and imports to resolve alias targets
 	loadCfg := &packages.Config{
-		Mode:  packages.NeedName | packages.NeedSyntax,
+		Mode:  packages.NeedName | packages.NeedSyntax | packages.NeedImports,
 		Tests: false,
 	}
 	pkgs, err := packages.Load(loadCfg, pkgPath)
@@ -165,7 +165,10 @@ func (a *TypeAnalyzer) analyzeLocalPackage(pkgPath string) (map[string]bool, map
 					if ts, ok := spec.(*ast.TypeSpec); ok && ts.Name != nil {
 						// This detects `type MyAlias = OtherType`
 						if ts.Assign > 0 {
-							existingAliases[ts.Name.Name] = types.ExprString(ts.Type)
+							// Convert the aliased type to fully qualified name
+							typeStr := types.ExprString(ts.Type)
+							fqn := a.resolveTypeToFQN(typeStr, pkg)
+							existingAliases[ts.Name.Name] = fqn
 						}
 					}
 				}
@@ -472,4 +475,33 @@ func (a *TypeAnalyzer) parseFields(s *types.Struct) []*model.FieldInfo {
 		fields = append(fields, fieldInfo)
 	}
 	return fields
+}
+
+// resolveTypeToFQN converts a type expression string to a fully qualified name
+// by resolving package aliases using the import information.
+func (a *TypeAnalyzer) resolveTypeToFQN(typeStr string, pkg *packages.Package) string {
+	// If it already contains a dot, it might already be a package-qualified type
+	if strings.Contains(typeStr, ".") {
+		// Split into potential package alias and type name
+		parts := strings.SplitN(typeStr, ".", 2)
+		if len(parts) == 2 {
+			alias, typeName := parts[0], parts[1]
+			
+			// Look for the import that matches this alias
+			for importPath, imp := range pkg.Imports {
+				if imp.Name == alias {
+					// Found the import, return the fully qualified name
+					return importPath + "." + typeName
+				}
+			}
+		}
+		// If it contains slashes, it's likely already a fully qualified path
+		if strings.Contains(typeStr, "/") {
+			return typeStr
+		}
+	}
+	
+	// For built-in types or unqualified types, return as-is
+	// This includes types like "string", "int", "time.Time", etc.
+	return typeStr
 }

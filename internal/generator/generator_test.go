@@ -392,6 +392,7 @@ var testCases = []struct {
 }
 
 func TestLegacyGenerator_Generate(t *testing.T) {
+	// Discarded function
 	t.Skip()
 
 	sort.Slice(testCases, func(i, j int) bool {
