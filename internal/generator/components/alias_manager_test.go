@@ -2,7 +2,6 @@ package components
 
 import (
 	"go/types"
-	"reflect"
 	"strings"
 	"testing"
 
