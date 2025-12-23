@@ -291,9 +291,10 @@ func (g *CodeGenerator) generateMainCode(cfg *config.Config, typeInfos map[strin
 		return nil, err
 	}
 	process, err := imports.Process("", finalBuf.Bytes(), &imports.Options{
-		Fragment:   true,
-		FormatOnly: true,
-		Comments:   true,
+		Fragment:  true,
+		Comments:  true,
+		TabWidth:  8,
+		TabIndent: true,
 	})
 	if err != nil {
 		return nil, err
@@ -517,9 +518,10 @@ func (g *CodeGenerator) generateCustomStubs(cfg *config.Config, typeInfos map[st
 	}
 
 	process, err := imports.Process("", finalBuf.Bytes(), &imports.Options{
-		Fragment:   true,
-		FormatOnly: true,
-		Comments:   true,
+		Fragment:  true,
+		Comments:  true,
+		TabWidth:  8,
+		TabIndent: true,
 	})
 	if err != nil {
 		return nil, err
