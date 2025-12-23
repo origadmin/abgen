@@ -11,7 +11,9 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	"github.com/origadmin/abgen/internal/config"
+	"github.com/origadmin/abgen/internal/generator/components"
 	"github.com/origadmin/abgen/internal/model"
+	"github.com/origadmin/abgen/internal/planner"
 )
 
 // TypeAnalyzer is responsible for parsing Go source files, extracting directives,
@@ -43,16 +45,16 @@ func (a *TypeAnalyzer) Analyze(sourceDir string) (*model.AnalysisResult, error) 
 	// 2. Extract directives from the initial package's syntax files.
 	directives := a.extractDirectives(initialPkg)
 
-	// 3. Parse the extracted directives to build the configuration.
+	// 3. Parse the extracted directives to build the initial configuration.
 	cfgParser := config.NewParser()
-	cfg, err := cfgParser.ParseDirectives(directives, initialPkg.Name, initialPkg.ID)
+	initialConfig, err := cfgParser.ParseDirectives(directives, initialPkg.Name, initialPkg.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse directives: %w", err)
 	}
-	cfg.GenerationContext.DirectivePath = sourceDir
+	initialConfig.GenerationContext.DirectivePath = sourceDir
 
 	// 4. Analyze all required external packages based on the configuration.
-	resolvedTypes, err := a.analyzeExternalPackages(cfg)
+	resolvedTypes, err := a.analyzeExternalPackages(initialConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to analyze external packages: %w", err)
 	}
@@ -60,11 +62,17 @@ func (a *TypeAnalyzer) Analyze(sourceDir string) (*model.AnalysisResult, error) 
 	// 5. Discover existing definitions (aliases, functions) in the initial package.
 	existingFuncs, existingAliases := a.discoverExistingDefinitions(initialPkg)
 
+	// 6. Create the final execution plan.
+	typeConverter := components.NewTypeConverter()
+	planner := planner.NewPlanner(typeConverter)
+	executionPlan := planner.Plan(initialConfig, resolvedTypes)
+
+	// 7. Assemble the final analysis result.
 	analysisResult := &model.AnalysisResult{
-		Config:            cfg, // Embed config into the result
 		TypeInfos:         resolvedTypes,
 		ExistingFunctions: existingFuncs,
 		ExistingAliases:   existingAliases,
+		ExecutionPlan:     executionPlan,
 	}
 
 	return analysisResult, nil
@@ -140,7 +148,6 @@ func (a *TypeAnalyzer) analyzeExternalPackages(cfg *config.Config) (map[string]*
 
 	resolvedTypes := make(map[string]*model.TypeInfo)
 
-	// Discover all named struct types first for implicit rule matching.
 	for _, pkg := range a.pkgs {
 		for _, name := range pkg.Types.Scope().Names() {
 			obj := pkg.Types.Scope().Lookup(name)
@@ -162,7 +169,6 @@ func (a *TypeAnalyzer) analyzeExternalPackages(cfg *config.Config) (map[string]*
 		}
 	}
 
-	// Resolve any explicitly mentioned FQNs that might have been missed.
 	for _, fqn := range a.collectAllFqns(cfg) {
 		if _, ok := resolvedTypes[fqn]; !ok {
 			info, err := a.find(fqn)
@@ -177,8 +183,7 @@ func (a *TypeAnalyzer) analyzeExternalPackages(cfg *config.Config) (map[string]*
 	return resolvedTypes, nil
 }
 
-// discoverExistingDefinitions performs a lightweight, AST-based analysis of the local package
-// to find existing function and type alias names.
+// discoverExistingDefinitions performs a lightweight, AST-based analysis of the local package.
 func (a *TypeAnalyzer) discoverExistingDefinitions(pkg *packages.Package) (map[string]bool, map[string]string) {
 	existingFunctions := make(map[string]bool)
 	existingAliases := make(map[string]string)

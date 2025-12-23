@@ -30,6 +30,11 @@ type AliasRenderInfo struct {
 
 // --- Core Component Interfaces ---
 
+// Planner defines the interface for the component that creates the final execution plan.
+type Planner interface {
+	Plan(initialConfig *config.Config, typeInfos map[string]*TypeInfo) *ExecutionPlan
+}
+
 // CodeGenerator defines the top-level interface for the code generation orchestrator.
 type CodeGenerator interface {
 	Generate(analysisResult *AnalysisResult) (*GenerationResponse, error)
@@ -56,16 +61,13 @@ type AliasLookup interface {
 
 // NameGenerator defines the interface for generating correct Go syntax for names.
 type NameGenerator interface {
-	// ConversionFunctionName returns a standardized name for a function that converts between two types.
 	ConversionFunctionName(source, target *TypeInfo) string
-	// FieldConversionFunctionName returns a standardized name for a function that converts a specific field
-	// between two parent structs.
 	FieldConversionFunctionName(sourceParent, targetParent *TypeInfo, sourceField, targetField *FieldInfo) string
 }
 
 // AliasManager defines the interface for creating and managing local type aliases.
 type AliasManager interface {
-	AliasLookup // Embed AliasLookup interface
+	AliasLookup
 	PopulateAliases()
 	GetAllAliases() map[string]string
 	GetAliasedTypes() map[string]*TypeInfo
@@ -75,16 +77,14 @@ type AliasManager interface {
 	GetTargetPath() string
 }
 
-// ConversionEngine defines the interface for the component that generates the body
-// of conversion functions.
+// ConversionEngine defines the interface for the component that generates the body of conversion functions.
 type ConversionEngine interface {
 	GenerateConversionFunction(source, target *TypeInfo, rule *config.ConversionRule) (*GeneratedCode, []*ConversionTask, error)
 	GenerateSliceConversion(source, target *TypeInfo) (*GeneratedCode, error)
 	GetStubsToGenerate() map[string]*ConversionTask
 }
 
-// CodeEmitter defines the interface for writing the various sections of the final
-// generated Go file.
+// CodeEmitter defines the interface for writing the various sections of the final generated Go file.
 type CodeEmitter interface {
 	EmitHeader(buf *bytes.Buffer) error
 	EmitStubHeader(buf *bytes.Buffer) error
@@ -95,7 +95,6 @@ type CodeEmitter interface {
 }
 
 // TypeConverter defines the interface for utility functions that inspect TypeInfo objects.
-// Most type checking methods are removed in favor of direct access to info.Kind.
 type TypeConverter interface {
 	GetConcreteType(info *TypeInfo) *TypeInfo
 	GetEffectiveType(info *TypeInfo) *TypeInfo

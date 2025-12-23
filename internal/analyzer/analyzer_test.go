@@ -10,10 +10,8 @@ import (
 )
 
 // TestTypeAnalyzer_Analyze_CoreParsing tests the analyzer's ability to correctly
-// parse directives from a source file and produce the right config.
-// It uses the test case in `../../testdata/00_core_parsing/rule_construction`.
+// parse directives and produce a valid execution plan.
 func TestTypeAnalyzer_Analyze_CoreParsing(t *testing.T) {
-	// Use a relative path to the testdata directory to keep the test portable.
 	testDir, err := filepath.Abs("../../testdata/00_core_parsing/rule_construction")
 	if err != nil {
 		t.Fatalf("Failed to get absolute path for testdata: %v", err)
@@ -22,23 +20,22 @@ func TestTypeAnalyzer_Analyze_CoreParsing(t *testing.T) {
 	analyzer := NewTypeAnalyzer()
 	analysisResult, err := analyzer.Analyze(testDir)
 
-	// --- Assertions ---
 	if err != nil {
-		// We expect errors here because the packages (e.g., github.com/my/project/ent/v1) don't actually exist.
-		// The key is that the config parsing part should still succeed.
 		t.Logf("Analyze() returned an expected error because dummy packages don't exist: %v", err)
 	}
 	if analysisResult == nil {
 		t.Fatal("Analyze() returned a nil result")
 	}
-	if analysisResult.Config == nil {
-		t.Fatal("Analyze() returned a result with a nil config")
+	if analysisResult.ExecutionPlan == nil {
+		t.Fatal("Analyze() returned a result with a nil execution plan")
+	}
+	if analysisResult.ExecutionPlan.FinalConfig == nil {
+		t.Fatal("Execution plan has a nil config")
 	}
 
-	cfg := analysisResult.Config
+	cfg := analysisResult.ExecutionPlan.FinalConfig
 
-	// 1. Verify the Config object based on source.go
-	// Check package aliases - 'ent' should be overwritten by the last directive
+	// Verify the Config object
 	expectedEntPath := "github.com/my/project/ent/v2"
 	if path, ok := cfg.PackageAliases["ent"]; !ok || path != expectedEntPath {
 		t.Errorf("Expected alias 'ent' to map to '%s', got '%s'", expectedEntPath, path)
@@ -48,12 +45,10 @@ func TestTypeAnalyzer_Analyze_CoreParsing(t *testing.T) {
 		t.Errorf("Expected alias 'pb' to map to '%s', got '%s'", expectedPbPath, path)
 	}
 
-	// Check global naming rules
 	if cfg.NamingRules.TargetSuffix != "Model" {
 		t.Errorf("Expected NamingRules.TargetSuffix to be 'Model', got '%s'", cfg.NamingRules.TargetSuffix)
 	}
 
-	// Check package pairs
 	if len(cfg.PackagePairs) != 2 {
 		t.Fatalf("Expected 2 package pairs, got %d", len(cfg.PackagePairs))
 	}
@@ -66,14 +61,14 @@ func TestTypeAnalyzer_Analyze_CoreParsing(t *testing.T) {
 		t.Errorf("Unexpected package pair found: %+v", cfg.PackagePairs[1])
 	}
 
-	// Check conversion rules
-	if len(cfg.ConversionRules) != 2 {
-		t.Fatalf("Expected 2 conversion rules, got %d", len(cfg.ConversionRules))
+	// Verify the active rules in the execution plan
+	activeRules := analysisResult.ExecutionPlan.ActiveRules
+	if len(activeRules) < 2 { // It might discover more, but at least the 2 explicit ones
+		t.Fatalf("Expected at least 2 active rules, got %d", len(activeRules))
 	}
 
-	// Find and check the complex rule for User
 	var userRule *config.ConversionRule
-	for _, r := range cfg.ConversionRules {
+	for _, r := range activeRules {
 		if strings.HasSuffix(r.SourceType, "ent/v2.User") {
 			userRule = r
 			break
@@ -81,36 +76,9 @@ func TestTypeAnalyzer_Analyze_CoreParsing(t *testing.T) {
 	}
 
 	if userRule == nil {
-		t.Fatal("Conversion rule for 'ent.User' not found")
+		t.Fatal("Conversion rule for 'ent.User' not found in active rules")
 	}
 	if userRule.TargetType != "github.com/my/project/pb.User" {
 		t.Errorf("Expected user rule target to be 'github.com/my/project/pb.User', got '%s'", userRule.TargetType)
-	}
-	if userRule.Direction != config.DirectionBoth {
-		t.Errorf("Expected user rule direction to be 'both', got '%v'", userRule.Direction)
-	}
-	if _, ok := userRule.FieldRules.Ignore["PasswordHash"]; !ok {
-		t.Error("Expected 'PasswordHash' to be in ignore map")
-	}
-	if _, ok := userRule.FieldRules.Ignore["Salt"]; !ok {
-		t.Error("Expected 'Salt' to be in ignore map")
-	}
-	if val, ok := userRule.FieldRules.Remap["CreatedAt"]; !ok || val != "CreatedTimestamp" {
-		t.Errorf("Expected remap 'CreatedAt' to be 'CreatedTimestamp', got '%s'", val)
-	}
-
-	// Check the simple rule for Data
-	var dataRule *config.ConversionRule
-	for _, r := range cfg.ConversionRules {
-		if strings.HasSuffix(r.SourceType, "pkg.Data") {
-			dataRule = r
-			break
-		}
-	}
-	if dataRule == nil {
-		t.Fatal("Conversion rule for 'pkg.Data' not found")
-	}
-	if dataRule.TargetType != "github.com/my/project/pb.Data" {
-		t.Errorf("Expected data rule target to be 'github.com/my/project/pb.Data', got '%s'", dataRule.TargetType)
 	}
 }

@@ -27,12 +27,22 @@ const (
 	Named // For any type introduced with the 'type' keyword
 )
 
-// AnalysisResult holds all the information gathered during the analysis phase.
+// AnalysisResult holds all the information gathered during the analysis phase
+// and the final execution plan for the generator.
 type AnalysisResult struct {
-	Config            *config.Config
+	// Initial analysis data
 	TypeInfos         map[string]*TypeInfo
 	ExistingFunctions map[string]bool
 	ExistingAliases   map[string]string
+
+	// The final plan for execution
+	ExecutionPlan *ExecutionPlan
+}
+
+// ExecutionPlan contains the finalized configuration and rules for generation.
+type ExecutionPlan struct {
+	FinalConfig *config.Config
+	ActiveRules []*config.ConversionRule
 }
 
 // Helper represents a built-in conversion function.
@@ -68,8 +78,6 @@ type ConversionTask struct {
 
 // PackageName returns the package name of the type.
 func (ti *TypeInfo) PackageName() string {
-	// Extract the package name from the import path.
-	// This handles both standard library and custom packages.
 	parts := strings.Split(ti.ImportPath, "/")
 	if len(parts) == 0 {
 		return ""
@@ -121,12 +129,10 @@ func (ti *TypeInfo) IsValid() bool {
 		return false
 	}
 
-	// Basic validation
 	if ti.Kind == Unknown {
 		return false
 	}
 
-	// Type-specific validation
 	switch ti.Kind {
 	case Array:
 		return ti.ArrayLen > 0 && ti.Underlying != nil
@@ -135,7 +141,7 @@ func (ti *TypeInfo) IsValid() bool {
 	case Pointer, Slice:
 		return ti.Underlying != nil
 	case Struct, Interface, Chan, Func:
-		return true // These can exist without underlying types
+		return true
 	case Named:
 		return ti.IsNamedType()
 	default:
@@ -152,7 +158,6 @@ func (ti *TypeInfo) Equals(other *TypeInfo) bool {
 		return false
 	}
 
-	// Quick check for basic properties
 	if ti.Name != other.Name ||
 		ti.ImportPath != other.ImportPath ||
 		ti.Kind != other.Kind ||
@@ -160,12 +165,10 @@ func (ti *TypeInfo) Equals(other *TypeInfo) bool {
 		return false
 	}
 
-	// For named types (Kind == Named), FQN comparison is sufficient
 	if ti.Kind == Named && other.Kind == Named {
 		return ti.FQN() == other.FQN()
 	}
 
-	// For complex types, compare structure
 	switch ti.Kind {
 	case Array:
 		return ti.ArrayLen == other.ArrayLen &&
@@ -200,7 +203,6 @@ func (ti *TypeInfo) TypeString() string {
 }
 
 // BuildQualifiedTypeName builds the qualified type name with package prefix if needed.
-// This method is now exported.
 func (ti *TypeInfo) BuildQualifiedTypeName(sb *strings.Builder) {
 	if ti.Name == "" {
 		sb.WriteString("interface{}")
@@ -214,8 +216,7 @@ func (ti *TypeInfo) BuildQualifiedTypeName(sb *strings.Builder) {
 	sb.WriteString(ti.Name)
 }
 
-// IsUltimatelyStruct checks if the type itself is a struct, or if it's a named type
-// whose underlying type is ultimately a struct.
+// IsUltimatelyStruct checks if the type is a struct or a named type whose underlying type is a struct.
 func (ti *TypeInfo) IsUltimatelyStruct() bool {
 	if ti == nil {
 		return false
@@ -224,7 +225,7 @@ func (ti *TypeInfo) IsUltimatelyStruct() bool {
 		return true
 	}
 	if ti.Kind == Named && ti.Underlying != nil {
-		return ti.Underlying.IsUltimatelyStruct() // Recursively check the underlying type
+		return ti.Underlying.IsUltimatelyStruct()
 	}
 	return false
 }
@@ -235,7 +236,6 @@ type FieldInfo struct {
 	Type       *TypeInfo
 	Tag        string
 	IsEmbedded bool
-	// IsExported bool // Removed IsExported field
 }
 
 // Equals checks if two FieldInfo objects are equal.
@@ -255,36 +255,27 @@ func (fi *FieldInfo) Equals(other *FieldInfo) bool {
 }
 
 // UniqueKey returns a string that uniquely identifies the type.
-// It prioritizes the Fully Qualified Name (FQN) if available, falling back to the type Name otherwise.
-// This ensures consistency for both named types and built-in primitives (e.g., "builtin.int").
 func (ti *TypeInfo) UniqueKey() string {
 	if ti == nil {
 		return ""
 	}
 
-	// For named types, FQN is the most stable unique key.
 	if ti.ImportPath != "" && ti.Name != "" {
 		return ti.FQN()
 	}
 
-	// For composite types, build a recursive unique key using the shared builder
-	return ti.buildTypeString(true) // true表示使用UniqueKey模式
+	return ti.buildTypeString(true)
 }
-
-// ... existing code ...
 
 func (ti *TypeInfo) buildTypeStringFromUnderlying() string {
 	return ti.buildTypeString(false)
 }
 
-// buildTypeString is a shared helper method that builds type strings for both UniqueKey and TypeString
-// isUniqueKeyMode: true for UniqueKey (uses FQN), false for TypeString (uses package name)
 func (ti *TypeInfo) buildTypeString(isUniqueKeyMode bool) string {
 	if ti == nil {
 		return "nil"
 	}
 
-	// For named types in UniqueKey mode, use FQN
 	if isUniqueKeyMode && ti.ImportPath != "" && ti.Name != "" {
 		return ti.FQN()
 	}
@@ -319,7 +310,6 @@ func (ti *TypeInfo) buildTypeString(isUniqueKeyMode bool) string {
 			sb.WriteString("func()")
 		}
 	case Named:
-		// For named types, we should show the type name, not the underlying type
 		ti.buildTypeName(&sb, isUniqueKeyMode)
 	case Primitive:
 		return ti.Name
@@ -339,7 +329,6 @@ func (ti *TypeInfo) buildTypeString(isUniqueKeyMode bool) string {
 	return sb.String()
 }
 
-// getTypeRepresentation returns the appropriate type representation based on the mode
 func (ti *TypeInfo) getTypeRepresentation(target *TypeInfo, isUniqueKeyMode bool) string {
 	if target == nil {
 		return "interface{}"
@@ -350,7 +339,6 @@ func (ti *TypeInfo) getTypeRepresentation(target *TypeInfo, isUniqueKeyMode bool
 	return target.TypeString()
 }
 
-// buildTypeName builds the type name with appropriate package prefix based on the mode
 func (ti *TypeInfo) buildTypeName(sb *strings.Builder, isUniqueKeyMode bool) {
 	if ti.Name == "" {
 		sb.WriteString("interface{}")
@@ -412,7 +400,6 @@ func (k TypeKind) String() string {
 }
 
 // GenerateUniqueKeyFromGoType creates a unique string key for a given Go types.Type.
-// This function mirrors the logic of TypeInfo.UniqueKey() but operates directly on types.Type.
 func GenerateUniqueKeyFromGoType(goType types.Type) string {
 	var sb strings.Builder
 	generateUniqueKeyRecursive(goType, &sb)
@@ -444,17 +431,12 @@ func generateUniqueKeyRecursive(goType types.Type, sb *strings.Builder) {
 		sb.WriteString("]")
 		generateUniqueKeyRecursive(t.Elem(), sb)
 	case *types.Struct:
-		// For anonymous structs, use a simplified representation or hash
-		// For now, we'll just indicate it's a struct without full field details
 		sb.WriteString("struct{}")
 	case *types.Interface:
-		// For anonymous interfaces, use a simplified representation
 		sb.WriteString("interface{}")
 	case *types.Signature:
-		// For function signatures, use a simplified representation
 		sb.WriteString("func()")
 	default:
-		// Fallback for other types
 		sb.WriteString(t.String())
 	}
 }

@@ -30,7 +30,6 @@ var (
 func main() {
 	flag.Parse()
 
-	// Configure log output
 	var logWriter *os.File
 	if *logFile != "" {
 		var err error
@@ -64,18 +63,18 @@ func main() {
 	sourceDir := flag.Arg(0)
 	slog.Info("Starting abgen", "sourceDir", sourceDir)
 
-	// --- 1. Analyze Source Code and Parse Directives ---
-	slog.Debug("Analyzing source code and parsing directives...")
+	// --- 1. Analyze Source Code and Create Execution Plan ---
+	slog.Debug("Analyzing source code and creating execution plan...")
 	typeAnalyzer := analyzer.NewTypeAnalyzer()
 	analysisResult, err := typeAnalyzer.Analyze(sourceDir)
 	if err != nil {
 		slog.Error("Failed to analyze source code", "error", err)
 		os.Exit(1)
 	}
-	analysisResult.Config.Version = version
+	analysisResult.ExecutionPlan.FinalConfig.Version = version
 
 	// --- 2. Resolve Output File Paths ---
-	cfg := analysisResult.Config
+	cfg := analysisResult.ExecutionPlan.FinalConfig
 	mainOutputFile := *output
 	if mainOutputFile == "" {
 		mainOutputFile = filepath.Join(sourceDir, strings.ToLower(cfg.GenerationContext.PackageName)+".gen.go")

@@ -140,12 +140,8 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 	buf.WriteString(fmt.Sprintf("\ttos := make(%s, len(%s))\n", targetSliceAllocStr, loopVar))
 	buf.WriteString(fmt.Sprintf("\tfor i, f := range %s {\n", loopVar))
 
-	// --- Corrected Logic ---
-	// Always generate a function call for element conversion.
 	elemFuncName := ce.nameGenerator.ConversionFunctionName(sourceElem, targetElem)
 
-	// The argument is the loop variable 'f'.
-	// If the source element's concrete type is a struct and the element itself is not a pointer, pass its address.
 	arg := "f"
 	if getConcreteType(sourceElem).Kind == model.Struct && sourceElem.Kind != model.Pointer {
 		arg = "&f"
@@ -153,13 +149,11 @@ func (ce *ConversionEngine) GenerateSliceConversion(
 
 	call := fmt.Sprintf("%s(%s)", elemFuncName, arg)
 
-	// If the target element's concrete type is a struct and the element itself is not a pointer, dereference the result.
 	if getConcreteType(targetElem).Kind == model.Struct && targetElem.Kind != model.Pointer {
 		call = "*" + call
 	}
 
 	assignment := fmt.Sprintf("tos[i] = %s", call)
-	// --- End of Corrected Logic ---
 
 	buf.WriteString(fmt.Sprintf("\t\t%s\n", assignment))
 	buf.WriteString("\t}\n")
@@ -245,7 +239,6 @@ func (ce *ConversionEngine) generateStructToStructConversion(
 	return buf.String(), allRequiredHelpers, newTasks, nil
 }
 
-// getConcreteType unwraps named types and pointers to get to the core type.
 func getConcreteType(info *model.TypeInfo) *model.TypeInfo {
 	if info == nil {
 		return nil
@@ -259,7 +252,6 @@ func getConcreteType(info *model.TypeInfo) *model.TypeInfo {
 	return info
 }
 
-// getEffectiveTypeInfo unwraps only named types to get the effective type, preserving pointers.
 func getEffectiveTypeInfo(info *model.TypeInfo) *model.TypeInfo {
 	if info == nil {
 		return nil
@@ -270,7 +262,6 @@ func getEffectiveTypeInfo(info *model.TypeInfo) *model.TypeInfo {
 	return info
 }
 
-// getConversionExpression determines the Go expression needed to convert a source field to a target field.
 func (ce *ConversionEngine) getConversionExpression(
 	sourceParent, targetParent *model.TypeInfo,
 	sourceField, targetField *model.FieldInfo, fromVar string,
@@ -298,7 +289,6 @@ func (ce *ConversionEngine) getConversionExpression(
 	var convFuncName string
 	var newTask *model.ConversionTask
 
-	// Case 1: Struct Conversion
 	if concreteSourceType.Kind == model.Struct && concreteTargetType.Kind == model.Struct {
 		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
 		newTask = &model.ConversionTask{Source: sourceType, Target: targetType}
@@ -313,9 +303,7 @@ func (ce *ConversionEngine) getConversionExpression(
 		return expr, nil, newTask
 	}
 
-	// Case 2: Slice Conversion
 	if concreteSourceType.Kind == model.Slice && concreteTargetType.Kind == model.Slice {
-		// --- Corrected Logic for Pointer-to-Slice Fields ---
 		isSourcePtr := sourceType.Kind == model.Pointer
 		isTargetPtr := targetType.Kind == model.Pointer
 
@@ -334,16 +322,12 @@ func (ce *ConversionEngine) getConversionExpression(
 		return fmt.Sprintf("%s(%s)", convFuncName, arg), nil, newTask
 	}
 
-	// Case 3: Fallback to Stub with corrected naming logic
 	if sourceType.Kind == model.Named && targetType.Kind == model.Named {
-		// e.g., type Gender int -> type GenderBilateral int. Use a generic name.
 		convFuncName = ce.nameGenerator.ConversionFunctionName(sourceType, targetType)
 	} else {
-		// e.g., int -> string for a 'Status' field. Use a field-specific name.
 		convFuncName = ce.nameGenerator.FieldConversionFunctionName(sourceParent, targetParent, sourceField, targetField)
 	}
 
-	// Check if the function already exists before creating a stub.
 	if _, exists := ce.existingFunctions[convFuncName]; !exists {
 		stubTask := &model.ConversionTask{Source: sourceType, Target: targetType}
 		ce.stubsToGenerate[convFuncName] = stubTask
@@ -374,12 +358,10 @@ func (ce *ConversionEngine) needsTemporaryVariable(sourceType, targetType *model
 	return targetType.Kind == model.Pointer
 }
 
-// GetStubsToGenerate returns the stubs that need to be generated.
 func (ce *ConversionEngine) GetStubsToGenerate() map[string]*model.ConversionTask {
 	return ce.stubsToGenerate
 }
 
-// canUseSimpleTypeConversion checks if a simple Go type conversion T(v) is valid.
 func canUseSimpleTypeConversion(source, target *model.TypeInfo) bool {
 	sourceBase := getConcreteType(source)
 	targetBase := getConcreteType(target)

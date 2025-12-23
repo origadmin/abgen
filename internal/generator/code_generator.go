@@ -14,7 +14,7 @@ import (
 	"github.com/origadmin/abgen/internal/model"
 )
 
-// CodeGenerator orchestrates the entire code generation process.
+// CodeGenerator orchestrates the entire code generation process based on a definitive execution plan.
 type CodeGenerator struct {
 	importManager    model.ImportManager
 	nameGenerator    model.NameGenerator
@@ -32,14 +32,17 @@ func NewCodeGenerator() model.CodeGenerator {
 	}
 }
 
-// initializeComponents configures the generator's components for a specific generation task.
+// initializeComponents configures the generator's components for a specific generation task
+// based on the final execution plan.
 func (g *CodeGenerator) initializeComponents(analysisResult *model.AnalysisResult) {
-	cfg := analysisResult.Config
+	plan := analysisResult.ExecutionPlan
+	cfg := plan.FinalConfig
+
 	g.importManager = components.NewImportManager()
 	for alias, path := range cfg.PackageAliases {
 		g.importManager.AddAs(path, alias)
 	}
-	slog.Debug("ImportManager after PackageAliases processing", "imports", g.importManager.GetAllImports())
+	slog.Debug("Generator: ImportManager initialized", "imports", g.importManager.GetAllImports())
 
 	g.aliasManager = components.NewAliasManager(cfg, g.importManager, analysisResult.TypeInfos, analysisResult.ExistingAliases)
 	g.nameGenerator = components.NewNameGenerator(g.aliasManager)
@@ -56,17 +59,18 @@ func (g *CodeGenerator) initializeComponents(analysisResult *model.AnalysisResul
 	g.codeEmitter = components.NewCodeEmitter(cfg)
 }
 
-// Generate executes a complete code generation task.
+// Generate executes a complete code generation task based on the provided analysis result.
 func (g *CodeGenerator) Generate(analysisResult *model.AnalysisResult) (*model.GenerationResponse, error) {
-	finalConfig, activeRules := g.prepareConfigForSession(analysisResult)
-	analysisResult.Config = finalConfig // Update the result with the finalized config
-	g.initializeComponents(analysisResult)
+	if analysisResult == nil || analysisResult.ExecutionPlan == nil {
+		return nil, fmt.Errorf("cannot generate code without a valid analysis result and execution plan")
+	}
 
-	slog.Debug("Components initialized with final configuration.")
+	g.initializeComponents(analysisResult)
+	slog.Debug("Generator: Components initialized with final execution plan.")
 
 	g.aliasManager.PopulateAliases()
 
-	generatedCode, err := g.generateMainCode(analysisResult, activeRules)
+	generatedCode, err := g.generateMainCode(analysisResult)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate main code: %w", err)
 	}
@@ -90,162 +94,11 @@ func (g *CodeGenerator) Generate(analysisResult *model.AnalysisResult) (*model.G
 	}, nil
 }
 
-// prepareConfigForSession creates a finalized configuration for a single generation run.
-func (g *CodeGenerator) prepareConfigForSession(analysisResult *model.AnalysisResult) (*config.Config, []*config.ConversionRule) {
-	sessionConfig := analysisResult.Config.Clone()
-	slog.Debug("Preparing session configuration", "initial_rules", len(sessionConfig.ConversionRules))
-
-	// Start with implicitly discovered rules
-	slog.Debug("Discovering seed rules from package pairs...")
-	allRules := g.findSeedRules(analysisResult.TypeInfos, sessionConfig.PackagePairs)
-
-	// Add explicit rules from the config
-	allRules = append(allRules, sessionConfig.ConversionRules...)
-
-	// Expand all rules to find dependencies
-	activeRules := g.expandRulesByDependencyAnalysis(allRules, analysisResult.TypeInfos)
-
-	slog.Debug("Rule expansion finished", "total_active_rules", len(activeRules))
-
-	if sessionConfig.NamingRules.SourcePrefix == "" && sessionConfig.NamingRules.SourceSuffix == "" &&
-		sessionConfig.NamingRules.TargetPrefix == "" && sessionConfig.NamingRules.TargetSuffix == "" {
-		if g.needsDisambiguation(activeRules) {
-			slog.Debug("Ambiguous type names found, applying default 'Source'/'Target' suffixes for this session.")
-			sessionConfig.NamingRules.SourceSuffix = "Source"
-			sessionConfig.NamingRules.TargetSuffix = "Target"
-		}
-	}
-
-	sessionConfig.ConversionRules = activeRules
-	return sessionConfig, activeRules
-}
-
-// expandRulesByDependencyAnalysis takes a set of entry-point rules and discovers all
-// transitive dependencies by analyzing struct fields.
-func (g *CodeGenerator) expandRulesByDependencyAnalysis(seedRules []*config.ConversionRule, typeInfos map[string]*model.TypeInfo) []*config.ConversionRule {
-	allKnownRules := make(map[string]*config.ConversionRule)
-	worklist := make([]*config.ConversionRule, 0, len(seedRules))
-
-	for _, rule := range seedRules {
-		key := fmt.Sprintf("%s->%s", rule.SourceType, rule.TargetType)
-		if _, exists := allKnownRules[key]; !exists {
-			allKnownRules[key] = rule
-			worklist = append(worklist, rule)
-		}
-	}
-
-	for len(worklist) > 0 {
-		rule := worklist[0]
-		worklist = worklist[1:]
-
-		sourceInfo := typeInfos[rule.SourceType]
-		targetInfo := typeInfos[rule.TargetType]
-
-		if sourceInfo == nil || targetInfo == nil || sourceInfo.Kind != model.Struct || targetInfo.Kind != model.Struct {
-			continue
-		}
-
-		for _, sourceField := range sourceInfo.Fields {
-			targetFieldName := sourceField.Name
-			if remappedName, ok := rule.FieldRules.Remap[sourceField.Name]; ok {
-				targetFieldName = remappedName
-			}
-
-			var targetField *model.FieldInfo
-			for _, tf := range targetInfo.Fields {
-				if tf.Name == targetFieldName {
-					targetField = tf
-					break
-				}
-				if g.isFieldMatch(sourceField.Name, tf.Name) {
-					targetField = tf
-					slog.Debug("Found field match using case-insensitive fallback",
-						"sourceField", sourceField.Name, "targetField", targetField.Name)
-					break
-				}
-			}
-
-			if targetField == nil {
-				continue
-			}
-
-			baseSourceType := g.typeConverter.GetElementType(sourceField.Type)
-			baseTargetType := g.typeConverter.GetElementType(targetField.Type)
-
-			if baseSourceType == nil || baseTargetType == nil || baseSourceType.UniqueKey() == baseTargetType.UniqueKey() {
-				continue
-			}
-
-			newRule := &config.ConversionRule{
-				SourceType: baseSourceType.UniqueKey(),
-				TargetType: baseTargetType.UniqueKey(),
-				Direction:  config.DirectionBoth,
-			}
-
-			key := fmt.Sprintf("%s->%s", newRule.SourceType, newRule.TargetType)
-			if _, exists := allKnownRules[key]; !exists {
-				allKnownRules[key] = newRule
-				worklist = append(worklist, newRule)
-				slog.Debug("Discovered new dependency rule", "source", newRule.SourceType, "target", newRule.TargetType)
-			}
-		}
-	}
-
-	finalRules := make([]*config.ConversionRule, 0, len(allKnownRules))
-	for _, rule := range allKnownRules {
-		finalRules = append(finalRules, rule)
-	}
-	sort.Slice(finalRules, func(i, j int) bool {
-		return finalRules[i].SourceType < finalRules[j].SourceType
-	})
-	return finalRules
-}
-
-// isFieldMatch performs case-insensitive matching for common field name patterns.
-func (g *CodeGenerator) isFieldMatch(sourceName, targetName string) bool {
-	if strings.EqualFold(sourceName, targetName) {
-		return true
-	}
-	return false
-}
-
-// findSeedRules finds the initial set of conversion rules based on matching type names.
-func (g *CodeGenerator) findSeedRules(typeInfos map[string]*model.TypeInfo, packagePairs []*config.PackagePair) []*config.ConversionRule {
-	var seedRules []*config.ConversionRule
-	typesByPackage := make(map[string][]*model.TypeInfo)
-	for _, info := range typeInfos {
-		if info.IsNamedType() {
-			typesByPackage[info.ImportPath] = append(typesByPackage[info.ImportPath], info)
-		}
-	}
-
-	for _, pair := range packagePairs {
-		sourceTypes := typesByPackage[pair.SourcePath]
-		targetTypes := typesByPackage[pair.TargetPath]
-		targetMap := make(map[string]*model.TypeInfo)
-		for _, tt := range targetTypes {
-			targetMap[tt.Name] = tt
-		}
-
-		for _, sourceType := range sourceTypes {
-			if targetType, ok := targetMap[sourceType.Name]; ok {
-				rule := &config.ConversionRule{
-					SourceType: sourceType.UniqueKey(),
-					TargetType: targetType.UniqueKey(),
-					Direction:  config.DirectionBoth,
-				}
-				slog.Debug("Created seed rule", "source", rule.SourceType, "target", rule.TargetType, "direction", rule.Direction)
-				seedRules = append(seedRules, rule)
-			}
-		}
-	}
-	return seedRules
-}
-
-func (g *CodeGenerator) generateMainCode(analysisResult *model.AnalysisResult, rules []*config.ConversionRule) ([]byte, error) {
+func (g *CodeGenerator) generateMainCode(analysisResult *model.AnalysisResult) ([]byte, error) {
 	finalBuf := new(bytes.Buffer)
+	plan := analysisResult.ExecutionPlan
 
-	conversionFuncs, requiredHelpers, err := g.generateConversionCode(analysisResult.TypeInfos, rules)
+	conversionFuncs, requiredHelpers, err := g.generateConversionCode(analysisResult.TypeInfos, plan.ActiveRules)
 	if err != nil {
 		return nil, err
 	}
@@ -449,23 +302,4 @@ func (g *CodeGenerator) generateCustomStubs(analysisResult *model.AnalysisResult
 		return nil, err
 	}
 	return process, nil
-}
-
-func (g *CodeGenerator) needsDisambiguation(rules []*config.ConversionRule) bool {
-	for _, rule := range rules {
-		sourceBaseName := ""
-		if lastDot := strings.LastIndex(rule.SourceType, "."); lastDot != -1 {
-			sourceBaseName = rule.SourceType[lastDot+1:]
-		}
-
-		targetBaseName := ""
-		if lastDot := strings.LastIndex(rule.TargetType, "."); lastDot != -1 {
-			targetBaseName = rule.TargetType[lastDot+1:]
-		}
-
-		if sourceBaseName != "" && sourceBaseName == targetBaseName {
-			return true
-		}
-	}
-	return false
 }
