@@ -391,6 +391,114 @@ var testCases = []struct {
 	},
 }
 
+func TestCodeGenerator_Generate(t *testing.T) {
+	sort.Slice(testCases, func(i, j int) bool {
+		priorityOrder := map[string]int{"P0": 0, "P1": 1, "P2": 2}
+		if priorityOrder[testCases[i].priority] != priorityOrder[testCases[j].priority] {
+			return priorityOrder[testCases[i].priority] < priorityOrder[testCases[j].priority]
+		}
+		return testCases[i].category < testCases[j].category
+	})
+
+	for _, tc := range testCases {
+		var stagePrefix string
+		pathParts := strings.Split(tc.directivePath, "/")
+		for _, part := range pathParts {
+			if len(part) > 2 && part[2] == '_' && part[0] >= '0' && part[0] <= '9' && part[1] >= '0' && part[1] <= '9' {
+				stagePrefix = part[:2]
+				break
+			}
+		}
+
+		testNameWithStage := fmt.Sprintf("%s_%s/%s", stagePrefix, tc.category, tc.name)
+		t.Run(testNameWithStage, func(t *testing.T) {
+			t.Logf("Running test: %s (Priority: %s, Category: %s)", tc.name, tc.priority, tc.category)
+			cleanTestFiles(t, tc.directivePath)
+
+			parser := config.NewParser()
+			cfg, err := parser.Parse(tc.directivePath)
+			if err != nil {
+				t.Fatalf("config.Parser.Parse() failed: %v", err)
+			}
+
+			typeAnalyzer := analyzer.NewTypeAnalyzer()
+			typeInfos, err := typeAnalyzer.Analyze(cfg)
+			if err != nil {
+				t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed: %v", err)
+			}
+
+			orchestrator := NewCodeGenerator()
+			response, err := orchestrator.Generate(cfg, typeInfos)
+			if err != nil {
+				t.Fatalf("Generate() failed for test case %s: %v", tc.name, err)
+			}
+
+			generatedCode := response.GeneratedCode
+			stubCode := response.CustomStubs
+
+			generatedCodeStr := string(generatedCode)
+			generatedCodeStr = strings.ReplaceAll(generatedCodeStr, `\`, `/`)
+			generatedCode = []byte(generatedCodeStr)
+
+			// Always save the actual generated code for inspection, regardless of assertFunc
+			actualOutputFile := filepath.Join(tc.directivePath, "actual.gen.go")
+			actualOutputFile, _ = filepath.Abs(actualOutputFile)
+			t.Logf("Attempting to save generated code to: %s", actualOutputFile)
+			if err := os.WriteFile(actualOutputFile, generatedCode, 0644); err != nil {
+				t.Logf("Failed to save actual output to %s: %v", actualOutputFile, err)
+				// Try to get more detailed error information
+				if _, statErr := os.Stat(tc.directivePath); statErr != nil {
+					t.Logf("Directory %s does not exist or is not accessible: %v", tc.directivePath, statErr)
+				}
+			} else {
+				// Verify the file was actually created
+				if _, err := os.Stat(actualOutputFile); err == nil {
+					t.Logf("Generated output successfully saved to %s for inspection", actualOutputFile)
+					t.Logf("File size: %d bytes", len(generatedCode))
+				} else {
+					t.Logf("File save reported success but file not found at %s: %v", actualOutputFile, err)
+				}
+			}
+
+			if len(stubCode) > 0 {
+				actualStubFile := filepath.Join(tc.directivePath, "actual.stub.go")
+				t.Logf("Attempting to save stub code to: %s", actualStubFile)
+				if err := os.WriteFile(actualStubFile, stubCode, 0644); err != nil {
+					t.Logf("Failed to save stub output to %s: %v", actualStubFile, err)
+				} else {
+					if _, err := os.Stat(actualStubFile); err == nil {
+						t.Logf("Stub output saved to %s for inspection", actualStubFile)
+						t.Logf("Stub file size: %d bytes", len(stubCode))
+					} else {
+						t.Logf("Stub file save reported success but file not found at %s: %v", actualStubFile, err)
+					}
+				}
+			}
+
+			if tc.assertFunc != nil {
+				tc.assertFunc(t, generatedCode, stubCode)
+
+				if t.Failed() {
+					t.Logf("Assertion failed for '%s'. Generated output is available at %s", tc.name,
+						actualOutputFile)
+				}
+			}
+
+			if tc.goldenFileName != "" {
+				goldenFile := filepath.Join(tc.directivePath, tc.goldenFileName)
+				if os.Getenv("UPDATE_GOLDEN_FILES") != "" {
+					err = os.WriteFile(goldenFile, generatedCode, 0644)
+					if err != nil {
+						t.Fatalf("Failed to update golden file %s: %v", goldenFile, err)
+					}
+					t.Logf("Updated golden file: %s", goldenFile)
+					return
+				}
+			}
+		})
+	}
+}
+
 func TestLegacyGenerator_Generate(t *testing.T) {
 	// Discarded function
 	t.Skip()
@@ -576,216 +684,6 @@ func TestOrchestratorBasicFunctionality(t *testing.T) {
 		t.Logf("Successfully generated %d bytes with %d packages",
 			len(response.GeneratedCode), len(response.RequiredPackages))
 	})
-}
-
-func TestCodeGenerator_Generate(t *testing.T) {
-	//baseDependencies := []string{
-	//	"github.com/origadmin/abgen/testdata/fixtures/ent",
-	//	"github.com/origadmin/abgen/testdata/fixtures/types",
-	//}
-	//testCases := []struct {
-	//	name           string
-	//	directivePath  string
-	//	goldenFileName string
-	//	dependencies   []string
-	//	priority       string
-	//	category       string
-	//	assertFunc     func(t *testing.T, generatedCode []byte, stubCode []byte)
-	//}{
-	//	{
-	//		name:          "simple_struct_conversion",
-	//		directivePath: "../../testdata/02_basic_conversions/simple_struct",
-	//		dependencies: []string{
-	//			"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/source",
-	//			"github.com/origadmin/abgen/testdata/02_basic_conversions/simple_struct/target",
-	//		},
-	//		priority: "P0",
-	//		category: "basic_conversions",
-	//		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-	//			generatedStr := string(generatedCode)
-	//			assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
-	//			assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
-	//			assertContainsPattern(t, generatedStr, `UserName:\s+from.Name,`)
-	//			assertContainsPattern(t, generatedStr, `func ConvertUserDTOToUser\(from \*UserDTO\) \*User`)
-	//			assertContainsPattern(t, generatedStr, `ID:\s+from.ID,`)
-	//			assertContainsPattern(t, generatedStr, `Name:\s+from.UserName,`)
-	//		},
-	//	},
-	//	{
-	//		name:          "package_level_conversion",
-	//		directivePath: "../../testdata/02_basic_conversions/package_level_conversion",
-	//		dependencies: []string{
-	//			"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/source",
-	//			"github.com/origadmin/abgen/testdata/02_basic_conversions/package_level_conversion/target",
-	//		},
-	//		priority: "P0",
-	//		category: "basic_conversions",
-	//		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-	//			generatedStr := string(generatedCode)
-	//			assertContainsPattern(t, generatedStr, `func ConvertUserSourceToUserTarget\(from \*UserSource\) \*UserTarget`)
-	//			assertContainsPattern(t, generatedStr, `func ConvertUserTargetToUserSource\(from \*UserTarget\) \*UserSource`)
-	//			assertContainsPattern(t, generatedStr, `func ConvertItemSourceToItemTarget\(from \*ItemSource\) \*ItemTarget`)
-	//			assertContainsPattern(t, generatedStr, `func ConvertItemTargetToItemSource\(from \*ItemTarget\) \*ItemSource`)
-	//		},
-	//	},
-	//	{
-	//		name:          "oneway_conversion",
-	//		directivePath: "../../testdata/02_basic_conversions/oneway_conversion",
-	//		dependencies: []string{
-	//			"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/source",
-	//			"github.com/origadmin/abgen/testdata/02_basic_conversions/oneway_conversion/target",
-	//		},
-	//		priority: "P0",
-	//		category: "basic_conversions",
-	//		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-	//			generatedStr := string(generatedCode)
-	//			assertContainsPattern(t, generatedStr, `func ConvertUserToUserDTO\(from \*User\) \*UserDTO`)
-	//			assertNotContainsPattern(t, generatedStr, `func ConvertUserDTOToUser`)
-	//		},
-	//	},
-	//	{
-	//		name:          "simple_bilateral",
-	//		directivePath: "../../testdata/02_basic_conversions/simple_bilateral",
-	//		dependencies:  baseDependencies,
-	//		priority:      "P0",
-	//		category:      "basic_conversions",
-	//		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-	//			generatedStr := string(generatedCode)
-	//			assertContainsPattern(t, generatedStr, `func ConvertStringToTime\(s string\) time.Time`)
-	//			assertContainsPattern(t, generatedStr, `func ConvertTimeToString\(t time.Time\) string`)
-	//			assertContainsPattern(t, generatedStr, `func ConvertUserToUserBilateral\(from \*User\) \*UserBilateral`)
-	//			assertContainsPattern(t, generatedStr, `func ConvertUserBilateralToUser\(from \*UserBilateral\) \*User`)
-	//			assertNotContainsPattern(t, generatedStr, `Password:`)
-	//			assertNotContainsPattern(t, generatedStr, `Salt:`)
-	//		},
-	//	},
-	//	{
-	//		name:           "custom_function_rules",
-	//		directivePath:  "../../testdata/03_advanced_features/custom_function_rules",
-	//		goldenFileName: "expected.gen.go",
-	//		dependencies: []string{
-	//			"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/source",
-	//			"github.com/origadmin/abgen/testdata/03_advanced_features/custom_function_rules/target",
-	//		},
-	//		priority: "P0",
-	//		category: "advanced_features",
-	//		assertFunc: func(t *testing.T, generatedCode []byte, stubCode []byte) {
-	//			generatedStr := string(generatedCode)
-	//			stubStr := string(stubCode)
-	//			assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserStatusToUserCustomStatus\(from.Status\),`)
-	//			assertContainsPattern(t, generatedStr, `Status:\s+ConvertUserCustomStatusToUserStatus\(from.Status\),`)
-	//			if len(stubStr) > 0 {
-	//				assertContainsPattern(t, stubStr, `func ConvertUserStatusToUserCustomStatus\(from int\) string`)
-	//			}
-	//		},
-	//	},
-	//}
-
-	sort.Slice(testCases, func(i, j int) bool {
-		priorityOrder := map[string]int{"P0": 0, "P1": 1, "P2": 2}
-		if priorityOrder[testCases[i].priority] != priorityOrder[testCases[j].priority] {
-			return priorityOrder[testCases[i].priority] < priorityOrder[testCases[j].priority]
-		}
-		return testCases[i].category < testCases[j].category
-	})
-
-	for _, tc := range testCases {
-		var stagePrefix string
-		pathParts := strings.Split(tc.directivePath, "/")
-		for _, part := range pathParts {
-			if len(part) > 2 && part[2] == '_' && part[0] >= '0' && part[0] <= '9' && part[1] >= '0' && part[1] <= '9' {
-				stagePrefix = part[:2]
-				break
-			}
-		}
-
-		testNameWithStage := fmt.Sprintf("%s_%s/%s", stagePrefix, tc.category, tc.name)
-		t.Run(testNameWithStage, func(t *testing.T) {
-			t.Logf("Running test: %s (Priority: %s, Category: %s)", tc.name, tc.priority, tc.category)
-			cleanTestFiles(t, tc.directivePath)
-
-			parser := config.NewParser()
-			cfg, err := parser.Parse(tc.directivePath)
-			if err != nil {
-				t.Fatalf("config.Parser.Parse() failed: %v", err)
-			}
-
-			typeAnalyzer := analyzer.NewTypeAnalyzer()
-			typeInfos, err := typeAnalyzer.Analyze(cfg)
-			if err != nil {
-				t.Fatalf("analyzer.TypeAnalyzer.Analyze() failed: %v", err)
-			}
-
-			orchestrator := NewCodeGenerator()
-			response, err := orchestrator.Generate(cfg, typeInfos)
-			if err != nil {
-				t.Fatalf("Generate() failed for test case %s: %v", tc.name, err)
-			}
-
-			generatedCode := response.GeneratedCode
-			stubCode := response.CustomStubs
-
-			generatedCodeStr := string(generatedCode)
-			generatedCodeStr = strings.ReplaceAll(generatedCodeStr, `\`, `/`)
-			generatedCode = []byte(generatedCodeStr)
-
-			// Always save the actual generated code for inspection, regardless of assertFunc
-			actualOutputFile := filepath.Join(tc.directivePath, "actual.gen.go")
-			actualOutputFile, _ = filepath.Abs(actualOutputFile)
-			t.Logf("Attempting to save generated code to: %s", actualOutputFile)
-			if err := os.WriteFile(actualOutputFile, generatedCode, 0644); err != nil {
-				t.Logf("Failed to save actual output to %s: %v", actualOutputFile, err)
-				// Try to get more detailed error information
-				if _, statErr := os.Stat(tc.directivePath); statErr != nil {
-					t.Logf("Directory %s does not exist or is not accessible: %v", tc.directivePath, statErr)
-				}
-			} else {
-				// Verify the file was actually created
-				if _, err := os.Stat(actualOutputFile); err == nil {
-					t.Logf("Generated output successfully saved to %s for inspection", actualOutputFile)
-					t.Logf("File size: %d bytes", len(generatedCode))
-				} else {
-					t.Logf("File save reported success but file not found at %s: %v", actualOutputFile, err)
-				}
-			}
-
-			if len(stubCode) > 0 {
-				actualStubFile := filepath.Join(tc.directivePath, "actual.stub.go")
-				t.Logf("Attempting to save stub code to: %s", actualStubFile)
-				if err := os.WriteFile(actualStubFile, stubCode, 0644); err != nil {
-					t.Logf("Failed to save stub output to %s: %v", actualStubFile, err)
-				} else {
-					if _, err := os.Stat(actualStubFile); err == nil {
-						t.Logf("Stub output saved to %s for inspection", actualStubFile)
-						t.Logf("Stub file size: %d bytes", len(stubCode))
-					} else {
-						t.Logf("Stub file save reported success but file not found at %s: %v", actualStubFile, err)
-					}
-				}
-			}
-
-			if tc.assertFunc != nil {
-				tc.assertFunc(t, generatedCode, stubCode)
-
-				if t.Failed() {
-					t.Logf("Assertion failed for '%s'. Generated output is available at %s", tc.name,
-						actualOutputFile)
-				}
-			}
-
-			if tc.goldenFileName != "" {
-				goldenFile := filepath.Join(tc.directivePath, tc.goldenFileName)
-				if os.Getenv("UPDATE_GOLDEN_FILES") != "" {
-					err = os.WriteFile(goldenFile, generatedCode, 0644)
-					if err != nil {
-						t.Fatalf("Failed to update golden file %s: %v", goldenFile, err)
-					}
-					t.Logf("Updated golden file: %s", goldenFile)
-					return
-				}
-			}
-		})
-	}
 }
 
 func TestArchitecturalCompatibility(t *testing.T) {
