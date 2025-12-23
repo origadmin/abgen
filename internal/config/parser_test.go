@@ -1,34 +1,18 @@
 package config
 
 import (
-	"go/ast"
 	"reflect"
-	"strings"
 	"testing"
-
-	"golang.org/x/tools/go/packages"
 )
 
-// mockPackage creates a minimal packages.Package for testing.
-func mockPackage() *packages.Package {
-	return &packages.Package{
-		ID:   "github.com/my/project/current",
-		Name: "current",
-		Syntax: []*ast.File{
-			{
-				// This is a simplified AST. In a real scenario, you'd populate this
-				// with actual parsed source code containing the directives.
-				// For this test, the directives are passed directly to the parser.
-			},
-		},
-	}
-}
+const mockCurrentPkgPath = "github.com/my/project/current"
+const mockCurrentPkgName = "current"
 
 func TestParser_Comprehensive(t *testing.T) {
 	testCases := []struct {
 		name           string
 		directives     []string
-		setupFunc      func(*Parser) // Optional setup function for the parser
+		currentPkgPath string // Simulate the current package path
 		expectedConfig *Config
 	}{
 		{
@@ -41,9 +25,7 @@ func TestParser_Comprehensive(t *testing.T) {
 				`//go:abgen:convert:source:suffix=Entity`,
 				`//go:abgen:convert:target:prefix=Proto`,
 			},
-			setupFunc: func(p *Parser) {
-				p.config.GenerationContext.PackagePath = mockPackage().ID
-			},
+			currentPkgPath: mockCurrentPkgPath,
 			expectedConfig: &Config{
 				PackageAliases: map[string]string{
 					"ent": "path/to/ent",
@@ -75,9 +57,9 @@ func TestParser_Comprehensive(t *testing.T) {
 			directives: []string{
 				`//go:abgen:package:path=path/to/ent,alias=ent`,
 				`//go:abgen:convert:rule="source:ent.Role,target:Role,func:ConvertRoleFunc"`,
-				`//go:abgen:convert="source=ent.Role,target=Role"`,
+				`//go:abgen:convert="source=ent.Role,target:Role"`,
 			},
-			setupFunc: nil, // PackagePath remains empty
+			currentPkgPath: "", // Simulate empty package path
 			expectedConfig: &Config{
 				PackageAliases: map[string]string{
 					"ent": "path/to/ent",
@@ -106,9 +88,7 @@ func TestParser_Comprehensive(t *testing.T) {
 				`//go:abgen:convert:rule="source:ent.Role,target:Role,func:ConvertRoleFunc"`,
 				`//go:abgen:convert="source=ent.Role,target=Role"`,
 			},
-			setupFunc: func(p *Parser) {
-				p.config.GenerationContext.PackagePath = mockPackage().ID // Set PackagePath
-			},
+			currentPkgPath: mockCurrentPkgPath,
 			expectedConfig: &Config{
 				PackageAliases: map[string]string{
 					"ent": "path/to/ent",
@@ -136,9 +116,7 @@ func TestParser_Comprehensive(t *testing.T) {
 				`//go:abgen:package:path=github.com/my/source,alias=s`,
 				`//go:abgen:pair:packages=s,github.com/my/target`,
 			},
-			setupFunc: func(p *Parser) {
-				p.config.GenerationContext.PackagePath = mockPackage().ID
-			},
+			currentPkgPath: mockCurrentPkgPath,
 			expectedConfig: &Config{
 				PackageAliases: map[string]string{
 					"s": "github.com/my/source",
@@ -158,9 +136,7 @@ func TestParser_Comprehensive(t *testing.T) {
 				`//go:abgen:convert="source=builtin.int,target=builtin.string"`,
 				`//go:abgen:convert:rule="source:builtin.int,target:builtin.string,func:IntStatusToString"`,
 			},
-			setupFunc: func(p *Parser) {
-				p.config.GenerationContext.PackagePath = mockPackage().ID
-			},
+			currentPkgPath: mockCurrentPkgPath,
 			expectedConfig: &Config{
 				PackageAliases: map[string]string{
 					"builtin": "builtin",
@@ -189,9 +165,7 @@ func TestParser_Comprehensive(t *testing.T) {
 				`//go:abgen:package:path=github.com/my/project/target,alias=target`,
 				`//go:abgen:convert="source=source.User,target=target.UserDTO,ignore=Password;CreatedAt,remap=Name:FullName;Email:UserEmail"`,
 			},
-			setupFunc: func(p *Parser) {
-				p.config.GenerationContext.PackagePath = mockPackage().ID
-			},
+			currentPkgPath: mockCurrentPkgPath,
 			expectedConfig: &Config{
 				PackageAliases: map[string]string{
 					"source": "github.com/my/project/source",
@@ -218,35 +192,11 @@ func TestParser_Comprehensive(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			p := NewParser()
-			if tc.setupFunc != nil {
-				tc.setupFunc(p)
+
+			cfg, err := p.ParseDirectives(tc.directives, mockCurrentPkgName, tc.currentPkgPath)
+			if err != nil {
+				t.Fatalf("ParseDirectives failed: %v", err)
 			}
-
-			// First pass: Parse global configuration directives (including package:path)
-			for _, d := range tc.directives {
-				if strings.Contains(d, "package:path") || strings.Contains(d, "pair:packages") || 
-				   strings.Contains(d, "convert:source:suffix") || strings.Contains(d, "convert:target:suffix") ||
-				   strings.Contains(d, "convert:source:prefix") || strings.Contains(d, "convert:target:prefix") ||
-				   strings.Contains(d, "convert:alias:generate") || strings.Contains(d, "convert:direction") {
-					if err := p.parseGlobalDirective(d); err != nil {
-						t.Fatalf("parseGlobalDirective failed: %v", err)
-					}
-				}
-			}
-
-			// Second pass: Parse rule directives
-			for _, d := range tc.directives {
-				if strings.Contains(d, "convert=") || strings.Contains(d, "convert:rule=") {
-					if err := p.parseRuleDirective(d); err != nil {
-						t.Fatalf("parseRuleDirective failed: %v", err)
-					}
-				}
-			}
-
-			// Finally, merge custom function rules
-			p.mergeCustomFuncRules()
-
-			cfg := p.config
 
 			// Normalize expected config for comparison
 			if tc.expectedConfig.PackageAliases == nil {
@@ -263,7 +213,6 @@ func TestParser_Comprehensive(t *testing.T) {
 			}
 
 			// Check that all expected aliases from directives are present.
-			// This avoids test britleness if default aliases are added to NewParser.
 			for alias, path := range tc.expectedConfig.PackageAliases {
 				if gotPath, ok := cfg.PackageAliases[alias]; !ok || gotPath != path {
 					t.Errorf("PackageAliases mismatch for alias '%s': got '%s', want '%s'", alias, gotPath, path)

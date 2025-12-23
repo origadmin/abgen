@@ -64,17 +64,17 @@ func main() {
 	sourceDir := flag.Arg(0)
 	slog.Info("Starting abgen", "sourceDir", sourceDir)
 
-	// --- 1. Load Configuration ---
-	slog.Debug("Parsing configuration...")
-	parser := config.NewParser()
-	cfg, err := parser.Parse(sourceDir)
+	// --- 1. Analyze Source Code and Parse Directives ---
+	slog.Debug("Analyzing source code and parsing directives...")
+	typeAnalyzer := analyzer.NewTypeAnalyzer()
+	cfg, analysisResult, err := typeAnalyzer.Analyze(sourceDir)
 	if err != nil {
-		slog.Error("Failed to parse configuration", "error", err)
+		slog.Error("Failed to analyze source code", "error", err)
 		os.Exit(1)
 	}
 	cfg.Version = version
 
-	// Resolve output file paths and store them in GenerationContext
+	// --- 2. Resolve Output File Paths ---
 	mainOutputFile := *output
 	if mainOutputFile == "" {
 		mainOutputFile = filepath.Join(sourceDir, strings.ToLower(cfg.GenerationContext.PackageName)+".gen.go")
@@ -88,15 +88,6 @@ func main() {
 		customOutputFile = filepath.Join(sourceDir, customOutputFile)
 	}
 	cfg.GenerationContext.CustomOutputFile = customOutputFile
-
-	// --- 2. Analyze Types, Functions, and Aliases ---
-	slog.Debug("Analyzing source code...")
-	typeAnalyzer := analyzer.NewTypeAnalyzer()
-	analysisResult, err := typeAnalyzer.Analyze(cfg)
-	if err != nil {
-		slog.Error("Failed to analyze types", "error", err)
-		os.Exit(1)
-	}
 
 	// --- 3. Generate Code ---
 	slog.Debug("Generating code...")

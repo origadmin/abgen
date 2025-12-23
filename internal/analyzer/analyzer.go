@@ -3,6 +3,7 @@ package analyzer
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"log/slog"
 	"strings"
@@ -13,8 +14,8 @@ import (
 	"github.com/origadmin/abgen/internal/model"
 )
 
-// TypeAnalyzer is responsible for walking through a pre-loaded set of Go packages,
-// resolving types, and building a collection of TypeInfo structures.
+// TypeAnalyzer is responsible for parsing Go source files, extracting directives,
+// configuring the build, and analyzing all required types.
 type TypeAnalyzer struct {
 	pkgs      []*packages.Package
 	typeCache map[types.Type]*model.TypeInfo
@@ -27,43 +28,96 @@ func NewTypeAnalyzer() *TypeAnalyzer {
 	}
 }
 
-// SetPackages sets the packages for testing purposes
-func (a *TypeAnalyzer) SetPackages(pkgs []*packages.Package) {
-	a.pkgs = pkgs
-}
-
-// Find is a public wrapper for the find method
-func (a *TypeAnalyzer) Find(fqn string) (*model.TypeInfo, error) {
-	return a.find(fqn)
-}
-
-// Analyze is the main entry point for the analysis phase.
-func (a *TypeAnalyzer) Analyze(cfg *config.Config) (*model.AnalysisResult, error) {
-	// 1. Analyze external packages for full type information.
-	// This load must succeed without errors.
-	externalPaths := a.collectExternalPaths(cfg)
-	slog.Debug("Starting analysis of external packages", "paths", externalPaths)
-	resolvedTypes, err := a.analyzeExternalPackages(externalPaths, cfg)
+// Analyze is the main entry point for the analysis phase. It orchestrates
+// the loading of the initial package, parsing of directives, and deep analysis of all related types.
+func (a *TypeAnalyzer) Analyze(sourceDir string) (*config.Config, *model.AnalysisResult, error) {
+	// 1. Load the initial package to find directives and get context.
+	initialPkg, err := a.loadInitialPackage(sourceDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to analyze external packages: %w", err)
+		return nil, nil, fmt.Errorf("failed to load initial package: %w", err)
 	}
-	slog.Debug("Finished external package analysis", "resolved_types_count", len(resolvedTypes))
+	if initialPkg == nil {
+		return nil, nil, fmt.Errorf("no initial package found at %s", sourceDir)
+	}
 
-	// 2. Analyze the local/current package to find existing functions and aliases.
-	// This load is more lenient and primarily uses AST walking to tolerate compilation errors.
-	slog.Debug("Starting analysis of local package for existing definitions", "path", cfg.GenerationContext.PackagePath)
-	existingFuncs, existingAliases := a.analyzeLocalPackage(cfg.GenerationContext.PackagePath)
-	slog.Debug("Finished local package analysis", "functions", len(existingFuncs), "aliases", len(existingAliases))
+	// 2. Extract directives from the initial package's syntax files.
+	directives := a.extractDirectives(initialPkg)
 
-	return &model.AnalysisResult{
+	// 3. Parse the extracted directives to build the configuration.
+	cfgParser := config.NewParser()
+	cfg, err := cfgParser.ParseDirectives(directives, initialPkg.Name, initialPkg.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse directives: %w", err)
+	}
+	cfg.GenerationContext.DirectivePath = sourceDir
+
+	// 4. Analyze all required external packages based on the configuration.
+	resolvedTypes, err := a.analyzeExternalPackages(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to analyze external packages: %w", err)
+	}
+
+	// 5. Discover existing definitions (aliases, functions) in the initial package.
+	// This is still useful for checking what's already present before generation.
+	existingFuncs, existingAliases := a.discoverExistingDefinitions(initialPkg)
+	cfg.ExistingAliases = existingAliases // Update config with discovered aliases.
+
+	analysisResult := &model.AnalysisResult{
 		TypeInfos:         resolvedTypes,
 		ExistingFunctions: existingFuncs,
 		ExistingAliases:   existingAliases,
-	}, nil
+	}
+
+	return cfg, analysisResult, nil
+}
+
+// loadInitialPackage loads the package at the given source directory.
+func (a *TypeAnalyzer) loadInitialPackage(sourceDir string) (*packages.Package, error) {
+	initialLoaderCfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedSyntax | packages.NeedFiles | packages.NeedModule |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
+		Dir:        sourceDir,
+		Tests:      false,
+		BuildFlags: []string{"-tags=abgen_source"},
+	}
+
+	initialPkgs, err := packages.Load(initialLoaderCfg, ".")
+	if err != nil {
+		return nil, fmt.Errorf("error during package loading at %s: %w", sourceDir, err)
+	}
+	for _, pkg := range initialPkgs {
+		for _, pkgErr := range pkg.Errors {
+			slog.Warn("Initial package contains errors, analysis may be incomplete",
+				"pkg", pkg.PkgPath, "error", pkgErr.Error(), "pos", pkgErr.Pos)
+		}
+	}
+	if len(initialPkgs) == 0 {
+		return nil, nil // No error, but no package.
+	}
+	return initialPkgs[0], nil
+}
+
+// extractDirectives scans all files in a package for abgen directives.
+func (a *TypeAnalyzer) extractDirectives(pkg *packages.Package) []string {
+	var directives []string
+	if pkg == nil {
+		return directives
+	}
+	for _, file := range pkg.Syntax {
+		for _, commentGroup := range file.Comments {
+			for _, comment := range commentGroup.List {
+				if strings.HasPrefix(comment.Text, "//go:abgen:") {
+					directives = append(directives, strings.TrimSpace(comment.Text))
+				}
+			}
+		}
+	}
+	return directives
 }
 
 // analyzeExternalPackages loads and performs a deep type analysis on the specified external packages.
-func (a *TypeAnalyzer) analyzeExternalPackages(paths []string, cfg *config.Config) (map[string]*model.TypeInfo, error) {
+func (a *TypeAnalyzer) analyzeExternalPackages(cfg *config.Config) (map[string]*model.TypeInfo, error) {
+	paths := a.collectExternalPaths(cfg)
 	if len(paths) == 0 {
 		return make(map[string]*model.TypeInfo), nil
 	}
@@ -77,36 +131,30 @@ func (a *TypeAnalyzer) analyzeExternalPackages(paths []string, cfg *config.Confi
 	if err != nil {
 		return nil, fmt.Errorf("failed to load external package graph: %w", err)
 	}
-	a.pkgs = pkgs // Set the loaded packages for the analyzer instance
+	a.pkgs = pkgs
 
-	// Check for loading errors
 	for _, pkg := range pkgs {
 		if len(pkg.Errors) > 0 {
-			// It's critical that external packages load cleanly.
 			return nil, fmt.Errorf("error loading external package %s: %v", pkg.PkgPath, pkg.Errors)
 		}
 	}
 
 	resolvedTypes := make(map[string]*model.TypeInfo)
 
-	// Always perform implicit discovery first
-	slog.Debug("Discovering all named struct types in loaded packages for implicit rules.")
+	// Discover all named struct types first for implicit rule matching.
 	for _, pkg := range a.pkgs {
-		slog.Debug("Scanning package for named struct types", "pkgPath", pkg.PkgPath)
 		for _, name := range pkg.Types.Scope().Names() {
 			obj := pkg.Types.Scope().Lookup(name)
-			if obj == nil {
-				continue
-			}
-			if _, ok := obj.(*types.TypeName); ok {
-				if named, ok := obj.Type().(*types.Named); ok {
-					if _, isStruct := named.Underlying().(*types.Struct); isStruct {
-						fqn := named.Obj().Pkg().Path() + "." + named.Obj().Name()
-						if _, ok := resolvedTypes[fqn]; !ok {
-							info := a.resolveType(named)
-							if info != nil {
-								resolvedTypes[fqn] = info
-								slog.Debug("Discovered named struct type", "fqn", fqn)
+			if obj != nil {
+				if _, ok := obj.(*types.TypeName); ok {
+					if named, ok := obj.Type().(*types.Named); ok {
+						if _, isStruct := named.Underlying().(*types.Struct); isStruct {
+							fqn := named.Obj().Pkg().Path() + "." + named.Obj().Name()
+							if _, ok := resolvedTypes[fqn]; !ok {
+								info := a.resolveType(named)
+								if info != nil {
+									resolvedTypes[fqn] = info
+								}
 							}
 						}
 					}
@@ -115,8 +163,7 @@ func (a *TypeAnalyzer) analyzeExternalPackages(paths []string, cfg *config.Confi
 		}
 	}
 
-	// Then, resolve any explicitly mentioned FQNs that might have been missed
-	// (e.g., non-struct types or types involved in non-implicit rules).
+	// Resolve any explicitly mentioned FQNs that might have been missed.
 	for _, fqn := range cfg.AllFqns() {
 		if _, ok := resolvedTypes[fqn]; !ok {
 			info, err := a.find(fqn)
@@ -131,28 +178,16 @@ func (a *TypeAnalyzer) analyzeExternalPackages(paths []string, cfg *config.Confi
 	return resolvedTypes, nil
 }
 
-// analyzeLocalPackage performs a lightweight, AST-based analysis of the local package
-// to find existing function and type names, tolerating compilation errors.
-func (a *TypeAnalyzer) analyzeLocalPackage(pkgPath string) (map[string]bool, map[string]string) {
+// discoverExistingDefinitions performs a lightweight, AST-based analysis of the local package
+// to find existing function and type alias names.
+func (a *TypeAnalyzer) discoverExistingDefinitions(pkg *packages.Package) (map[string]bool, map[string]string) {
 	existingFunctions := make(map[string]bool)
 	existingAliases := make(map[string]string)
 
-	if pkgPath == "" {
+	if pkg == nil {
 		return existingFunctions, existingAliases
 	}
 
-	// Load the package with syntax and imports to resolve alias targets
-	loadCfg := &packages.Config{
-		Mode:  packages.NeedName | packages.NeedSyntax | packages.NeedImports,
-		Tests: false,
-	}
-	pkgs, err := packages.Load(loadCfg, pkgPath)
-	if err != nil || len(pkgs) == 0 {
-		slog.Warn("Could not load local package for AST analysis", "path", pkgPath, "error", err)
-		return existingFunctions, existingAliases
-	}
-
-	pkg := pkgs[0]
 	for _, file := range pkg.Syntax {
 		for _, decl := range file.Decls {
 			switch d := decl.(type) {
@@ -161,13 +196,10 @@ func (a *TypeAnalyzer) analyzeLocalPackage(pkgPath string) (map[string]bool, map
 					existingFunctions[d.Name.Name] = true
 				}
 			case *ast.GenDecl:
-				for _, spec := range d.Specs {
-					if ts, ok := spec.(*ast.TypeSpec); ok && ts.Name != nil {
-						// This detects `type MyAlias = OtherType`
-						if ts.Assign > 0 {
-							// Convert the aliased type to fully qualified name
-							typeStr := types.ExprString(ts.Type)
-							fqn := a.resolveTypeToFQN(typeStr, pkg)
+				if d.Tok == token.TYPE {
+					for _, spec := range d.Specs {
+						if ts, ok := spec.(*ast.TypeSpec); ok && ts.Name != nil && ts.Assign > 0 {
+							fqn := a.resolveAliasTargetFQN(ts.Type, pkg)
 							existingAliases[ts.Name.Name] = fqn
 						}
 					}
@@ -177,6 +209,40 @@ func (a *TypeAnalyzer) analyzeLocalPackage(pkgPath string) (map[string]bool, map
 	}
 
 	return existingFunctions, existingAliases
+}
+
+// resolveAliasTargetFQN converts an alias's target type expression to a fully qualified name.
+func (a *TypeAnalyzer) resolveAliasTargetFQN(expr ast.Expr, pkg *packages.Package) string {
+	// The types.ExprString provides a string representation of the type expression.
+	typeStr := types.ExprString(expr)
+
+	// Check if it's a selector expression like `pkg.Type`.
+	if selExpr, ok := expr.(*ast.SelectorExpr); ok {
+		// selExpr.X is the package identifier.
+		if pkgIdent, ok := selExpr.X.(*ast.Ident); ok {
+			pkgAlias := pkgIdent.Name
+			typeName := selExpr.Sel.Name
+
+			// Now, iterate through the *loaded* package's imports to find the full path.
+			// pkg.Imports is a map of import path to a *packages.Package struct.
+			for importPath, importedPkg := range pkg.Imports {
+				// importedPkg.Name is the name used in the source file (the alias or package name).
+				if importedPkg.Name == pkgAlias {
+					// We found the matching import. Construct the FQN.
+					return importPath + "." + typeName
+				}
+			}
+		}
+	}
+
+	// If it's not a selector expression (e.g., a local type `MyType`),
+	// or if we couldn't resolve the import alias, prepend the current package's path.
+	if !strings.Contains(typeStr, ".") {
+		return pkg.ID + "." + typeStr
+	}
+
+	// Fallback: return the string representation if it already looks like a FQN.
+	return typeStr
 }
 
 // collectExternalPaths gathers all package paths that need full type analysis.
@@ -232,27 +298,19 @@ func (a *TypeAnalyzer) find(fqn string) (*model.TypeInfo, error) {
 	}
 	typeName := fqn[len(pkgPath)+1:]
 
-	slog.Debug("find", "fqn", fqn, "pkgPath", pkgPath, "typeName", typeName)
-
 	for _, pkg := range a.pkgs {
 		if pkg.PkgPath == pkgPath {
-			slog.Debug("find: found matching pkg", "pkg.PkgPath", pkg.PkgPath)
 			scope := pkg.Types.Scope()
 			if scope == nil {
-				slog.Debug("find: scope is nil", "pkg.PkgPath", pkg.PkgPath)
 				continue
 			}
 			obj := scope.Lookup(typeName)
 			if obj == nil {
-				slog.Debug("find: obj not found in scope", "typeName", typeName, "pkg.PkgPath", pkg.PkgPath)
 				continue
 			}
-			objType := obj.Type()
-			slog.Debug("find: obj found", "obj.Name", obj.Name(), "obj.Type", objType.String(), "obj.TypeKind", fmt.Sprintf("%T", objType))
-			return a.resolveType(objType), nil
+			return a.resolveType(obj.Type()), nil
 		}
 	}
-	slog.Debug("find: type not found in any loaded pkg", "fqn", fqn)
 	return nil, fmt.Errorf("type %q not found in pre-loaded packages", fqn)
 }
 
@@ -267,45 +325,32 @@ func (a *TypeAnalyzer) resolveType(typ types.Type) *model.TypeInfo {
 	info := &model.TypeInfo{}
 	a.typeCache[typ] = info
 
-	typeKind := fmt.Sprintf("%T", typ)
-	slog.Debug("resolveType", "typ", typ.String(), "type_kind", typeKind)
-
 	switch t := typ.(type) {
-	case *types.Alias: // Handles 'type T = some.OtherType'
+	case *types.Alias:
 		obj := t.Obj()
 		info.Name = obj.Name()
 		if obj.Pkg() != nil {
 			info.ImportPath = obj.Pkg().Path()
 		}
 		info.Original = obj
-		info.IsAlias = true // This is the definition of a type alias
-
-		// An alias is always a "Named" type in our model, regardless of what it aliases.
+		info.IsAlias = true
 		underlyingInfo := a.resolveType(t.Rhs())
-		info.Kind = model.Named          // Set the kind for the alias itself
-		info.Underlying = underlyingInfo // Point to the resolved type on the RHS
-		slog.Debug("resolveType: Alias", "name", info.Name, "importPath", info.ImportPath, "rhs", t.Rhs().String())
+		info.Kind = model.Named
+		info.Underlying = underlyingInfo
 
-	case *types.Named: // Handles 'type T struct{...}' or 'type T int'
+	case *types.Named:
 		obj := t.Obj()
-
 		info.Name = obj.Name()
 		if obj.Pkg() != nil {
 			info.ImportPath = obj.Pkg().Path()
 		}
 		info.Original = obj
-
-		slog.Debug("resolveType", "kind", "Named", "name", info.Name, "importPath", info.ImportPath, "isAlias",
-			info.IsAlias, "underlying", t.Underlying().String())
-
 		underlyingInfo := a.resolveType(t.Underlying())
 		if underlyingInfo != nil {
 			if underlyingInfo.Kind == model.Struct {
-				// A named struct is treated as a struct directly in our model.
 				info.Kind = model.Struct
 				info.Fields = underlyingInfo.Fields
 			} else {
-				// A named non-struct (e.g., type MyInt int) is a Named type with an underlying.
 				info.Kind = model.Named
 				info.Underlying = underlyingInfo
 			}
@@ -313,22 +358,7 @@ func (a *TypeAnalyzer) resolveType(typ types.Type) *model.TypeInfo {
 
 	case *types.Pointer:
 		info.Kind = model.Pointer
-		underlyingInfo := a.resolveType(t.Elem())
-		info.Underlying = underlyingInfo
-
-		slog.Debug("resolveType: Pointer", "elem", t.Elem().String(), "underlyingInfo.Name", func() string {
-			if underlyingInfo != nil {
-				return underlyingInfo.Name
-			} else {
-				return "nil"
-			}
-		}())
-
-		// If the pointer element is a named type, we can infer the pointer's name
-		if underlyingInfo != nil && underlyingInfo.Name != "" {
-			// For pointers, we don't set a name since they are anonymous types
-			// The name should be represented by the underlying type
-		}
+		info.Underlying = a.resolveType(t.Elem())
 	case *types.Slice:
 		info.Kind = model.Slice
 		info.Underlying = a.resolveType(t.Elem())
@@ -356,110 +386,27 @@ func (a *TypeAnalyzer) resolveType(typ types.Type) *model.TypeInfo {
 	return info
 }
 
-// findOriginalNamedType tries to find the original named type that matches the given type structure
-func (a *TypeAnalyzer) findOriginalNamedType(typ types.Type) *model.TypeInfo {
-	if structType, ok := typ.(*types.Struct); ok {
-		// Search through all loaded packages to find a matching named struct type
-		for _, pkg := range a.pkgs {
-			scope := pkg.Types.Scope()
-			if scope == nil {
-				continue
-			}
-
-			for _, name := range scope.Names() {
-				obj := scope.Lookup(name)
-				if obj == nil {
-					continue
-				}
-
-				// Check if this is a named type with struct underlying
-				if namedType, ok := obj.Type().(*types.Named); ok {
-					if namedUnderlying, ok := namedType.Underlying().(*types.Struct); ok {
-						// Compare the struct signatures
-						if a.structsAreEqual(structType, namedUnderlying) {
-							slog.Debug("findOriginalNamedType: found match", "name", obj.Name(), "pkg", obj.Pkg().Path())
-							return a.resolveType(obj.Type())
-						}
-					}
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// structsAreEqual compares two structs for field equality
-func (a *TypeAnalyzer) structsAreEqual(s1, s2 *types.Struct) bool {
-	if s1.NumFields() != s2.NumFields() {
-		return false
-	}
-
-	for i := 0; i < s1.NumFields(); i++ {
-		f1 := s1.Field(i)
-		f2 := s2.Field(i)
-
-		if f1.Name() != f2.Name() {
-			return false
-		}
-
-		if !types.Identical(f1.Type(), f2.Type()) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// resolveNamedType resolves a named type by its object, preserving its identity
-func (a *TypeAnalyzer) resolveNamedType(obj *types.TypeName) *model.TypeInfo {
-	if obj == nil {
-		return nil
-	}
-
-	// Create TypeInfo with the named type's identity
-	info := &model.TypeInfo{
-		Name:     obj.Name(),
-		IsAlias:  obj.IsAlias(),
-		Original: obj,
-	}
-
-	if obj.Pkg() != nil {
-		info.ImportPath = obj.Pkg().Path()
-	}
-
-	// Now resolve the underlying structure
-	underlyingType := obj.Type().Underlying()
-	underlyingInfo := a.resolveType(underlyingType)
-	if underlyingInfo != nil {
-		info.Kind = underlyingInfo.Kind
-		info.Fields = underlyingInfo.Fields
-		info.KeyType = underlyingInfo.KeyType
-		info.ArrayLen = underlyingInfo.ArrayLen
-		info.Underlying = underlyingInfo.Underlying
-	}
-
-	return info
-}
-
 func (a *TypeAnalyzer) parseFields(s *types.Struct) []*model.FieldInfo {
 	fields := make([]*model.FieldInfo, 0, s.NumFields())
 	for i := 0; i < s.NumFields(); i++ {
 		f := s.Field(i)
 
-		// Only process exported fields for direct inclusion.
-		// Embedded fields need special handling to "promote" their exported fields.
 		if f.Embedded() {
 			embeddedTypeInfo := a.resolveType(f.Type())
-			if embeddedTypeInfo != nil && embeddedTypeInfo.Kind == model.Struct {
-				// Promote exported fields from the embedded struct
-				for _, embeddedField := range embeddedTypeInfo.Fields {
-					// Only add if the embedded field itself is exported (already filtered in embeddedTypeInfo.Fields)
-					// and if it's not an embedded field of the embedded struct (avoid double promotion if not desired)
-					// For now, just add all fields from the embedded struct's Fields slice, as parseFields already filters for exported.
+			if embeddedTypeInfo != nil && (embeddedTypeInfo.Kind == model.Struct || (embeddedTypeInfo.Kind == model.Named && embeddedTypeInfo.Underlying.Kind == model.Struct)) {
+				// Use the fields from the underlying struct if it's a named type
+				var embeddedFields []*model.FieldInfo
+				if embeddedTypeInfo.Kind == model.Struct {
+					embeddedFields = embeddedTypeInfo.Fields
+				} else {
+					embeddedFields = embeddedTypeInfo.Underlying.Fields
+				}
+
+				for _, embeddedField := range embeddedFields {
 					fields = append(fields, embeddedField)
 				}
 			}
-			continue // The embedded field itself is not added as a direct field, its contents are promoted.
+			continue
 		}
 
 		if !f.Exported() {
@@ -470,42 +417,9 @@ func (a *TypeAnalyzer) parseFields(s *types.Struct) []*model.FieldInfo {
 			Name:       f.Name(),
 			Type:       a.resolveType(f.Type()),
 			Tag:        s.Tag(i),
-			IsEmbedded: false, // Direct fields are not embedded
+			IsEmbedded: false,
 		}
 		fields = append(fields, fieldInfo)
 	}
 	return fields
-}
-
-// resolveTypeToFQN converts a type expression string to a fully qualified name
-// by resolving package aliases using the import information.
-func (a *TypeAnalyzer) resolveTypeToFQN(typeStr string, pkg *packages.Package) string {
-	slog.Debug("resolveTypeToFQN", "typeStr", typeStr, "pkgPath", pkg.PkgPath)
-
-	// If it already contains a dot, it might already be a package-qualified type
-	if strings.Contains(typeStr, ".") {
-		// Split into potential package alias and type name
-		parts := strings.SplitN(typeStr, ".", 2)
-		if len(parts) == 2 {
-			alias, typeName := parts[0], parts[1]
-
-			slog.Debug("resolveTypeToFQN: checking imports", "alias", alias, "typeName", typeName, "importCount", len(pkg.Imports))
-			for importPath, imp := range pkg.Imports {
-				slog.Debug("resolveTypeToFQN: import entry", "importPath", importPath, "imp.Name", imp.Name)
-				if imp.Name == alias {
-					// Found the import, return the fully qualified name
-					slog.Debug("resolveTypeToFQN: found match", "alias", alias, "resolved", importPath+"."+typeName)
-					return importPath + "." + typeName
-				}
-			}
-		}
-		// If it contains slashes, it's likely already a fully qualified path
-		if strings.Contains(typeStr, "/") {
-			return typeStr
-		}
-	}
-
-	// For built-in types or unqualified types, return as-is
-	// This includes types like "string", "int", "time.Time", etc.
-	return typeStr
 }

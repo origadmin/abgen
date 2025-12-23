@@ -2,12 +2,8 @@ package config
 
 import (
 	"fmt"
-	"go/ast"
-	"go/token"
 	"log/slog"
 	"strings"
-
-	"golang.org/x/tools/go/packages"
 )
 
 // defaultPackageAliases provides a set of commonly used packages.
@@ -33,61 +29,14 @@ func NewParser() *Parser {
 	}
 }
 
-// Parse is the main entry point for configuration parsing.
-func (p *Parser) Parse(sourceDir string) (*Config, error) {
-	p.config.GenerationContext.DirectivePath = sourceDir
+// ParseDirectives processes a list of directive strings and populates the configuration.
+// It requires the current package's name and path for resolving unqualified types.
+func (p *Parser) ParseDirectives(directives []string, currentPkgName, currentPkgPath string) (*Config, error) {
+	p.config.GenerationContext.PackageName = currentPkgName
+	p.config.GenerationContext.PackagePath = currentPkgPath
 
-	initialLoaderCfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedSyntax | packages.NeedFiles | packages.NeedModule | packages.
-			NeedTypes | packages.NeedTypesInfo,
-		Dir:        sourceDir,
-		Tests:      false,
-		BuildFlags: []string{"-tags=abgen_source"},
-	}
-
-	initialPkgs, err := packages.Load(initialLoaderCfg, ".")
-	if err != nil {
-		return nil, fmt.Errorf("failed to load initial package at %s: %w", sourceDir, err)
-	}
-	for _, pkg := range initialPkgs {
-		for _, pkgErr := range pkg.Errors {
-			slog.Warn("Package contains errors",
-				"pkg", pkg.PkgPath,
-				"error", pkgErr,
-				"pos", pkgErr.Pos)
-		}
-	}
-	if len(initialPkgs) == 0 {
-		return nil, fmt.Errorf("no initial package found at %s", sourceDir)
-	}
-	initialPkg := initialPkgs[0]
-
-	return p.parseDirectives(initialPkg)
-}
-
-// parseDirectives scans and parses all abgen directives and existing type aliases.
-func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
-	if pkg == nil {
-		return nil, fmt.Errorf("package context cannot be nil")
-	}
-	p.config.GenerationContext.PackageName = pkg.Name
-	p.config.GenerationContext.PackagePath = pkg.ID
-
-	var directives []string
-	for _, file := range pkg.Syntax {
-		for _, commentGroup := range file.Comments {
-			for _, comment := range commentGroup.List {
-				if strings.HasPrefix(comment.Text, "//go:abgen:") {
-					directives = append(directives, strings.TrimSpace(comment.Text))
-				}
-			}
-		}
-	}
-
-	// No directives is not an error, it might just mean no conversions are needed.
-	// The generator should handle this gracefully.
 	if len(directives) == 0 {
-		slog.Warn("no abgen directives found, no code will be generated", "package", pkg.ID)
+		slog.Warn("no abgen directives found, no code will be generated", "package", currentPkgPath)
 		return p.config, nil
 	}
 
@@ -97,11 +46,6 @@ func (p *Parser) parseDirectives(pkg *packages.Package) (*Config, error) {
 			return nil, err
 		}
 	}
-
-	// Extract existing aliases AFTER parsing package:path directives.
-	// This ensures that p.config.PackageAliases is populated, allowing us to resolve
-	// aliases like "types.User" correctly.
-	p.extractExistingAliases(pkg)
 
 	// Second pass: Parse conversion rules
 	for _, directive := range directives {
@@ -270,14 +214,14 @@ func (p *Parser) parseCustomFuncRule(value string) {
 	if source != "" && target != "" && funcName != "" {
 		sourceFQN := p.resolveTypeFQN(source)
 		targetFQN := p.resolveTypeFQN(target)
-		mapKey := sourceFQN + "->" + targetFQN
+		mapKey := fmt.Sprintf("%s->%s", sourceFQN, targetFQN)
 		p.config.CustomFunctionRules[mapKey] = funcName
 	}
 }
 
 func (p *Parser) mergeCustomFuncRules() {
 	for _, rule := range p.config.ConversionRules {
-		key := rule.SourceType + "->" + rule.TargetType
+		key := fmt.Sprintf("%s->%s", rule.SourceType, rule.TargetType)
 		if funcName, ok := p.config.CustomFunctionRules[key]; ok {
 			rule.CustomFunc = funcName
 		}
@@ -300,50 +244,4 @@ func (p *Parser) resolveTypeFQN(typeStr string) string {
 	typeName := typeStr[lastDot+1:]
 	packagePath := p.resolvePackagePath(packageIdentifier)
 	return packagePath + "." + typeName
-}
-
-// extractExistingAliases extracts type aliases from the source code using AST,
-// which is more reliable than relying on potentially incomplete types.Info.
-func (p *Parser) extractExistingAliases(pkg *packages.Package) {
-	for _, file := range pkg.Syntax {
-		for _, decl := range file.Decls {
-			genDecl, ok := decl.(*ast.GenDecl)
-			if !ok || genDecl.Tok != token.TYPE {
-				continue
-			}
-
-			for _, spec := range genDecl.Specs {
-				typeSpec, ok := spec.(*ast.TypeSpec)
-				if !ok || typeSpec.Assign == 0 { // Not a type alias
-					continue
-				}
-
-				aliasName := typeSpec.Name.Name
-
-				// We are interested in aliases like `User = ent.User`
-				selExpr, ok := typeSpec.Type.(*ast.SelectorExpr)
-				if !ok {
-					continue
-				}
-
-				// `selExpr.X` is the package identifier, e.g., `ent`
-				pkgIdent, ok := selExpr.X.(*ast.Ident)
-				if !ok {
-					continue
-				}
-
-				pkgAlias := pkgIdent.Name
-				typeName := selExpr.Sel.Name
-
-				// Resolve the package alias to a full package path using the now-populated PackageAliases map.
-				if pkgPath, exists := p.config.PackageAliases[pkgAlias]; exists {
-					fqn := pkgPath + "." + typeName
-					p.config.ExistingAliases[aliasName] = fqn
-					slog.Debug("AST Parser: successfully extracted user-defined alias", "alias", aliasName, "fqn", fqn)
-				} else {
-					slog.Warn("AST Parser: could not resolve package alias for user-defined type", "alias", aliasName, "pkgAlias", pkgAlias)
-				}
-			}
-		}
-	}
 }
