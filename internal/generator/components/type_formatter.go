@@ -84,19 +84,21 @@ func (f *TypeFormatter) formatTypeInfo(info *model.TypeInfo, checkAlias bool) st
 	}
 }
 
+// qualifiedNameFromInfo ensures that when a type's qualified name is generated,
+// its package is added to the import manager.
 func (f *TypeFormatter) qualifiedNameFromInfo(info *model.TypeInfo) string {
 	if info.ImportPath == "" {
-		return info.Name
+		return info.Name // Built-in type or local
 	}
 
-	pkgAlias, found := f.importManager.GetAlias(info.ImportPath)
-	if !found {
-		return info.Name
-	}
+	// Add the import path to the manager and get the alias to use.
+	// The manager handles conflicts and ensures the path is only added once.
+	pkgAlias := f.importManager.Add(info.ImportPath)
 
 	return fmt.Sprintf("%s.%s", pkgAlias, info.Name)
 }
 
 func (f *TypeFormatter) qualifier(pkg *types.Package) string {
-	return f.importManager.PackageName(pkg)
+	// This is a fallback for types.TypeString. It should also ensure the package is imported.
+	return f.importManager.Add(pkg.Path())
 }

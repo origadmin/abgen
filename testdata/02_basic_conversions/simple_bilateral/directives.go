@@ -1,9 +1,7 @@
 package simple_bilateral
 
 import (
-	"github.com/origadmin/abgen/testdata/fixtures/ent"
 	_ "github.com/origadmin/abgen/testdata/fixtures/ent"
-	"github.com/origadmin/abgen/testdata/fixtures/types"
 	_ "github.com/origadmin/abgen/testdata/fixtures/types"
 )
 

@@ -45,7 +45,6 @@ func Generate(analysisResult *model.AnalysisResult) (*model.GenerationResponse, 
 
 // newGenerationSession creates and initializes a new session with all its components.
 func newGenerationSession(analysisResult *model.AnalysisResult) (*generationSession, error) {
-	// Create components in dependency order, passing the analysisResult as the single source of truth.
 	typeConverter := components.NewTypeConverter()
 	importManager := components.NewImportManager()
 	for alias, path := range analysisResult.ExecutionPlan.FinalConfig.PackageAliases {
@@ -270,6 +269,8 @@ func (s *generationSession) generateCustomStubs() ([]byte, error) {
 		return nil, nil
 	}
 
+	// Create a dedicated ImportManager and TypeFormatter for the stubs file.
+	// This ensures that only the necessary imports for the stubs are included.
 	stubImportManager := components.NewImportManager()
 	stubTypeFormatter := components.NewTypeFormatter(s.analysisResult, s.aliasManager, stubImportManager)
 
@@ -282,6 +283,7 @@ func (s *generationSession) generateCustomStubs() ([]byte, error) {
 
 	for _, name := range stubNames {
 		task := stubs[name]
+		// Formatting the types here will automatically add their packages to the stubImportManager.
 		sourceTypeStr := stubTypeFormatter.Format(task.Source)
 		targetTypeStr := stubTypeFormatter.Format(task.Target)
 
