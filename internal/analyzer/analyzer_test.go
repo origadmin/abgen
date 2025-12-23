@@ -10,7 +10,7 @@ import (
 )
 
 // TestTypeAnalyzer_Analyze_CoreParsing tests the analyzer's ability to correctly
-// parse directives and produce a valid execution plan.
+// parse directives from a source file and produce a valid execution plan.
 func TestTypeAnalyzer_Analyze_CoreParsing(t *testing.T) {
 	testDir, err := filepath.Abs("../../testdata/00_core_parsing/rule_construction")
 	if err != nil {
@@ -18,19 +18,24 @@ func TestTypeAnalyzer_Analyze_CoreParsing(t *testing.T) {
 	}
 
 	analyzer := NewTypeAnalyzer()
+	// In this test, we expect an error because the referenced packages don't exist.
+	// However, the initial parsing of the config should still be part of the result,
+	// even if the full analysis fails later. The new Analyze implementation returns
+	// the result object even on partial failure.
 	analysisResult, err := analyzer.Analyze(testDir)
 
-	if err != nil {
-		t.Logf("Analyze() returned an expected error because dummy packages don't exist: %v", err)
+	// We expect an error, but we also expect a non-nil result containing the parsed config.
+	if err == nil {
+		t.Logf("Warning: Analyze() did not return an error, which was expected because dummy packages don't exist.")
 	}
 	if analysisResult == nil {
-		t.Fatal("Analyze() returned a nil result")
+		t.Fatalf("Analyze() returned a nil result, even on partial success.")
 	}
 	if analysisResult.ExecutionPlan == nil {
-		t.Fatal("Analyze() returned a result with a nil execution plan")
+		t.Fatalf("Analyze() returned a result with a nil execution plan.")
 	}
 	if analysisResult.ExecutionPlan.FinalConfig == nil {
-		t.Fatal("Execution plan has a nil config")
+		t.Fatalf("Execution plan has a nil config.")
 	}
 
 	cfg := analysisResult.ExecutionPlan.FinalConfig
@@ -62,8 +67,10 @@ func TestTypeAnalyzer_Analyze_CoreParsing(t *testing.T) {
 	}
 
 	// Verify the active rules in the execution plan
+	// Since type analysis fails, the rule expansion might not be complete,
+	// but we should at least have the explicitly defined rules.
 	activeRules := analysisResult.ExecutionPlan.ActiveRules
-	if len(activeRules) < 2 { // It might discover more, but at least the 2 explicit ones
+	if len(activeRules) < 2 {
 		t.Fatalf("Expected at least 2 active rules, got %d", len(activeRules))
 	}
 

@@ -30,7 +30,7 @@ func NewParser() *Parser {
 }
 
 // ParseDirectives processes a list of directive strings and populates the configuration.
-// It requires the current package's name and path for resolving unqualified types.
+// It uses a two-pass approach to ensure package aliases are resolved before other rules.
 func (p *Parser) ParseDirectives(directives []string, currentPkgName, currentPkgPath string) (*Config, error) {
 	p.config.GenerationContext.PackageName = currentPkgName
 	p.config.GenerationContext.PackagePath = currentPkgPath
@@ -40,17 +40,21 @@ func (p *Parser) ParseDirectives(directives []string, currentPkgName, currentPkg
 		return p.config, nil
 	}
 
-	// First pass: Parse global configuration directives (including package:path)
+	// First pass: Process only package:path directives to populate aliases.
 	for _, directive := range directives {
-		if err := p.parseGlobalDirective(directive); err != nil {
-			return nil, err
+		if strings.Contains(directive, "package:path") {
+			if err := p.parseSingleDirective(directive); err != nil {
+				return nil, err
+			}
 		}
 	}
 
-	// Second pass: Parse conversion rules
+	// Second pass: Process all other directives.
 	for _, directive := range directives {
-		if err := p.parseRuleDirective(directive); err != nil {
-			return nil, err
+		if !strings.Contains(directive, "package:path") {
+			if err := p.parseSingleDirective(directive); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -59,8 +63,8 @@ func (p *Parser) ParseDirectives(directives []string, currentPkgName, currentPkg
 	return p.config, nil
 }
 
-// parseGlobalDirective processes global configuration directives.
-func (p *Parser) parseGlobalDirective(directive string) error {
+// parseSingleDirective parses a single directive string and updates the config.
+func (p *Parser) parseSingleDirective(directive string) error {
 	directive = strings.TrimPrefix(directive, "//go:abgen:")
 	parts := strings.SplitN(directive, "=", 2)
 	key := parts[0]
@@ -90,21 +94,6 @@ func (p *Parser) parseGlobalDirective(directive string) error {
 		} else {
 			p.config.GlobalBehaviorRules.DefaultDirection = DirectionBoth
 		}
-	}
-	return nil
-}
-
-// parseRuleDirective processes conversion rule directives.
-func (p *Parser) parseRuleDirective(directive string) error {
-	directive = strings.TrimPrefix(directive, "//go:abgen:")
-	parts := strings.SplitN(directive, "=", 2)
-	key := parts[0]
-	var value string
-	if len(parts) > 1 {
-		value = strings.Trim(parts[1], `"`)
-	}
-
-	switch key {
 	case "convert":
 		p.parseConvertRule(value)
 	case "convert:rule":
@@ -130,7 +119,6 @@ func (p *Parser) resolvePackagePath(identifier string) string {
 	if path, ok := p.config.PackageAliases[identifier]; ok {
 		return path
 	}
-	// Assume it's a full path if not found in aliases
 	return identifier
 }
 
@@ -180,7 +168,7 @@ func (p *Parser) parseConvertRule(value string) {
 				rule.FieldRules.Ignore[field] = struct{}{}
 			}
 		case "remap":
-			for _, remapPair := range strings.Split(val, ";") { // Corrected line
+			for _, remapPair := range strings.Split(val, ";") {
 				fromTo := strings.SplitN(remapPair, ":", 2)
 				if len(fromTo) == 2 {
 					rule.FieldRules.Remap[fromTo[0]] = fromTo[1]
@@ -231,13 +219,9 @@ func (p *Parser) mergeCustomFuncRules() {
 func (p *Parser) resolveTypeFQN(typeStr string) string {
 	lastDot := strings.LastIndex(typeStr, ".")
 	if lastDot == -1 {
-		// If no package identifier is present in typeStr
 		if p.config.GenerationContext.PackagePath != "" {
-			// If the current package path is known, assume it's a type in the current package
 			return p.config.GenerationContext.PackagePath + "." + typeStr
 		}
-		// Otherwise, return the type name as is.
-		// The decision to prepend a package path will be made during code generation.
 		return typeStr
 	}
 	packageIdentifier := typeStr[:lastDot]

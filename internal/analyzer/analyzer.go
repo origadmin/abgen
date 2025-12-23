@@ -24,7 +24,7 @@ type TypeAnalyzer struct {
 }
 
 // NewTypeAnalyzer creates a new TypeAnalyzer.
-func NewTypeAnalyzer() *TypeAnalyzer {
+func NewTypeAnalyzer() model.TypeAnalyzer {
 	return &TypeAnalyzer{
 		typeCache: make(map[types.Type]*model.TypeInfo),
 	}
@@ -55,8 +55,9 @@ func (a *TypeAnalyzer) Analyze(sourceDir string) (*model.AnalysisResult, error) 
 
 	// 4. Analyze all required external packages based on the configuration.
 	resolvedTypes, err := a.analyzeExternalPackages(initialConfig)
+	// On error, we still want to proceed with a partial result for testing config parsing.
 	if err != nil {
-		return nil, fmt.Errorf("failed to analyze external packages: %w", err)
+		slog.Warn("failed to analyze external packages, proceeding with partial results", "error", err)
 	}
 
 	// 5. Discover existing definitions (aliases, functions) in the initial package.
@@ -75,7 +76,7 @@ func (a *TypeAnalyzer) Analyze(sourceDir string) (*model.AnalysisResult, error) 
 		ExecutionPlan:     executionPlan,
 	}
 
-	return analysisResult, nil
+	return analysisResult, err // Return the original error from analyzeExternalPackages if it exists.
 }
 
 // loadInitialPackage loads the package at the given source directory.
