@@ -6,8 +6,6 @@ import (
 	"github.com/origadmin/abgen/testdata/fixtures/ent/user"
 )
 
-type Gender user.Gender
-
 type Permission struct {
 	ID int
 }
@@ -42,7 +40,7 @@ type User struct {
 	Password  string
 	Salt      string
 	Age       int
-	Gender    Gender
+	Gender    user.Gender
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	Status    string
@@ -58,6 +56,6 @@ type Role struct {
 }
 
 const (
-	GenderMale Gender = iota
+	GenderMale user.Gender = iota
 	GenderFemale
 )
