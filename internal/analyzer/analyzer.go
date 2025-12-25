@@ -133,7 +133,8 @@ func (a *TypeAnalyzer) analyzeExternalPackages(cfg *config.Config) (map[string]*
 	loadCfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedModule |
 			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
-		Tests: false,
+		Tests:      false,
+		BuildFlags: []string{"-tags=abgen_source"},
 	}
 	pkgs, err := packages.Load(loadCfg, paths...)
 	if err != nil {
